@@ -1,0 +1,111 @@
+"""Official STOXX Europe 600 selection list source (keyless CSV download)."""
+
+from __future__ import annotations
+
+import io
+import re
+
+import polars as pl
+import requests
+
+from data.universe.sources.http import get_with_ca_fallback
+
+STOXX_DATA_URL = "https://www.stoxx.com/data-index-details?symbol=SXXP"
+USER_AGENT = "marketmind/0.1 (universe maintenance; free data only)"
+
+REQUIRED_COLUMNS = [
+    "Internal_Key",
+    "RIC",
+    "Instrument_Name",
+    "Country",
+    "Exchange",
+    "Currency",
+    "Rank (FINAL)",
+]
+
+
+def parse_selection_list(raw: str) -> pl.DataFrame:
+    """Parse the STOXX selection list CSV into the 600 index members.
+
+    The selection list contains the full candidate pool ranked by free-float
+    market cap; the STOXX Europe 600 members are exactly the rows with
+    Rank (FINAL) <= 600.
+
+    Args:
+        raw: CSV text (semicolon-separated) as served by stoxx.com.
+
+    Returns:
+        DataFrame with columns [internal_key, ric, name, country, exchange,
+        currency, rank], one row per member, sorted by rank.
+
+    Raises:
+        ValueError: If required columns are missing or no members are found.
+    """
+    df = pl.read_csv(io.StringIO(raw), separator=";")
+    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(f"selection list missing required columns: {missing}")
+
+    members = (
+        df.filter(pl.col("Rank (FINAL)").cast(pl.Int64) <= 600)
+        .select(
+            [
+                pl.col("Internal_Key").alias("internal_key"),
+                pl.col("RIC").alias("ric"),
+                pl.col("Instrument_Name").alias("name"),
+                pl.col("Country").alias("country"),
+                pl.col("Exchange").alias("exchange"),
+                pl.col("Currency").alias("currency"),
+                pl.col("Rank (FINAL)").cast(pl.Int64).alias("rank"),
+            ]
+        )
+        .unique(subset=["internal_key"], keep="first")
+        .sort("rank")
+    )
+    if members.is_empty():
+        raise ValueError("selection list contains no STOXX Europe 600 members")
+    return members
+
+
+def latest_selection_list_url(session: requests.Session | None = None) -> str:
+    """Find the current STOXX selection list CSV URL from the index data page.
+
+    Args:
+        session: Optional requests.Session for connection reuse.
+
+    Returns:
+        Direct CSV URL, e.g. .../STOXXSelectionList/2026/August/slpublic_sxxp_20260803.csv.
+
+    Raises:
+        requests.HTTPError: On non-2xx response.
+        ValueError: If the selection list link cannot be found.
+    """
+    resp = get_with_ca_fallback(
+        STOXX_DATA_URL, session=session, timeout=40, headers={"User-Agent": USER_AGENT}
+    )
+    resp.raise_for_status()
+    match = re.search(
+        r"https://www\.stoxx\.com/documents/stoxxnet/Documents/Reports/"
+        r"STOXXSelectionList/[^'\"]+slpublic_sxxp[^'\"]*\.csv",
+        resp.text,
+    )
+    if not match:
+        raise ValueError("STOXX selection list link not found on index data page")
+    return match.group(0)
+
+
+def fetch_selection_list(session: requests.Session | None = None) -> pl.DataFrame:
+    """Download and parse the current official STOXX Europe 600 selection list.
+
+    Args:
+        session: Optional requests.Session for connection reuse.
+
+    Returns:
+        Parsed members DataFrame (see parse_selection_list).
+    """
+    url = latest_selection_list_url(session)
+    resp = get_with_ca_fallback(
+        url, session=session, timeout=60, headers={"User-Agent": USER_AGENT}
+    )
+    resp.raise_for_status()
+    return parse_selection_list(resp.text)

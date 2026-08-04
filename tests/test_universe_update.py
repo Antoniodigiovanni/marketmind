@@ -1,4 +1,4 @@
-"""Tests for the universe update job."""
+"""Tests for the universe update job (official sources)."""
 
 from __future__ import annotations
 
@@ -14,19 +14,22 @@ def _sp500(tickers: list[str]) -> pl.DataFrame:
             "ticker": tickers,
             "name": [f"Company {t}" for t in tickers],
             "sector": ["Technology"] * len(tickers),
-            "country": ["US"] * len(tickers),
-            "added_date": ["2026-01-01"] * len(tickers),
+            "weight": [1.0] * len(tickers),
+            "currency": ["USD"] * len(tickers),
         }
     )
 
 
-def _stoxx(tickers: list[tuple[str, str]]) -> pl.DataFrame:
+def _stoxx(rics: list[tuple[str, str]]) -> pl.DataFrame:
     return pl.DataFrame(
         {
-            "ticker": [t for t, _ in tickers],
-            "name": [f"Company {t}" for t, _ in tickers],
-            "sector": ["Technology"] * len(tickers),
-            "country": [c for _, c in tickers],
+            "internal_key": [f"KEY{i}" for i in range(len(rics))],
+            "ric": [r for r, _ in rics],
+            "name": [f"Company {r}" for r, _ in rics],
+            "country": [c for _, c in rics],
+            "exchange": ["Euronext Amsterdam"] * len(rics),
+            "currency": ["EUR"] * len(rics),
+            "rank": list(range(1, len(rics) + 1)),
         }
     )
 
@@ -36,7 +39,7 @@ def test_initial_snapshot_writes_both_universes(tmp_path) -> None:
         as_of="2026-08-04",
         universe_dir=tmp_path,
         sp500=_sp500(["AAPL", "MSFT"]),
-        stoxx600=_stoxx([("ASML", "Netherlands"), ("SAP", "Germany")]),
+        stoxx600=_stoxx([("ASML.AS", "NL"), ("SAP.DE", "DE")]),
     )
 
     assert summary["sp500"]["added"] == ["AAPL", "MSFT"]
@@ -45,41 +48,43 @@ def test_initial_snapshot_writes_both_universes(tmp_path) -> None:
     sp500 = pl.read_csv(tmp_path / "sp500.csv")
     stoxx = pl.read_csv(tmp_path / "eurostoxx600.csv")
     assert set(sp500["ticker"].to_list()) == {"AAPL", "MSFT"}
-    assert sp500["added_date"].to_list() == ["2026-01-01"] * 2
+    assert sp500["added_date"].to_list() == ["2026-08-04"] * 2
     assert set(stoxx["ticker"].to_list()) == {"ASML.AS", "SAP.DE"}
+    assert set(stoxx["internal_key"].to_list()) == {"KEY0", "KEY1"}
     assert (tmp_path / "delisted.csv").exists() is False
 
 
-def test_sp500_source_added_date_is_preserved(tmp_path) -> None:
-    summary = upd.update_universe(
-        as_of="2026-08-04",
-        universe_dir=tmp_path,
-        sp500=pl.DataFrame(
-            {
-                "ticker": ["MMM"],
-                "name": ["3M"],
-                "sector": ["Industrials"],
-                "country": ["US"],
-                "added_date": ["1957-03-04"],
-            }
-        ),
-        stoxx600=_stoxx([("ASML", "Netherlands")]),
-    )
-    sp500 = pl.read_csv(tmp_path / "sp500.csv")
-    assert sp500["added_date"].to_list() == ["1957-03-04"]
-    assert summary["sp500"]["added"] == ["MMM"]
-
-
-def test_duplicate_yahoo_symbols_are_deduplicated(tmp_path) -> None:
-    # SNY and SASY both map to SASY.PA; the CSV must contain it once.
+def test_swiss_ric_becomes_yahoo_suffix(tmp_path) -> None:
     upd.update_universe(
         as_of="2026-08-04",
         universe_dir=tmp_path,
         sp500=_sp500(["AAPL"]),
-        stoxx600=_stoxx([("SNY", "France"), ("SASY", "France")]),
+        stoxx600=_stoxx([("NOVN.S", "CH")]),
     )
     stoxx = pl.read_csv(tmp_path / "eurostoxx600.csv")
-    assert stoxx["ticker"].to_list() == ["SASY.PA"]
+    assert stoxx["ticker"].to_list() == ["NOVN.SW"]
+
+
+def test_known_ric_mismatches_are_applied(tmp_path) -> None:
+    upd.update_universe(
+        as_of="2026-08-04",
+        universe_dir=tmp_path,
+        sp500=_sp500(["AAPL"]),
+        stoxx600=_stoxx([("MCF.PA", "FR"), ("TTEF.PA", "FR")]),
+    )
+    stoxx = pl.read_csv(tmp_path / "eurostoxx600.csv")
+    assert set(stoxx["ticker"].to_list()) == {"MC.PA", "TTE.PA"}
+
+
+def test_us_class_shares_normalised_in_csv(tmp_path) -> None:
+    upd.update_universe(
+        as_of="2026-08-04",
+        universe_dir=tmp_path,
+        sp500=_sp500(["BRKB", "BFB"]),
+        stoxx600=_stoxx([("ASML.AS", "NL")]),
+    )
+    sp500 = pl.read_csv(tmp_path / "sp500.csv")
+    assert set(sp500["ticker"].to_list()) == {"BRK-B", "BF-B"}
 
 
 def test_removal_sets_removed_date_and_logs_delisted(tmp_path, monkeypatch) -> None:
@@ -89,7 +94,7 @@ def test_removal_sets_removed_date_and_logs_delisted(tmp_path, monkeypatch) -> N
         as_of="2026-08-04",
         universe_dir=tmp_path,
         sp500=_sp500(tickers),
-        stoxx600=_stoxx([("ASML", "Netherlands")]),
+        stoxx600=_stoxx([("ASML.AS", "NL")]),
     )
 
     kept = [t for t in tickers if t != "T00"]
@@ -97,7 +102,7 @@ def test_removal_sets_removed_date_and_logs_delisted(tmp_path, monkeypatch) -> N
         as_of="2026-08-05",
         universe_dir=tmp_path,
         sp500=_sp500(kept),
-        stoxx600=_stoxx([("ASML", "Netherlands")]),
+        stoxx600=_stoxx([("ASML.AS", "NL")]),
     )
 
     sp500 = pl.read_csv(tmp_path / "sp500.csv")
@@ -116,7 +121,7 @@ def test_large_source_drop_raises_guard(tmp_path) -> None:
         as_of="2026-08-04",
         universe_dir=tmp_path,
         sp500=_sp500(tickers),
-        stoxx600=_stoxx([("ASML", "Netherlands")]),
+        stoxx600=_stoxx([("ASML.AS", "NL")]),
     )
 
     with pytest.raises(ValueError, match="refusing removals"):
@@ -124,7 +129,7 @@ def test_large_source_drop_raises_guard(tmp_path) -> None:
             as_of="2026-08-05",
             universe_dir=tmp_path,
             sp500=_sp500(tickers[:9]),
-            stoxx600=_stoxx([("ASML", "Netherlands")]),
+            stoxx600=_stoxx([("ASML.AS", "NL")]),
         )
 
 
@@ -133,30 +138,30 @@ def test_idempotent_rerun_makes_no_changes(tmp_path) -> None:
         as_of="2026-08-04",
         universe_dir=tmp_path,
         sp500=_sp500(["AAPL"]),
-        stoxx600=_stoxx([("ASML", "Netherlands")]),
+        stoxx600=_stoxx([("ASML.AS", "NL")]),
     )
     summary = upd.update_universe(
         as_of="2026-08-05",
         universe_dir=tmp_path,
         sp500=_sp500(["AAPL"]),
-        stoxx600=_stoxx([("ASML", "Netherlands")]),
+        stoxx600=_stoxx([("ASML.AS", "NL")]),
     )
     assert summary["sp500"] == {"added": [], "removed": []}
     assert summary["eurostoxx600"] == {"added": [], "removed": []}
 
 
-def test_stoxx_oldid_is_passed_to_fetch(monkeypatch, tmp_path) -> None:
-    calls: dict[str, int] = {}
+def test_fetch_is_used_when_frames_not_injected(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
 
-    def fake_fetch_stoxx600(**kwargs: object) -> pl.DataFrame:
-        calls.update(kwargs)  # type: ignore[arg-type]
-        return _stoxx([("ASML", "Netherlands")])
+    def fake_cspx() -> pl.DataFrame:
+        calls.append("cspx")
+        return _sp500(["AAPL"])
 
-    monkeypatch.setattr(upd, "fetch_stoxx600", fake_fetch_stoxx600)
-    upd.update_universe(
-        as_of="2026-08-04",
-        universe_dir=tmp_path,
-        sp500=_sp500(["AAPL"]),
-        stoxx_oldid=999,
-    )
-    assert calls == {"oldid": 999}
+    def fake_stoxx() -> pl.DataFrame:
+        calls.append("stoxx")
+        return _stoxx([("ASML.AS", "NL")])
+
+    monkeypatch.setattr(upd, "fetch_cspx_holdings", fake_cspx)
+    monkeypatch.setattr(upd, "fetch_selection_list", fake_stoxx)
+    upd.update_universe(as_of="2026-08-04", universe_dir=tmp_path)
+    assert calls == ["cspx", "stoxx"]

@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<ss:Workbook xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+<ss:Styles><ss:Style ss:ID="Default"/></ss:Styles>
+<ss:Worksheet ss:Name="Sheet1">
+<ss:Table>
+<ss:Row><ss:Cell><ss:Data ss:Type="String">Issuer Ticker</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Name</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Sector</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Asset Class</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Market Value</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Weight (%)</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Market Currency</ss:Data></ss:Cell></ss:Row>
+<ss:Row><ss:Cell><ss:Data ss:Type="String">NVDA</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">NVIDIA CORP</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Information Technology</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Equity</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">USD 11,942,698,461.12</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="Number">7.65</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">USD</ss:Data></ss:Cell></ss:Row>
+<ss:Row><ss:Cell><ss:Data ss:Type="String">AAPL</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">APPLE INC</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Information Technology</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Equity</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">USD 10,633,887,312.36</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="Number">6.81</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">USD</ss:Data></ss:Cell></ss:Row>
+<ss:Row><ss:Cell><ss:Data ss:Type="String">JPM</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">JPMORGAN CHASE &amp; CO</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Financials</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Equity</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">USD 2,254,965,296.00</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="Number">1.44</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">USD</ss:Data></ss:Cell></ss:Row>
+<ss:Row><ss:Cell><ss:Data ss:Type="String">USD CASH</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">USD CASH</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String"></ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Cash and/or Derivatives</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">USD 300,000.00</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="Number">0.21</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">USD</ss:Data></ss:Cell></ss:Row>
+</ss:Table>
+</ss:Worksheet>
+</ss:Workbook>

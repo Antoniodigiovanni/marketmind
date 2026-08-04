@@ -42,7 +42,7 @@ marketmind/
 │   │   ├── macro/      ← Parquet, one file per series
 │   │   └── news/       ← raw articles as line-delimited JSON, one file per date
 │   ├── processed/      ← calendar-aligned derived series
-│   ├── universe/       ← point-in-time constituent lists (manually maintained)
+│   ├── universe/       ← point-in-time constituent lists (auto-refreshed from official sources)
 │   ├── db/
 │   │   ├── schema.sql  ← DuckDB schema (source of truth)
 │   │   ├── init.py     ← creates research.duckdb from schema.sql
@@ -88,6 +88,9 @@ marketmind/
 | FRED | `fredapi` | Macro: rates, inflation, credit spreads, VIXCLS |
 | ECB SDW | `requests` (REST) | EUR rates, FX, EA macro |
 | Company newsroom RSS | `feedparser` | Primary sources where available |
+| STOXX selection list | `requests` | Official STOXX 600 membership + internal keys (keyless CSV) |
+| BlackRock fund API | `requests` | iShares CSPX S&P 500 holdings (keyless) |
+| OpenFIGI | `requests` | Free ISIN/CUSIP mapping for universe enrichment |
 
 NewsAPI, OpenBB, and arXiv/SSRN are **optional supplements only** — never the
 backbone. NewsAPI's free tier (100 req/day, 24h delay) is too constrained to

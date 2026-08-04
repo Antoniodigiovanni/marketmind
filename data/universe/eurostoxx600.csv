@@ -1,501 +1,601 @@
-ticker,name,country,sector,added_date,removed_date
-THL.PA,Thales,France,Industrial Goods and Services,2026-08-04,
-SABE.MC,Banco Sabadell,Spain,Banks,2026-08-04,
-ACX.MC,Acerinox,Spain,Basic Resources,2026-08-04,
-CTEC.L,ConvaTec,United Kingdom,Health Care,2026-08-04,
-LLOY.L,Lloyds Banking Group,United Kingdom,Banks,2026-08-04,
-SALM.OL,SalMar,Norway,"Food, Beverage and Tobacco",2026-08-04,
-AKZA.AS,Akzo Nobel,Netherlands,Chemicals,2026-08-04,
-MEL.MC,Meliá Hotels,Spain,Travel and Leisure,2026-08-04,
-8TRA.DE,Traton,Germany,Industrial Goods and Services,2026-08-04,
-VOE.VI,Voestalpine,Austria,Basic Resources,2026-08-04,
-ATCOa.ST,Atlas Copco,Sweden,Industrial Goods and Services,2026-08-04,
-TW.L,Taylor Wimpey,United Kingdom,Consumer Products and Services,2026-08-04,
-UTG.L,Unite Group,United Kingdom,Real Estate,2026-08-04,
-ARND.DE,Aroundtown,Germany,Real Estate,2026-08-04,
-DANO.PA,Danone,France,"Food, Beverage and Tobacco",2026-08-04,
-INPST.LU,InPost,Luxembourg,Industrial Goods and Services,2026-08-04,
-HFD.L,Hargreaves Lansdown,United Kingdom,Financial Services,2026-08-04,
-LEG.DE,LEG Immobilien,Germany,Real Estate,2026-08-04,
-LGEN.L,Legal & General,United Kingdom,Insurance,2026-08-04,
-GET.PA,Getlink,France,Industrial Goods and Services,2026-08-04,
-DIA.MC,Dia,Spain,"Personal Care, Drug and Grocery Stores",2026-08-04,
-AHT.L,Ashtead Group,United Kingdom,Industrial Goods and Services,2026-08-04,
-SWECO-B.ST,Sweco,Sweden,Construction and Materials,2026-08-04,
-RCO.PA,Rémy Cointreau,France,"Food, Beverage and Tobacco",2026-08-04,
-SPSN.SW,Swiss Prime Site,Switzerland,Real Estate,2026-08-04,
-SY1.DE,Symrise,Germany,Chemicals,2026-08-04,
-ERICb.ST,Ericsson,Sweden,Telecommunications,2026-08-04,
-UPM.HE,UPM-Kymmene,Finland,Basic Resources,2026-08-04,
-LUMI.PA,Lumibird,France,Technology,2026-08-04,
-AUTO.L,Auto Trader Group,United Kingdom,Media,2026-08-04,
-WKL.AS,Wolters Kluwer,Netherlands,Media,2026-08-04,
-ALLFG.MC,Allfunds Group,Spain,Financial Services,2026-08-04,
-TEP.PA,Teleperformance,France,Industrial Goods and Services,2026-08-04,
-EN.PA,Bouygues,France,Construction and Materials,2026-08-04,
-PRU.L,Prudential plc,United Kingdom,Insurance,2026-08-04,
-RENA.PA,Renault,France,Automobiles and Parts,2026-08-04,
-MC.PA,LVMH,France,Consumer Products and Services,2026-08-04,
-TEMN.SW,Temenos Group,Switzerland,Technology,2026-08-04,
-BRNW.MI,Brunello Cucinelli,Italy,Consumer Products and Services,2026-08-04,
-LSEG.L,London Stock Exchange Group,United Kingdom,Financial Services,2026-08-04,
-RMS.PA,Hermès,France,Consumer Products and Services,2026-08-04,
-ALC.SW,Alcon,Switzerland,Health Care,2026-08-04,
-BAS.DE,BASF,Germany,Chemicals,2026-08-04,
-STLAM.AS,Stellantis,Netherlands,Automobiles and Parts,2026-08-04,
-FORTUM.HE,Fortum,Finland,Utilities,2026-08-04,
-ITRK.L,Intertek,United Kingdom,Industrial Goods and Services,2026-08-04,
-GSK.L,GSK plc,United Kingdom,Health Care,2026-08-04,
-TKA.DE,ThyssenKrupp,Germany,Industrial Goods and Services,2026-08-04,
-RR.L,Rolls-Royce Holdings,United Kingdom,Industrial Goods and Services,2026-08-04,
-SRB.OL,Storebrand,Norway,Insurance,2026-08-04,
-GIVN.SW,Givaudan,Switzerland,Chemicals,2026-08-04,
-OCI.AS,OCI,Netherlands,Chemicals,2026-08-04,
-BBVA.MC,Banco Bilbao Vizcaya Argentaria,Spain,Banks,2026-08-04,
-IPX.PA,Ipsos,France,Media,2026-08-04,
-SRG.MI,Snam,Italy,Energy,2026-08-04,
-REC.MI,Recordati,Italy,Health Care,2026-08-04,
-EDEN.PA,Edenred,France,Industrial Goods and Services,2026-08-04,
-STAN.L,Standard Chartered,United Kingdom,Banks,2026-08-04,
-PSON.L,Pearson,United Kingdom,Media,2026-08-04,
-SN.L,Smith & Nephew,United Kingdom,Health Care,2026-08-04,
-SOGN.PA,Société Générale,France,Banks,2026-08-04,
-BDEV.L,Barratt Developments,United Kingdom,Consumer Products and Services,2026-08-04,
-EDV.L,Endeavour Mining,United Kingdom,Basic Resources,2026-08-04,
-VACN.SW,VAT Group,Switzerland,Industrial Goods and Services,2026-08-04,
-UPW.L,United Utilities,United Kingdom,Utilities,2026-08-04,
-VWS.CO,Vestas Wind Systems,Denmark,Energy,2026-08-04,
-TPK.L,Travis Perkins,United Kingdom,Retail,2026-08-04,
-TOM.AS,TomTom,Netherlands,Technology,2026-08-04,
-TIT.MI,Telecom Italia,Italy,Telecommunications,2026-08-04,
-DIE.BR,DIETEREN Group,Belgium,Automobiles and Parts,2026-08-04,
-SCHP.SW,Schindler Group,Switzerland,Industrial Goods and Services,2026-08-04,
-NAB.AT,National Bank of Greece,Greece,Banks,2026-08-04,
-TREL-B.ST,Trelleborg,Sweden,Industrial Goods and Services,2026-08-04,
-HOLN.SW,Holcim,Switzerland,Construction and Materials,2026-08-04,
-INF.L,Informa,United Kingdom,Media,2026-08-04,
-AV.L,Aviva,United Kingdom,Insurance,2026-08-04,
-PHNX.L,Phoenix Group,United Kingdom,Insurance,2026-08-04,
-RWE.DE,RWE,Germany,Utilities,2026-08-04,
-ABBN.SW,ABB Ltd,Switzerland,Industrial Goods and Services,2026-08-04,
-DPLM.L,Diploma,United Kingdom,Industrial Goods and Services,2026-08-04,
-SAF.PA,Safran,France,Industrial Goods and Services,2026-08-04,
-ELUXb.ST,Electrolux,Sweden,Consumer Products and Services,2026-08-04,
-SOW.DE,Software,Germany,Technology,2026-08-04,
-IAG.MC,IAG,Spain,Travel and Leisure,2026-08-04,
-AZN.L,AstraZeneca,United Kingdom,Health Care,2026-08-04,
-UC.MI,UniCredit,Italy,Banks,2026-08-04,
-ICP.L,Intermediate Capital Group,United Kingdom,Financial Services,2026-08-04,
-EDP.LS,EDP - Energias de Portugal,Portugal,Utilities,2026-08-04,
-MBG.DE,Mercedes-Benz Group,Germany,Automobiles and Parts,2026-08-04,
-OERL.SW,Oerlikon,Switzerland,Industrial Goods and Services,2026-08-04,
-PNL.AS,PostNL,Netherlands,Industrial Goods and Services,2026-08-04,
-BOUY.PA,Bouygues,France,Construction and Materials,2026-08-04,
-NEOEN.PA,Neoen,France,Utilities,2026-08-04,
-FRE.DE,Fresenius SE,Germany,Health Care,2026-08-04,
-EDPR.LS,EDP Renováveis,Portugal,Utilities,2026-08-04,
-UBSG.SW,UBS Group,Switzerland,Banks,2026-08-04,
-SAN.MC,Banco Santander,Spain,Banks,2026-08-04,
-TUI.DE,TUI Group,Germany,Travel and Leisure,2026-08-04,
-ZAL.DE,Zalando,Germany,Retail,2026-08-04,
-FME.DE,Fresenius Medical Care,Germany,Health Care,2026-08-04,
-IMB.L,Imperial Brands,United Kingdom,"Food, Beverage and Tobacco",2026-08-04,
-ALFA.ST,Alfa Laval,Sweden,Industrial Goods and Services,2026-08-04,
-GFT.IR,Grafton Group,Ireland,Industrial Goods and Services,2026-08-04,
-GRLS.MC,Grifols,Spain,Health Care,2026-08-04,
-ONT.BR,Ontex,Belgium,"Personal Care, Drug and Grocery Stores",2026-08-04,
-AKERBP.OL,Aker BP,Norway,Energy,2026-08-04,
-CLN.SW,Clariant,Switzerland,Chemicals,2026-08-04,
-TATE.L,Tate & Lyle,United Kingdom,"Food, Beverage and Tobacco",2026-08-04,
-HUSQ-B.ST,Husqvarna,Sweden,Consumer Products and Services,2026-08-04,
-TELIA.ST,Telia Company,Sweden,Telecommunications,2026-08-04,
-NSN.HE,Neste,Finland,Energy,2026-08-04,
-CCH.SW,Coca-Cola HBC,Switzerland,"Food, Beverage and Tobacco",2026-08-04,
-TSCO.L,Tesco,United Kingdom,Retail,2026-08-04,
-TTE.PA,TotalEnergies,France,Energy,2026-08-04,
-QIA.AS,Qiagen,Netherlands,Health Care,2026-08-04,
-PLPH.SW,PolyPeptide,Switzerland,Health Care,2026-08-04,
-SDZ.SW,Sandoz,Switzerland,Health Care,2026-08-04,
-BRBY.L,Burberry,United Kingdom,Consumer Products and Services,2026-08-04,
-GFC.PA,Gecina,France,Real Estate,2026-08-04,
-BOL.PA,Bolloré,France,Industrial Goods and Services,2026-08-04,
-LIN.L,Linde plc,United Kingdom,Chemicals,2026-08-04,
-PBB.DE,Deutsche Pfandbriefbank,Germany,Banks,2026-08-04,
-DTE.DE,Deutsche Telekom,Germany,Telecommunications,2026-08-04,
-NOVO-B.CO,Novo Nordisk,Denmark,Health Care,2026-08-04,
-MONC.MI,Moncler,Italy,Consumer Products and Services,2026-08-04,
-SON.SW,Sonova,Switzerland,Health Care,2026-08-04,
-TLX.DE,Talanx,Germany,Insurance,2026-08-04,
-REL.L,RELX,United Kingdom,Media,2026-08-04,
-AAL.L,Anglo American plc,United Kingdom,Basic Resources,2026-08-04,
-AIR.PA,Airbus,France,Industrial Goods and Services,2026-08-04,
-HSBA.L,HSBC,United Kingdom,Banks,2026-08-04,
-AKE.PA,Arkema,France,Chemicals,2026-08-04,
-ALSO.PA,Alstom,France,Industrial Goods and Services,2026-08-04,
-CAST.ST,Castellum,Sweden,Real Estate,2026-08-04,
-TRYG.CO,Tryg,Denmark,Insurance,2026-08-04,
-SCMN.SW,Swisscom,Switzerland,Telecommunications,2026-08-04,
-ABF.L,Associated British Foods,United Kingdom,"Food, Beverage and Tobacco",2026-08-04,
-ENI.MI,Eni,Italy,Energy,2026-08-04,
-DGE.L,Diageo,United Kingdom,"Food, Beverage and Tobacco",2026-08-04,
-IAG.L,International Consolidated Airlines Group,United Kingdom,Travel and Leisure,2026-08-04,
-STJ.L,St. James's Place,United Kingdom,Financial Services,2026-08-04,
-DOCM.SW,DocMorris,Switzerland,Health Care,2026-08-04,
-WISE.L,Wise,United Kingdom,Financial Services,2026-08-04,
-UMG.AS,Universal Music Group,Netherlands,Media,2026-08-04,
-NDA-SE.ST,Nordea,Finland,Banks,2026-08-04,
-UMI.BR,Umicore,Belgium,Chemicals,2026-08-04,
-SANO.HE,Sanoma,Finland,Media,2026-08-04,
-WEND.PA,Wendel,France,Financial Services,2026-08-04,
-KGF.L,Kingfisher plc,United Kingdom,Retail,2026-08-04,
-VAR1.DE,Varta,Germany,Industrial Goods and Services,2026-08-04,
-SEB.ST,Skandinaviska Enskilda Banken,Sweden,Banks,2026-08-04,
-RB..L,Reckitt,United Kingdom,"Personal Care, Drug and Grocery Stores",2026-08-04,
-SKF-B.ST,SKF,Sweden,Industrial Goods and Services,2026-08-04,
-STMPA.SW,STMicroelectronics,Switzerland,Technology,2026-08-04,
-IDP.MI,Interpump Group,Italy,Industrial Goods and Services,2026-08-04,
-URW.PA,Unibail-Rodamco-Westfield,France,Real Estate,2026-08-04,
-LHA.DE,Lufthansa,Germany,Travel and Leisure,2026-08-04,
-MGG.L,M&G,United Kingdom,Financial Services,2026-08-04,
-ROG.SW,Roche Holding,Switzerland,Health Care,2026-08-04,
-HEN3.DE,Henkel,Germany,Consumer Products and Services,2026-08-04,
-UN01.DE,Uniper,Germany,Utilities,2026-08-04,
-AIXA.DE,AIXTRON,Germany,Technology,2026-08-04,
-NIBE-B.ST,Nibe Industrier,Sweden,Construction and Materials,2026-08-04,
-BBY.L,Balfour Beatty,United Kingdom,Construction and Materials,2026-08-04,
-PST.MI,Poste Italiane,Italy,Insurance,2026-08-04,
-ROL.L,Royal Mail,United Kingdom,Industrial Goods and Services,2026-08-04,
-NEXI.MI,Nexi,Italy,Industrial Goods and Services,2026-08-04,
-MUV2.DE,Munich Re,Germany,Insurance,2026-08-04,
-LSG.OL,Lerøy Seafood,Norway,"Food, Beverage and Tobacco",2026-08-04,
-BME.L,B&M European Value Retail,United Kingdom,Retail,2026-08-04,
-SXS.L,Spectris,United Kingdom,Industrial Goods and Services,2026-08-04,
-BA..L,BAE Systems,United Kingdom,Industrial Goods and Services,2026-08-04,
-SECU-B.ST,Securitas AB,Sweden,Industrial Goods and Services,2026-08-04,
-NG.L,National Grid,United Kingdom,Utilities,2026-08-04,
-HMB.ST,H&M,Sweden,Retail,2026-08-04,
-RECK.L,Reckitt,United Kingdom,"Personal Care, Drug and Grocery Stores",2026-08-04,
-EMSN.SW,Ems-Chemie,Switzerland,Chemicals,2026-08-04,
-MAERSK-B.CO,Maersk,Denmark,Industrial Goods and Services,2026-08-04,
-ADEN.SW,Adecco,Switzerland,Industrial Goods and Services,2026-08-04,
-SCR.PA,SCOR SE,France,Insurance,2026-08-04,
-DASH.DE,Delivery Hero,Germany,Retail,2026-08-04,
-NESN.SW,Nestlé,Switzerland,"Food, Beverage and Tobacco",2026-08-04,
-NGG.L,National Grid,United Kingdom,Utilities,2026-08-04,
-TEV.TA,Teva Pharmaceutical Industries,Israel,Health Care,2026-08-04,
-EVK.DE,Evonik Industries,Germany,Chemicals,2026-08-04,
-VOD.L,Vodafone Group,United Kingdom,Telecommunications,2026-08-04,
-ORAN.PA,Orange S.A.,France,Telecommunications,2026-08-04,
-GLE.PA,Société Générale,France,Banks,2026-08-04,
-OREP.PA,L'Oréal,France,Consumer Products and Services,2026-08-04,
-DLG.L,Direct Line,United Kingdom,Insurance,2026-08-04,
-RNL.PA,Renault,France,Automobiles and Parts,2026-08-04,
-BEI.DE,Beiersdorf,Germany,Consumer Products and Services,2026-08-04,
-SPX.L,Spirax-Sarco Engineering,United Kingdom,Industrial Goods and Services,2026-08-04,
-KPN.AS,KPN,Netherlands,Telecommunications,2026-08-04,
-REP.MC,Repsol,Spain,Energy,2026-08-04,
-DHL.DE,DHL Group,Germany,Industrial Goods and Services,2026-08-04,
-REDE.MC,Redeia,Spain,Utilities,2026-08-04,
-MRL.MC,Merlin Properties,Spain,Real Estate,2026-08-04,
-AZE.BR,Azelis Group,Belgium,Industrial Goods and Services,2026-08-04,
-WTB.L,Whitbread,United Kingdom,Travel and Leisure,2026-08-04,
-HLI.L,Haleon,United Kingdom,Consumer Products and Services,2026-08-04,
-ANA.MC,Acciona,Spain,Construction and Materials,2026-08-04,
-DSM.SW,DSM-Firmenich,Switzerland,Chemicals,2026-08-04,
-SW.PA,Sodexo,France,Travel and Leisure,2026-08-04,
-SGEF.PA,Vinci SA,France,Construction and Materials,2026-08-04,
-IPN.PA,Ipsen,France,Health Care,2026-08-04,
-ZURN.SW,Zurich Insurance Group,Switzerland,Insurance,2026-08-04,
-CPR.MI,Davide Campari-Milano,Italy,"Food, Beverage and Tobacco",2026-08-04,
-HEI.DE,Heidelberg Materials,Germany,Construction and Materials,2026-08-04,
-LUN.ST,Lundin Energy,Sweden,Energy,2026-08-04,
-NEX.PA,Nexans,France,Industrial Goods and Services,2026-08-04,
-HIK.L,Hikma Pharmaceuticals,United Kingdom,Health Care,2026-08-04,
-DLN.L,Derwent London,United Kingdom,Real Estate,2026-08-04,
-EZJ.L,EasyJet,United Kingdom,Travel and Leisure,2026-08-04,
-CPG.L,Compass Group,United Kingdom,Travel and Leisure,2026-08-04,
-ANE.MC,Acciona Energía,Spain,Utilities,2026-08-04,
-ORA.PA,Orange S.A.,France,Telecommunications,2026-08-04,
-S4.L,S4 Capital,United Kingdom,Media,2026-08-04,
-VCT.PA,Vicat,France,Construction and Materials,2026-08-04,
-AML.L,Aston Martin,United Kingdom,Automobiles and Parts,2026-08-04,
-WEIR.L,Weir Group,United Kingdom,Industrial Goods and Services,2026-08-04,
-EOAN.DE,E.ON,Germany,Utilities,2026-08-04,
-SCHA.OL,Schibsted,Norway,Media,2026-08-04,
-SIX2.DE,Sixt,Germany,Consumer Products and Services,2026-08-04,
-JMT.LS,Jerónimo Martins,Portugal,Retail,2026-08-04,
-SGO.PA,Saint-Gobain,France,Construction and Materials,2026-08-04,
-SVT.L,Severn Trent,United Kingdom,Utilities,2026-08-04,
-PGHN.SW,Partners Group,Switzerland,Financial Services,2026-08-04,
-LIF.IR,LifeCo,Ireland,Insurance,2026-08-04,
-ENX.AS,Euronext,Netherlands,Financial Services,2026-08-04,
-STER.HE,Stora Enso,Finland,Basic Resources,2026-08-04,
-EPI-A.ST,Epiroc,Sweden,Industrial Goods and Services,2026-08-04,
-PRY.MI,Prysmian,Italy,Industrial Goods and Services,2026-08-04,
-SKG.IR,Smurfit Kappa,Ireland,Industrial Goods and Services,2026-08-04,
-NHY.OL,Norsk Hydro,Norway,Basic Resources,2026-08-04,
-SAMPO.HE,Sampo Group,Finland,Insurance,2026-08-04,
-SGE.L,Sage Group,United Kingdom,Technology,2026-08-04,
-SN..L,Smith & Nephew,United Kingdom,Health Care,2026-08-04,
-III.L,3i,United Kingdom,Financial Services,2026-08-04,
-RTO.L,Rentokil Initial,United Kingdom,Industrial Goods and Services,2026-08-04,
-IMI.L,IMI plc,United Kingdom,Industrial Goods and Services,2026-08-04,
-SWED-A.ST,Swedbank,Sweden,Banks,2026-08-04,
-BATS.L,British American Tobacco,United Kingdom,"Food, Beverage and Tobacco",2026-08-04,
-NTGY.MC,Naturgy,Spain,Utilities,2026-08-04,
-FR.PA,Valeo,France,Automobiles and Parts,2026-08-04,
-BNPP.PA,BNP Paribas,France,Banks,2026-08-04,
-DEMANT.CO,Demant,Denmark,Health Care,2026-08-04,
-SGOB.PA,Saint-Gobain,France,Construction and Materials,2026-08-04,
-BEB.SW,Belimo,Switzerland,Construction and Materials,2026-08-04,
-TEL2b.ST,Tele2,Sweden,Telecommunications,2026-08-04,
-SHEL.L,Shell plc,United Kingdom,Energy,2026-08-04,
-SIKA.SW,Sika,Switzerland,Construction and Materials,2026-08-04,
-VER.VI,Verbund,Austria,Utilities,2026-08-04,
-HNR.DE,Hannover Re,Germany,Insurance,2026-08-04,
-KNEBV.HE,Kone,Finland,Industrial Goods and Services,2026-08-04,
-RED.MC,Redeia,Spain,Utilities,2026-08-04,
-BAYN.DE,Bayer,Germany,Health Care,2026-08-04,
-MRW.L,Morrisons,United Kingdom,Retail,2026-08-04,
-PANDORA.CO,Pandora,Denmark,Consumer Products and Services,2026-08-04,
-SAP.DE,SAP,Germany,Technology,2026-08-04,
-WLN.PA,Worldline,France,Industrial Goods and Services,2026-08-04,
-RHM.DE,Rheinmetall,Germany,Industrial Goods and Services,2026-08-04,
-ORSTED.CO,Ørsted,Denmark,Utilities,2026-08-04,
-SRENH.SW,Swiss Re,Switzerland,Insurance,2026-08-04,
-FTI.L,TechnipFMC,United Kingdom,Energy,2026-08-04,
-ABN.AS,ABN AMRO,Netherlands,Banks,2026-08-04,
-SKY.L,Sky Group,United Kingdom,Media,2026-08-04,
-IFX.DE,Infineon Technologies,Germany,Technology,2026-08-04,
-ITV.L,ITV,United Kingdom,Media,2026-08-04,
-LDO.MI,Leonardo,Italy,Industrial Goods and Services,2026-08-04,
-COLR.BR,Colruyt,Belgium,"Personal Care, Drug and Grocery Stores",2026-08-04,
-SMIN.L,Smiths Group,United Kingdom,Industrial Goods and Services,2026-08-04,
-WPP.L,WPP plc,United Kingdom,Media,2026-08-04,
-BP.L,BP,United Kingdom,Energy,2026-08-04,
-AIRP.PA,Air Liquide,France,Chemicals,2026-08-04,
-GN.CO,GN Store Nord,Denmark,Health Care,2026-08-04,
-SOON.SW,Sonova,Switzerland,Health Care,2026-08-04,
-DHER.DE,Delivery Hero,Germany,Retail,2026-08-04,
-SOLB.BR,Solvay,Belgium,Chemicals,2026-08-04,
-VPLAY-B.ST,Viaplay,Sweden,Media,2026-08-04,
-BARC.L,Barclays,United Kingdom,Banks,2026-08-04,
-INDV.L,Indivior,United Kingdom,Health Care,2026-08-04,
-TOM.OL,Tomra,Norway,Industrial Goods and Services,2026-08-04,
-SKFb.ST,SKF,Sweden,Industrial Goods and Services,2026-08-04,
-FLOW.AS,Flow Traders,Netherlands,Financial Services,2026-08-04,
-NEM.DE,Nemetschek,Germany,Technology,2026-08-04,
-EXO.AS,Exor,Netherlands,Financial Services,2026-08-04,
-SKA-B.ST,Skanska,Sweden,Construction and Materials,2026-08-04,
-CDR.WA,CD Projekt,Poland,Consumer Products and Services,2026-08-04,
-NOKIA.HE,Nokia,Finland,Technology,2026-08-04,
-QLT.L,Quilter,United Kingdom,Financial Services,2026-08-04,
-PUM.DE,Puma,Germany,Consumer Products and Services,2026-08-04,
-GWI.MI,Gruppo Campari,Italy,"Food, Beverage and Tobacco",2026-08-04,
-LAND.L,Land Securities,United Kingdom,Real Estate,2026-08-04,
-GEBN.SW,Geberit,Switzerland,Construction and Materials,2026-08-04,
-RMV.L,Rightmove,United Kingdom,Real Estate,2026-08-04,
-SCHN.PA,Schneider Electric,France,Industrial Goods and Services,2026-08-04,
-CNA.L,Centrica,United Kingdom,Utilities,2026-08-04,
-G1A.DE,GEA Group,Germany,Industrial Goods and Services,2026-08-04,
-VK.PA,Vallourec,France,Basic Resources,2026-08-04,
-BKG.L,Berkeley Group Holdings,United Kingdom,Consumer Products and Services,2026-08-04,
-MNG.L,M&G,United Kingdom,Financial Services,2026-08-04,
-ASMI.AS,ASM International,Netherlands,Technology,2026-08-04,
-ENT.L,Entain,United Kingdom,Travel and Leisure,2026-08-04,
-CAGR.PA,Crédit Agricole,France,Banks,2026-08-04,
-CABK.MC,CaixaBank,Spain,Banks,2026-08-04,
-ENAG.MC,Enagás,Spain,Utilities,2026-08-04,
-OCFT.L,Ocado,United Kingdom,Retail,2026-08-04,
-BALN.SW,Baloise,Switzerland,Insurance,2026-08-04,
-AMBU-B.CO,Ambu,Denmark,Health Care,2026-08-04,
-SBRY.L,Sainsbury's,United Kingdom,Retail,2026-08-04,
-NDA-FI.HE,Nordea,Finland,Banks,2026-08-04,
-WTN.L,Whitbread,United Kingdom,Travel and Leisure,2026-08-04,
-ASSA-B.ST,Assa Abloy,Sweden,Construction and Materials,2026-08-04,
-MT.LU,ArcelorMittal,Luxembourg,Basic Resources,2026-08-04,
-LXS.DE,Lanxess,Germany,Chemicals,2026-08-04,
-CTS.DE,CTS Eventim,Germany,Media,2026-08-04,
-TJW.L,Taylor Wimpey,United Kingdom,Consumer Products and Services,2026-08-04,
-ADH.OL,Adevinta,Norway,Consumer Products and Services,2026-08-04,
-TIGO.ST,Millicom,Sweden,Telecommunications,2026-08-04,
-LIGHT.AS,Signify,Netherlands,Construction and Materials,2026-08-04,
-SHB-B.ST,Svenska Handelsbanken,Sweden,Banks,2026-08-04,
-ADS.DE,Adidas,Germany,Consumer Products and Services,2026-08-04,
-GALE.SW,Galenica,Switzerland,Health Care,2026-08-04,
-CTG.L,Computer Center,United Kingdom,Technology,2026-08-04,
-FLTR.IR,Flutter Entertainment,Ireland,Travel and Leisure,2026-08-04,
-SGRO.L,Segro,United Kingdom,Real Estate,2026-08-04,
-ELUX-B.ST,Electrolux,Sweden,Consumer Products and Services,2026-08-04,
-PROX.BR,Proximus,Belgium,Telecommunications,2026-08-04,
-FERR.MI,Ferrari,Italy,Automobiles and Parts,2026-08-04,
-BA.L,BAE Systems,United Kingdom,Industrial Goods and Services,2026-08-04,
-TGS.OL,TGS,Norway,Energy,2026-08-04,
-P911.DE,Porsche,Germany,Automobiles and Parts,2026-08-04,
-OMV.VI,OMV,Austria,Energy,2026-08-04,
-PNN.L,Pennon Group,United Kingdom,Utilities,2026-08-04,
-FER.AS,Ferrovial,Netherlands,Construction and Materials,2026-08-04,
-TPG.L,Telecom Plus,United Kingdom,Telecommunications,2026-08-04,
-BALD-B.ST,Balder,Sweden,Real Estate,2026-08-04,
-PSN.L,Persimmon plc,United Kingdom,Consumer Products and Services,2026-08-04,
-ASSAb.ST,Assa Abloy,Sweden,Construction and Materials,2026-08-04,
-INDT.ST,Indutrade,Sweden,Industrial Goods and Services,2026-08-04,
-GRF.MC,Grifols,Spain,Health Care,2026-08-04,
-NG..L,National Grid,United Kingdom,Utilities,2026-08-04,
-JUST.AS,Just Eat Takeaway,Netherlands,Retail,2026-08-04,
-GALP.LS,Galp Energia,Portugal,Energy,2026-08-04,
-FRA.DE,Rational,Germany,Industrial Goods and Services,2026-08-04,
-FALK.CO,Falck,Denmark,Health Care,2026-08-04,
-NXT.L,Next plc,United Kingdom,Retail,2026-08-04,
-CASP.ST,Castellum,Sweden,Real Estate,2026-08-04,
-CBK.DE,Commerzbank,Germany,Banks,2026-08-04,
-CAPP.PA,Capgemini,France,Technology,2026-08-04,
-PSN.PA,Publicis,France,Media,2026-08-04,
-MNDI.L,Mondi,United Kingdom,Industrial Goods and Services,2026-08-04,
-IGGI.L,IG Group,United Kingdom,Financial Services,2026-08-04,
-RXL.PA,Rexel,France,Industrial Goods and Services,2026-08-04,
-MB.MI,Mediobanca,Italy,Financial Services,2026-08-04,
-HSX.L,Hiscox,Bermuda,Insurance,2026-08-04,
-GREG.L,Greggs,United Kingdom,Retail,2026-08-04,
-ATOS.PA,Atos,France,Technology,2026-08-04,
-AFX.DE,Carl Zeiss Meditec,Germany,Health Care,2026-08-04,
-BYG.L,Big Yellow Group,United Kingdom,Real Estate,2026-08-04,
-BOL.ST,Boliden AB,Sweden,Basic Resources,2026-08-04,
-GLB.IR,Glanbia,Ireland,"Food, Beverage and Tobacco",2026-08-04,
-MKS.L,Marks & Spencer,United Kingdom,Retail,2026-08-04,
-NN.AS,NN Group,Netherlands,Insurance,2026-08-04,
-EBS.VI,Erste Group,Austria,Banks,2026-08-04,
-SASY.PA,Sanofi,France,Health Care,2026-08-04,
-FRVIA.PA,Forvia,France,Automobiles and Parts,2026-08-04,
-ADYEN.AS,Adyen,Netherlands,Industrial Goods and Services,2026-08-04,
-GAW.L,Games Workshop,United Kingdom,Consumer Products and Services,2026-08-04,
-MONY.L,Moneysupermarket.com,United Kingdom,Media,2026-08-04,
-HLM.L,Halma,United Kingdom,Industrial Goods and Services,2026-08-04,
-SWMA.ST,Swedish Match,Sweden,"Food, Beverage and Tobacco",2026-08-04,
-BMW.DE,BMW,Germany,Automobiles and Parts,2026-08-04,
-EVR.L,Evraz,United Kingdom,Basic Resources,2026-08-04,
-ARGX.AS,Argenx,Netherlands,Health Care,2026-08-04,
-OR.PA,L'Oréal,France,Consumer Products and Services,2026-08-04,
-KNIN.SW,Kuehne + Nagel,Switzerland,Industrial Goods and Services,2026-08-04,
-RBI.VI,Raiffeisen Bank International,Austria,Banks,2026-08-04,
-MAN.DE,MAN SE,Germany,Industrial Goods and Services,2026-08-04,
-IBE.MC,Iberdrola,Spain,Utilities,2026-08-04,
-GF.SW,Georg Fischer,Switzerland,Industrial Goods and Services,2026-08-04,
-LONN.SW,Lonza Group,Switzerland,Health Care,2026-08-04,
-BT.A.L,BT Group,United Kingdom,Telecommunications,2026-08-04,
-UHR.SW,Swatch Group,Switzerland,Consumer Products and Services,2026-08-04,
-ACS.MC,ACS Group,Spain,Construction and Materials,2026-08-04,
-WDP.BR,Warehouses De Pauw,Belgium,Real Estate,2026-08-04,
-TEN.LU,Tenaris,Luxembourg,Energy,2026-08-04,
-DTG.DE,Daimler Truck,Germany,Industrial Goods and Services,2026-08-04,
-AF.PA,Air France-KLM,France,Travel and Leisure,2026-08-04,
-DG.PA,Vinci,France,Construction and Materials,2026-08-04,
-SGSN.SW,SGS S.A.,Switzerland,Industrial Goods and Services,2026-08-04,
-FOR.MC,FCC,Spain,Construction and Materials,2026-08-04,
-SU.PA,Schneider Electric,France,Industrial Goods and Services,2026-08-04,
-ENEL.MI,Enel,Italy,Utilities,2026-08-04,
-BAER.SW,Julius Baer,Switzerland,Financial Services,2026-08-04,
-BKT.MC,Bankinter,Spain,Banks,2026-08-04,
-JD.L,JD Sports,United Kingdom,Retail,2026-08-04,
-TMV.DE,TeamViewer,Germany,Technology,2026-08-04,
-1COV.DE,Covestro,Germany,Chemicals,2026-08-04,
-HELN.SW,Helvetia Insurance,Switzerland,Insurance,2026-08-04,
-CON.DE,Continental,Germany,Automobiles and Parts,2026-08-04,
-HLMA.L,Halma plc,United Kingdom,Industrial Goods and Services,2026-08-04,
-INP.L,Investec,United Kingdom,Financial Services,2026-08-04,
-ELISA.HE,Elisa,Finland,Telecommunications,2026-08-04,
-RIO.L,Rio Tinto Group,United Kingdom,Basic Resources,2026-08-04,
-ASML.AS,ASML Holding,Netherlands,Technology,2026-08-04,
-INCH.L,Inchcape,United Kingdom,Retail,2026-08-04,
-SIGN.SW,SIG Group,Switzerland,Industrial Goods and Services,2026-08-04,
-BNR.DE,Brenntag,Germany,Industrial Goods and Services,2026-08-04,
-STMN.SW,Straumann,Switzerland,Health Care,2026-08-04,
-VOLV-B.ST,Volvo Group,Sweden,Industrial Goods and Services,2026-08-04,
-SMDS.L,DS Smith,United Kingdom,Industrial Goods and Services,2026-08-04,
-METSO.HE,Metso,Finland,Industrial Goods and Services,2026-08-04,
-UU..L,United Utilities,United Kingdom,Utilities,2026-08-04,
-ISP.MI,Intesa Sanpaolo,Italy,Banks,2026-08-04,
-ENGIE.PA,Engie,France,Utilities,2026-08-04,
-AENA.MC,Aena,Spain,Travel and Leisure,2026-08-04,
-TRN.MI,Terna,Italy,Utilities,2026-08-04,
-AMS.VI,ams OSRAM,Austria,Technology,2026-08-04,
-CFR.SW,Richemont,Switzerland,Consumer Products and Services,2026-08-04,
-VNA.DE,Vonovia,Germany,Real Estate,2026-08-04,
-NWG.L,NatWest Group,United Kingdom,Banks,2026-08-04,
-EXPN.L,Experian,United Kingdom,Industrial Goods and Services,2026-08-04,
-LOGN.SW,Logitech,Switzerland,Technology,2026-08-04,
-EFGI.PA,Eiffage,France,Construction and Materials,2026-08-04,
-LANV.PA,Lanvin Group,France,Consumer Products and Services,2026-08-04,
-VIV.PA,Vivendi,France,Media,2026-08-04,
-KBC.BR,KBC Group,Belgium,Banks,2026-08-04,
-HAS.L,Hays,United Kingdom,Industrial Goods and Services,2026-08-04,
-SIE.DE,Siemens,Germany,Industrial Goods and Services,2026-08-04,
-INGA.AS,ING Group,Netherlands,Banks,2026-08-04,
-RR..L,Rolls-Royce,United Kingdom,Industrial Goods and Services,2026-08-04,
-MTX.DE,MTU Aero Engines,Germany,Industrial Goods and Services,2026-08-04,
-ULVR.L,Unilever,United Kingdom,"Personal Care, Drug and Grocery Stores",2026-08-04,
-HWDN.L,Howden Joinery,United Kingdom,Retail,2026-08-04,
-SMT.L,Scottish Mortgage Investment Trust,United Kingdom,Financial Services,2026-08-04,
-JMAT.L,Johnson Matthey,United Kingdom,Chemicals,2026-08-04,
-ESLX.PA,EssilorLuxottica,France,Health Care,2026-08-04,
-UBI.PA,Ubisoft,France,Consumer Products and Services,2026-08-04,
-TW..L,Taylor Wimpey,United Kingdom,Consumer Products and Services,2026-08-04,
-NOVN.SW,Novartis,Switzerland,Health Care,2026-08-04,
-VIG.VI,Vienna Insurance Group,Austria,Insurance,2026-08-04,
-SSE.L,SSE plc,United Kingdom,Utilities,2026-08-04,
-KER.PA,Kering,France,Consumer Products and Services,2026-08-04,
-PIRC.MI,Pirelli,Italy,Automobiles and Parts,2026-08-04,
-PERP.PA,Pernod Ricard,France,"Food, Beverage and Tobacco",2026-08-04,
-STMPA.AS,STMicroelectronics,Netherlands,Technology,2026-08-04,
-VALMT.HE,Valmet,Finland,Industrial Goods and Services,2026-08-04,
-IHG.L,InterContinental Hotels Group,United Kingdom,Travel and Leisure,2026-08-04,
-SLHN.SW,Swiss Life,Switzerland,Insurance,2026-08-04,
-AC.PA,Accor,France,Travel and Leisure,2026-08-04,
-ENGI.PA,Engie,France,Utilities,2026-08-04,
-LISN.SW,Lindt & Sprüngli,Switzerland,"Food, Beverage and Tobacco",2026-08-04,
-MELE.BR,Melexis,Belgium,Technology,2026-08-04,
-TEL2-B.ST,Tele2,Sweden,Telecommunications,2026-08-04,
-LPP.WA,LPP,Poland,Consumer Products and Services,2026-08-04,
-ALO.PA,Alstom,France,Industrial Goods and Services,2026-08-04,
-BVI.PA,Bureau Veritas,France,Industrial Goods and Services,2026-08-04,
-MCG.L,Mobico Group,United Kingdom,Travel and Leisure,2026-08-04,
-TEF.MC,Telefónica,Spain,Telecommunications,2026-08-04,
-GLEN.L,Glencore,United Kingdom,Basic Resources,2026-08-04,
-WIHL.ST,Wihlborgs Fastigheter,Sweden,Real Estate,2026-08-04,
-FNTN.DE,Freenet,Germany,Telecommunications,2026-08-04,
-PAH3.DE,Porsche SE,Germany,Automobiles and Parts,2026-08-04,
-YAR.OL,Yara International,Norway,Chemicals,2026-08-04,
-VPK.AS,Vopak,Netherlands,Industrial Goods and Services,2026-08-04,
-SIG.SW,SIG Group,Switzerland,Industrial Goods and Services,2026-08-04,
-LII.L,Liberty Global,United Kingdom,Telecommunications,2026-08-04,
-SRT3.DE,Sartorius,Germany,Health Care,2026-08-04,
-ANTO.L,Antofagasta plc,United Kingdom,Basic Resources,2026-08-04,
-ADM.L,Admiral Group,United Kingdom,Insurance,2026-08-04,
-SCT.L,Softcat,United Kingdom,Technology,2026-08-04,
-BEZ.L,Beazley,United Kingdom,Insurance,2026-08-04,
-G24.DE,Scout24,Germany,Technology,2026-08-04,
-OCDO.L,Ocado,United Kingdom,Retail,2026-08-04,
-BPOST.BR,Bpost,Belgium,Industrial Goods and Services,2026-08-04,
-BNZL.L,Bunzl,United Kingdom,Industrial Goods and Services,2026-08-04,
-BARN.SW,Barry Callebaut,Switzerland,"Food, Beverage and Tobacco",2026-08-04,
-SAND.ST,Sandvik AB,Sweden,Industrial Goods and Services,2026-08-04,
-MOR.DE,MorphoSys,Germany,Health Care,2026-08-04,
-CARR.PA,Carrefour,France,Retail,2026-08-04,
-ALV.DE,Allianz,Germany,Insurance,2026-08-04,
-SDR.L,Schroders,United Kingdom,Financial Services,2026-08-04,
-VITR.ST,Vitrolife,Sweden,Health Care,2026-08-04,
-ITX.MC,Inditex,Spain,Retail,2026-08-04,
-CRDA.L,Croda International,United Kingdom,Chemicals,2026-08-04,
-DB1.DE,Deutsche Börse,Germany,Financial Services,2026-08-04,
-CS.PA,AXA,France,Insurance,2026-08-04,
-VESTAS.CO,Vestas,Denmark,Energy,2026-08-04,
-ABI.BR,Anheuser-Busch InBev,Belgium,"Food, Beverage and Tobacco",2026-08-04,
-MICP.PA,Michelin,France,Automobiles and Parts,2026-08-04,
-TEL.OL,Telenor,Norway,Telecommunications,2026-08-04,
-WIE.VI,Wienerberger,Austria,Construction and Materials,2026-08-04,
-EVT.DE,Evotec,Germany,Health Care,2026-08-04,
-RIGN.SW,Transocean,Switzerland,Energy,2026-08-04,
-ORK.OL,Orkla ASA,Norway,"Food, Beverage and Tobacco",2026-08-04,
-VIE.PA,Veolia,France,Utilities,2026-08-04,
-AGS.BR,Ageas,Belgium,Insurance,2026-08-04,
-BOSS.DE,Hugo Boss,Germany,Consumer Products and Services,2026-08-04,
+ticker,name,country,sector,added_date,removed_date,internal_key
+HLMA.L,HALMA,GB,,2026-08-04,,040520
+SOPR.PA,SOPRA STERIA GROUP,FR,,2026-08-04,,FR702F
+BAMI.MI,BANCO BPM,IT,,2026-08-04,,737826
+SGEF.PA,VINCI,FR,,2026-08-04,,481808
+DBKGn.DE,DEUTSCHE BANK,DE,,2026-08-04,,426724
+MRCG.DE,MERCK,DE,,2026-08-04,,474184
+AIRP.PA,AIR LIQUIDE,FR,,2026-08-04,,401140
+HRA.MI,HERA,IT,,2026-08-04,,759800
+ROPC.SW,ROCHE PS,CH,,2026-08-04,,474577
+INVP.L,INVESTEC,GB,,2026-08-04,,317731
+DTGGe.DE,DAIMLER TRUCK,DE,,2026-08-04,,DE14EA
+REL.L,RELX PLC,GB,,2026-08-04,,073087
+SCTS.L,SOFTCAT,GB,,2026-08-04,,GB50VR
+GF.SW,GEORG FISCHER,CH,,2026-08-04,,929718
+TSCO.L,TESCO,GB,,2026-08-04,,088470
+TEPRF.PA,TELEPERFORMANCE,FR,,2026-08-04,,599933
+DHER.DE,DELIVERY HERO,DE,,2026-08-04,,DE7042
+SAABb.ST,SAAB B,SE,,2026-08-04,,546955
+UPM.HE,UPM KYMMENE,FI,,2026-08-04,,505125
+RWEG.DE,RWE,DE,,2026-08-04,,473550
+AAL.L,ANGLO AMERICAN,GB,,2026-08-04,,490151
+UTG.L,UNITE GROUP PLC,GB,,2026-08-04,,GB20F8
+SQN.SW,SWISSQUOTE 'R',CH,,2026-08-04,,CH103X
+OREP.PA,L'OREAL,FR,,2026-08-04,,453478
+G24n.DE,SCOUT24,DE,,2026-08-04,,DE50B7
+EXHO.PA,SODEXO,FR,,2026-08-04,,481830
+PGHN.SW,PARTNERS GRP HLDG,CH,,2026-08-04,,B119QG
+RIO.L,RIO TINTO,GB,,2026-08-04,,071887
+OMVV.VI,OMV,AT,,2026-08-04,,465145
+MILP.WA,BANK MILLENNIUM,PL,,2026-08-04,,407732
+BNPP.PA,BNP PARIBAS,FR,,2026-08-04,,413366
+HIK.L,HIKMA PHARMACEUTICALS,GB,,2026-08-04,,B0LCW0
+FDJU.PA,FDJ UNITED,FR,,2026-08-04,,FR90GV
+BIOX.PA,BIOMERIEUX,FR,,2026-08-04,,B01MJR
+MUVGn.DE,MUENCHENER RUECK,DE,,2026-08-04,,461075
+DLG.MI,DE LONGHI,IT,,2026-08-04,,IT10AM
+BIRG.I,BANK OF IRELAND GROUP,IE,,2026-08-04,,007560
+MT.AS,ARCELORMITTAL,FR,,2026-08-04,,529525
+SPIE.PA,SPIE,FR,,2026-08-04,,FR504F
+INCH.L,INCHCAPE,GB,,2026-08-04,,046025
+R3NK.DE,RENK,DE,,2026-08-04,,DE40B6
+SJP.L,ST.JAMES'S PLACE CAPITAL,GB,,2026-08-04,,882217
+FTKn.DE,FLATEXDEGIRO N,DE,,2026-08-04,,DE10D5
+IVG.MI,IVECO GROUP,IT,,2026-08-04,,IT14M2
+FHZN.SW,FLUGHAFEN ZURICH,CH,,2026-08-04,,595140
+ACCP.PA,ACCOR,FR,,2026-08-04,,411232
+SALM.OL,SALMAR,NO,,2026-08-04,,NO10CO
+DNP.WA,DINO POLSKA SA,PL,,2026-08-04,,PL704L
+RYA.I,RYANAIR,IE,,2026-08-04,,011517
+SY1G.DE,SYMRISE,DE,,2026-08-04,,B1JB4K
+EQNR.OL,EQUINOR,NO,,2026-08-04,,713360
+QLT.L,QUILTER,GB,,2026-08-04,,GB80DC
+RILBA.CO,RINGKJOBING LANDBOBANK,DK,,2026-08-04,,DK101Z
+BEZG.L,BEAZLEY,GB,,2026-08-04,,321430
+LAGRb.ST,LAGERCRANTZ GROUP 'B',SE,,2026-08-04,,SE607J
+STMMI.MI,STMICROELECTRONICS,IT,,2026-08-04,,477670
+AIBG.I,AIB GROUP,IE,,2026-08-04,,001978
+PRX.AS,Prosus,NL,,2026-08-04,,NL901I
+BGN.MI,BCA GENERALI,IT,,2026-08-04,,B1GGWB
+MRL.MC,MERLIN PROPERTIES SOCIMI,ES,,2026-08-04,,ES403D
+GETIb.ST,GETINGE B,SE,,2026-08-04,,438520
+SECUb.ST,SECURITAS B,SE,,2026-08-04,,478396
+EMSN.SW,EMS-CHEMIE HLDG,CH,,2026-08-04,,429552
+ADP.PA,ADP,FR,,2026-08-04,,B164FY
+SAVE.ST,NORDNET,SE,,2026-08-04,,SE00GM
+SOGN.PA,GRP SOCIETE GENERALE,FR,,2026-08-04,,481775
+LISP.SW,LINDT & SPRUENGLI P,CH,,2026-08-04,,596228
+NOKIA.HE,NOKIA,FI,,2026-08-04,,463841
+BWY.L,BELLWAY,GB,,2026-08-04,,904076
+PSHG_p.DE,PORSCHE AUTOMOBIL HLDG PREF,DE,,2026-08-04,,469678
+CRDI.MI,UNICREDIT,IT,,2026-08-04,,423244
+BCP.LS,BCO COMERCIAL PORTUGUES,PT,,2026-08-04,,407026
+MTXGn.DE,MTU AERO ENGINES,DE,,2026-08-04,,B09DHL
+STMN.SW,STRAUMANN,CH,,2026-08-04,,546435
+ITRK.L,INTERTEK GRP,GB,,2026-08-04,,316383
+ALVG.DE,ALLIANZ,DE,,2026-08-04,,401632
+STERV.HE,STORA ENSO R,FI,,2026-08-04,,507267
+BOLL.PA,BOLLORE,FR,,2026-08-04,,457270
+GRLS.MC,GRIFOLS,ES,,2026-08-04,,B01SPF
+MOWI.OL,MOWI,NO,,2026-08-04,,B02L48
+AD.AS,AHOLD DELHAIZE,NL,,2026-08-04,,401093
+MYCR.ST,MYCRONIC,SE,,2026-08-04,,SE601D
+EDP.LS,EDP (PT),PT,,2026-08-04,,524918
+FORTUM.HE,FORTUM,FI,,2026-08-04,,557955
+PSON.L,PEARSON,GB,,2026-08-04,,067760
+KTY.WA,KETY,PL,,2026-08-04,,521638
+UU.L,UNITED UTILITIES GRP,GB,,2026-08-04,,064623
+GBLB.BR,GRP BRUXELLES LAMBERT,BE,,2026-08-04,,439155
+EMII.MI,BPER Banca,IT,,2026-08-04,,411609
+BBVA.MC,BCO BILBAO VIZCAYA ARGENTARIA,ES,,2026-08-04,,550190
+BAER.SW,JULIUS BAER GRP,CH,,2026-08-04,,EY030
+FRES.L,FRESNILLO,GB,,2026-08-04,,EB183
+BPTB.L,BRIDGEPOINT GROUP,GB,,2026-08-04,,GB1F07
+STB.OL,STOREBRAND,NO,,2026-08-04,,485283
+MAERSKb.CO,A.P.MOLLER-MAERSK B,DK,,2026-08-04,,425304
+LOGN.SW,LOGITECH INTERNATIONAL,CH,,2026-08-04,,772868
+METSO.HE,METSO,FI,,2026-08-04,,B1FN8X
+HBANC.SW,HELVETIA BALOISE HLDG,CH,,2026-08-04,,929869
+TRN.MI,TERNA,IT,,2026-08-04,,B01BN5
+AIXGn.DE,AIXTRON,DE,,2026-08-04,,546834
+ICAG.L,IAG,GB,,2026-08-04,,012905
+MNDI.L,MONDI,GB,,2026-08-04,,B1CRLC
+SKAb.ST,SKANSKA B,SE,,2026-08-04,,481343
+GMAB.CO,GENMAB,DK,,2026-08-04,,459573
+AZE.BR,AZELIS GROUP,BE,,2026-08-04,,BE11G7
+TEL2b.ST,TELE2 B,SE,,2026-08-04,,506506
+UCB.BR,UCB,BE,,2026-08-04,,491062
+TUB.BR,FINANCIERE DE TUBIZE,BE,,2026-08-04,,B0BN7W
+ATSV.VI,AT&S AUSTRIA TECH.&SYSTEMTECH,AT,,2026-08-04,,AT502A
+GASI.MI,ASSICURAZIONI GENERALI,IT,,2026-08-04,,405671
+ACLN.SW,ACCELLERON INDUSTRIES,CH,,2026-08-04,,CH2072
+BARC.L,BARCLAYS,GB,,2026-08-04,,007820
+LONN.SW,LONZA,CH,,2026-08-04,,579422
+HSX.L,HISCOX,GB,,2026-08-04,,GB30B5
+VAR.OL,VAR ENERGI,NO,,2026-08-04,,NO20FS
+UNI.MC,UNICAJA BANCO S.A.,ES,,2026-08-04,,ES705I
+FRO.OL,FRONTLINE,NO,,2026-08-04,,NO602J
+XTB.WA,XTB SA,PL,,2026-08-04,,PL702J
+VIGR.VI,VIENNA INSURANCE,AT,,2026-08-04,,B0BKSS
+HUBN.SW,HUBER+SUHNER 'R',CH,,2026-08-04,,547643
+CMBN.SW,CEMBRA MONEY BANK,CH,,2026-08-04,,CH301X
+VALMT.HE,Valmet,FI,,2026-08-04,,FI3022
+TPRO.MI,TECHNOPROBE SPA,IT,,2026-08-04,,IT304I
+GFCP.PA,GECINA,FR,,2026-08-04,,439180
+CARR.PA,CARREFOUR,FR,,2026-08-04,,417754
+EMG.L,MAN GRP,GB,,2026-08-04,,029440
+HMSO.L,HAMMERSON,GB,,2026-08-04,,040650
+ANTO.L,ANTOFAGASTA,GB,,2026-08-04,,926288
+ADS.DE,ADIDAS,DE,,2026-08-04,,403197
+CVC.AS,CVC CAPITAL PARTNERS,NL,,2026-08-04,,NL404G
+RAND.AS,RANDSTAD,NL,,2026-08-04,,472370
+DSV.CO,DSV,DK,,2026-08-04,,587296
+SRG.MI,SNAM RETE GAS,IT,,2026-08-04,,725147
+RECI.MI,RECORDATI,IT,,2026-08-04,,705339
+HEIO.AS,HEINEKEN HLDG,NL,,2026-08-04,,441920
+BOUY.PA,BOUYGUES,FR,,2026-08-04,,411515
+DAST.PA,DASSAULT SYSTEMS,FR,,2026-08-04,,533004
+FER.MC,FERROVIAL,ES,,2026-08-04,,B03851
+CAPP.PA,CAP GEMINI,FR,,2026-08-04,,416343
+SUN.SW,SULZER,CH,,2026-08-04,,485471
+INDT.ST,INDUTRADE,SE,,2026-08-04,,B0LDBX
+TLIT.MI,TELECOM ITALIA,IT,,2026-08-04,,465940
+ADYEN.AS,ADYEN,NL,,2026-08-04,,NL802I
+KGH.WA,KGHM,PL,,2026-08-04,,526325
+TBCG.L,TBC BANK GROUP,GB,,2026-08-04,,GB90GG
+TENR.MI,TENARIS,IT,,2026-08-04,,753851
+SCYR.MC,SACYR,ES,,2026-08-04,,492670
+BBOXT.L,TRITAX BIG BOX REIT,GB,,2026-08-04,,GB70MK
+TEL.OL,TELENOR,NO,,2026-08-04,,473249
+LEGD.PA,LEGRAND,FR,,2026-08-04,,B11ZRK
+ENAG.MC,ENAGAS,ES,,2026-08-04,,738307
+INF.L,INFORMA,GB,,2026-08-04,,026256
+ZURN.SW,ZURICH INSURANCE GROUP,CH,,2026-08-04,,499187
+AAK.ST,AAK,SE,,2026-08-04,,SE10BI
+KBC.BR,KBC GRP,BE,,2026-08-04,,449774
+PUBP.PA,PUBLICIS GRP,FR,,2026-08-04,,470774
+SUNN.SW,SUNRISE N A,CH,,2026-08-04,,CH5064
+NOD.OL,NORDIC SEMICONDUCTOR,NO,,2026-08-04,,NO108K
+SWECb.ST,SWECO 'B',SE,,2026-08-04,,SE401B
+HEIN.AS,HEINEKEN,NL,,2026-08-04,,441930
+TTE.PA,TOTALENERGIES,FR,,2026-08-04,,490541
+LAND.L,LAND SECURITIES,GB,,2026-08-04,,050450
+FBK.MI,FINECOBANK,IT,,2026-08-04,,IT404J
+VOLVb.ST,VOLVO B,SE,,2026-08-04,,493117
+NTGY.MC,Naturgy Energy Group,ES,,2026-08-04,,417986
+ORK.OL,ORKLA,NO,,2026-08-04,,465768
+BT.L,BT GRP,GB,,2026-08-04,,014084
+ENI.MI,ENI,IT,,2026-08-04,,443639
+BEIJb.ST,BEIJER REF AB,SE,,2026-08-04,,SE802G
+BTRW.L,BARRATT REDROW,GB,,2026-08-04,,008118
+VIE.PA,VEOLIA ENVIRONNEMENT,FR,,2026-08-04,,EF2
+AUTOA.L,AUTOTRADER GROUP,GB,,2026-08-04,,GB50A6
+AEGN.AS,AEGON,NL,,2026-08-04,,400609
+GALD.SW,GALDERMA GROUP N,CH,,2026-08-04,,CH4074
+KNEBV.HE,KONE B,FI,,2026-08-04,,449667
+TATE.L,TATE & LYLE,GB,,2026-08-04,,087541
+BATS.L,BRITISH AMERICAN TOBACCO,GB,,2026-08-04,,028758
+CAST.ST,CASTELLUM,SE,,2026-08-04,,523280
+BAWG.VI,BAWAG GROUP AG,AT,,2026-08-04,,AT701B
+SDFGn.DE,K + S,DE,,2026-08-04,,576162
+FREG.DE,FRESENIUS,DE,,2026-08-04,,435209
+ASRNL.AS,ASR NEDERLAND NV,NL,,2026-08-04,,NL604I
+EDPR.LS,EDP RENEWABLES,PT,,2026-08-04,,EL004
+NEXII.MI,NEXI SPA,IT,,2026-08-04,,IT90BV
+JMT.LS,JERONIMO MARTINS,PT,,2026-08-04,,447723
+LVMH.PA,LVMH MOET HENNESSY,FR,,2026-08-04,,454005
+UBSG.SW,UBS GROUP,CH,,2026-08-04,,478511
+SB1NO.OL,SPAREBANK 1 SOR-NORGE ASA,NO,,2026-08-04,,B06T8C
+EXPN.L,EXPERIAN,GB,,2026-08-04,,038470
+AXFO.ST,AXFOOD,SE,,2026-08-04,,591591
+VOWG_p.DE,VOLKSWAGEN PREF,DE,,2026-08-04,,EG7
+ESLX.PA,ESSILORLUXOTTICA,FR,,2026-08-04,,430376
+SBMO.AS,SBM OFFSHORE,NL,,2026-08-04,,916775
+NDXG.DE,NORDEX,DE,,2026-08-04,,B06CF7
+KESKOB.HE,KESKO,FI,,2026-08-04,,449000
+ELE.MC,ENDESA,ES,,2026-08-04,,431536
+HOTG.DE,HOCHTIEF,DE,,2026-08-04,,442990
+SDZ.SW,SANDOZ GROUP,CH,,2026-08-04,,CH303Z
+HEXAb.ST,HEXAGON B,SE,,2026-08-04,,B096C6
+INVEb.ST,INVESTOR B,SE,,2026-08-04,,446963
+CFR.SW,CIE FINANCIERE RICHEMONT,CH,,2026-08-04,,473821
+RBIV.VI,RAIFFEISEN BANK INTERNATIONAL,AT,,2026-08-04,,B0704T
+SVT.L,SEVERN TRENT,GB,,2026-08-04,,079851
+OCTVsdb.ST,OCTAVE INTELLIGENCE SDR,SE,,2026-08-04,,SE60HT
+WEIR.L,WEIR GRP,GB,,2026-08-04,,094660
+PEO.WA,PEKAO,PL,,2026-08-04,,547311
+SAP.DE,SAP,DE,,2026-08-04,,476361
+SN.L,SMITH & NEPHEW,GB,,2026-08-04,,081660
+ALKb.CO,ALK-ABELLO B,DK,,2026-08-04,,DK1053
+SCMN.SW,SWISSCOM,CH,,2026-08-04,,553397
+SRP.L,SERCO GRP,GB,,2026-08-04,,007937
+TCAPI.L,TP ICAP,GB,,2026-08-04,,007100
+DGE.L,DIAGEO,GB,,2026-08-04,,039600
+CABK.MC,CAIXABANK,ES,,2026-08-04,,EE009
+ITPG.MI,INTERPUMP GRP,IT,,2026-08-04,,IT102E
+KBX.DE,KNORR BREMSE,DE,,2026-08-04,,DE80DC
+AOO.BR,AEDIFICA,BE,,2026-08-04,,BE107X
+BCU.MI,BRUNELLO CUCINELLI,IT,,2026-08-04,,IT201E
+TEGG.DE,TAG IMMOBILIEN AG,DE,,2026-08-04,,DE2070
+ELIS.PA,ELIS,FR,,2026-08-04,,FR502D
+RMV.L,RIGHTMOVE GRP,GB,,2026-08-04,,B0MFTM
+AMUN.PA,AMUNDI,FR,,2026-08-04,,FR509K
+BAES.L,BAE SYSTEMS,GB,,2026-08-04,,012715
+REDE.MC,Redeia Corporacion,ES,,2026-08-04,,672716
+HSBA.L,HSBC,GB,,2026-08-04,,040054
+BALDb.ST,FASTIGHETS BALDER B,SE,,2026-08-04,,SE10RY
+BESI.AS,BE SEMICONDUCTOR,NL,,2026-08-04,,NL704J
+ALLN.SW,ALLREAL HLDG,CH,,2026-08-04,,591427
+AZN.L,ASTRAZENECA,GB,,2026-08-04,,098952
+KGX.DE,KION GROUP,DE,,2026-08-04,,DE3060
+ACKB.BR,ACKERMANS & VAN HAAREN,BE,,2026-08-04,,755087
+CON.DE,CONTINENTAL,DE,,2026-08-04,,422060
+TLXGn.DE,TALANX,DE,,2026-08-04,,DE2081
+SASY.PA,SANOFI,FR,,2026-08-04,,477518
+SSABb.ST,SSAB B,SE,,2026-08-04,,B17H3F
+BALF.L,BALFOUR BEATTY,GB,,2026-08-04,,009616
+IMB.L,IMPERIAL BRANDS,GB,,2026-08-04,,045449
+BGEO.L,LION FINANCE GROUP,GB,,2026-08-04,,GB40XS
+KNIN.SW,KUEHNE + NAGEL,CH,,2026-08-04,,715674
+PSPN.SW,PSP SWISS PROPERTY,CH,,2026-08-04,,591264
+KCRA.HE,KONECRANES,FI,,2026-08-04,,866457
+TELIA.ST,TELIA COMPANY,SE,,2026-08-04,,597838
+HNKG_p.DE,HENKEL PREF,DE,,2026-08-04,,442031
+VNAn.DE,Vonovia SE,DE,,2026-08-04,,DE3082
+TRELb.ST,TRELLEBORG B,SE,,2026-08-04,,490238
+ABNd.AS,ABN AMRO BANK,NL,,2026-08-04,,NL602G
+UMI.BR,UMICORE,BE,,2026-08-04,,400500
+LPPP.WA,LPP,PL,,2026-08-04,,712797
+ZAB.WA,ZABKA GROUP,PL,,2026-08-04,,PL409N
+AVANZ.ST,AVANZA BANK HLDG,SE,,2026-08-04,,440875
+HBR.L,HARBOUR ENERGY,GB,,2026-08-04,,GB10QI
+SKFb.ST,SKF B,SE,,2026-08-04,,476706
+A2.MI,A2A,IT,,2026-08-04,,549913
+MNG.L,M&G,GB,,2026-08-04,,GB90MM
+RUBF.PA,RUBIS,FR,,2026-08-04,,471310
+SBNOR.OL,SPAREBANKEN NORGE,NO,,2026-08-04,,NO804N
+ACS.MC,ACS,ES,,2026-08-04,,533338
+DB1Gn.DE,DEUTSCHE BOERSE,DE,,2026-08-04,,702196
+VLOF.PA,VALEO,FR,,2026-08-04,,492624
+PERP.PA,PERNOD RICARD,FR,,2026-08-04,,468232
+III.L,3I GROUP PLC.,GB,,2026-08-04,,088869
+VLLP.PA,VALLOUREC,FR,,2026-08-04,,492644
+MONC.MI,MONCLER,IT,,2026-08-04,,IT402H
+SCHN.PA,SCHNEIDER ELECTRIC,FR,,2026-08-04,,483410
+NXT.L,NEXT,GB,,2026-08-04,,042186
+EQTAB.ST,EQT,SE,,2026-08-04,,SE90U9
+NAFG.DE,AURUBIS,DE,,2026-08-04,,548552
+BMEB.L,B&M EUROPEAN VALUE RETAIL,GB,,2026-08-04,,GB40FA
+SOON.SW,SONOVA,CH,,2026-08-04,,143406
+SHEL.AS,SHELL,GB,,2026-08-04,,B09CBL
+PRU.L,PRUDENTIAL,GB,,2026-08-04,,070995
+RTO.L,RENTOKIL INITIAL,GB,,2026-08-04,,073303
+WLSNc.AS,WOLTERS KLUWER,NL,,2026-08-04,,497711
+MBGn.DE,MERCEDES-BENZ GROUP,DE,,2026-08-04,,425240
+INGA.AS,ING GRP,NL,,2026-08-04,,448816
+PNN.L,PENNON GRP,GB,,2026-08-04,,082699
+ALSO.PA,ALSTOM,FR,,2026-08-04,,547497
+VATN.SW,VALIANT,CH,,2026-08-04,,528648
+CVO.PA,COVIVIO,FR,,2026-08-04,,774563
+NN.AS,NN GROUP,NL,,2026-08-04,,NL403F
+HO.PA,THALES,FR,,2026-08-04,,416279
+BVI.PA,BUREAU VERITAS,FR,,2026-08-04,,B28DTJ
+NOVN.SW,NOVARTIS,CH,,2026-08-04,,477408
+HEIG.DE,HEIDELBERG MATERIALS,DE,,2026-08-04,,441870
+EVKn.DE,EVONIK INDUSTRIES,DE,,2026-08-04,,DE305Z
+PNDORA.CO,PANDORA,DK,,2026-08-04,,DK001Y
+SAND.ST,SANDVIK,SE,,2026-08-04,,477472
+NEKG.DE,NEMETSCHEK,DE,,2026-08-04,,DE8054
+ORSTED.CO,ORSTED,DK,,2026-08-04,,DK6036
+PROT.OL,PROTECTOR FORSIKRING,NO,,2026-08-04,,NO405K
+SYENS.BR,SYENSQO,BE,,2026-08-04,,BE30G8
+HMb.ST,HENNES & MAURITZ B,SE,,2026-08-04,,440822
+RXL.PA,REXEL,FR,,2026-08-04,,B1VP0K
+ALSYDB.CO,AL SYDBANK,DK,,2026-08-04,,486809
+ABVX.PA,ABIVAX,FR,,2026-08-04,,FR39AS
+CPG.L,COMPASS GRP,GB,,2026-08-04,,053315
+MICCT.AS,THE MAGNUM ICE CREAM COMPANY,NL,,2026-08-04,,NL508L
+RR.L,ROLLS ROYCE HLDG,GB,,2026-08-04,,074776
+VZN.SW,VZ HOLDING 'N',CH,,2026-08-04,,CH909B
+BNRGn.DE,BRENNTAG,DE,,2026-08-04,,EG063
+AKER.OL,AKER A,NO,,2026-08-04,,B02R4D
+IPN.PA,IPSEN,FR,,2026-08-04,,B0R7JF
+ZELA.CO,ZEALAND PHARMA,DK,,2026-08-04,,DK904A
+VACN.SW,VAT GROUP AG,CH,,2026-08-04,,CH6010
+MOBN.SW,MOBIMO HLDG,CH,,2026-08-04,,B0BV89
+LOIM.PA,KLEPIERRE,FR,,2026-08-04,,556582
+ANDR.VI,ANDRITZ,AT,,2026-08-04,,714131
+ALFA.ST,ALFA LAVAL,SE,,2026-08-04,,733268
+LLOY.L,LLOYDS BANKING GRP,GB,,2026-08-04,,087061
+ALEP.WA,ALLEGRO.EU,PL,,2026-08-04,,PL00OY
+PSN.L,PERSIMMON,GB,,2026-08-04,,068253
+INGP.WA,ING BANK SLASKI BSK,PL,,2026-08-04,,413234
+GIVN.SW,GIVAUDAN,CH,,2026-08-04,,598061
+LDOF.MI,LEONARDO,IT,,2026-08-04,,437915
+SGSN.SW,SGS,CH,,2026-08-04,,482476
+BRAV.ST,BRAVIDA HOLDING AB,SE,,2026-08-04,,SE50JU
+ATCOa.ST,ATLAS COPCO A,SE,,2026-08-04,,405097
+LATOb.ST,LATOUR INVESTMENT B,SE,,2026-08-04,,SE10IP
+SDR.L,SCHRODERS,GB,,2026-08-04,,077940
+SOIT.PA,SOITEC,FR,,2026-08-04,,FR90ET
+DNB.OL,DNB BANK,NO,,2026-08-04,,426330
+SABE.MC,BCO SABADELL,ES,,2026-08-04,,709538
+IGG.L,IG GRP HLDG,GB,,2026-08-04,,B06QFB
+PRY.MI,PRYSMIAN,IT,,2026-08-04,,B1W4V6
+ENGIE.PA,ENGIE,FR,,2026-08-04,,B0C2CQ
+COTNE.SW,COMET HOLDINGS 'R',CH,,2026-08-04,,CH105Z
+AMA.MC,AMADEUS IT GROUP,ES,,2026-08-04,,ES0017
+SWEDa.ST,SWEDBANK,SE,,2026-08-04,,484652
+AZMT.MI,AZIMUT HLDG,IT,,2026-08-04,,B019M6
+BZU.MI,BUZZI,IT,,2026-08-04,,491039
+GJFG.OL,GJENSIDIGE FORSIKRING,NO,,2026-08-04,,NO002D
+NESTE.HE,NESTE,FI,,2026-08-04,,XXXXX3
+EZJ.L,EASYJET,GB,,2026-08-04,,016419
+EVOG.ST,EVOLUTION,SE,,2026-08-04,,SE70AN
+ROCKb.CO,ROCKWOOL B,DK,,2026-08-04,,471349
+WDPP.BR,WDP,BE,,2026-08-04,,BE105V
+ARDS.AS,ARCADIS,NL,,2026-08-04,,576920
+FPE3_p.DE,FUCHS PREF,DE,,2026-08-04,,435435
+EDEN.PA,EDENRED,FR,,2026-08-04,,EF031
+CAGR.PA,CREDIT AGRICOLE,FR,,2026-08-04,,726261
+STDM.PA,SARTORIUS STEDIM BIOTECH,FR,,2026-08-04,,FR705I
+ENX.PA,EURONEXT,FR,,2026-08-04,,FR405F
+UNPI.MI,UNIPOL ASSICURAZIONI,IT,,2026-08-04,,505136
+INPST.AS,INPOST,NL,,2026-08-04,,NL103C
+GEBN.SW,GEBERIT,CH,,2026-08-04,,672626
+CCC.L,COMPUTACENTER,GB,,2026-08-04,,GB90AA
+BFT.WA,BENEFIT SYSTEMS,PL,,2026-08-04,,PL701I
+RS1R.L,RS Group,GB,,2026-08-04,,030964
+8TRA.DE,TRATON SE,DE,,2026-08-04,,DE90GG
+PHP.L,PRIMARY HEALTH PROPS.,GB,,2026-08-04,,GB90BB
+ICGIN.L,ICG,GB,,2026-08-04,,045644
+NG.L,NATIONAL GRID,GB,,2026-08-04,,024282
+KGF.L,KINGFISHER,GB,,2026-08-04,,098111
+EUFI.PA,EUROFINS SCIENTIFIC,FR,,2026-08-04,,FR103A
+HNRGn.DE,HANNOVER RUECK,DE,,2026-08-04,,451180
+SOF.BR,SOFINA,BE,,2026-08-04,,482030
+ARGX.BR,ARGENX,BE,,2026-08-04,,BE8041
+ABDN.L,ABERDEEN GROUP,GB,,2026-08-04,,B16KPT
+SGOB.PA,SAINT GOBAIN,FR,,2026-08-04,,476837
+RAAG.DE,RATIONAL,DE,,2026-08-04,,DE1080
+HLN.L,HALEON,GB,,2026-08-04,,GB20WP
+VLAN.AS,VAN LANSCHOT KEMPEN,NL,,2026-08-04,,670375
+HOLN.SW,Holcim,CH,,2026-08-04,,442048
+TE.PA,Technip Energies,FR,,2026-08-04,,FR106D
+FLS.CO,FLSMIDTH & COMPANY,DK,,2026-08-04,,526357
+IDR.MC,INDRA SISTEMAS,ES,,2026-08-04,,418560
+SGE.L,SAGE GRP,GB,,2026-08-04,,080216
+ABF.L,ASSOCIATED BRITISH FOODS,GB,,2026-08-04,,005610
+IMI.L,IMI,GB,,2026-08-04,,045796
+HILS.L,HILL & SMITH,GB,,2026-08-04,,GB701Z
+TKAG.DE,THYSSENKRUPP,DE,,2026-08-04,,489108
+SCHP.SW,SCHINDLER P,CH,,2026-08-04,,733750
+MAP.MC,MAPFRE,ES,,2026-08-04,,538755
+IFCN.SW,INFICON,CH,,2026-08-04,,CH9068
+SRENH.SW,SWISS REINSURANCE COMPANY,CH,,2026-08-04,,478165
+ZEG.L,ZEGONA COMMUNICATIONS,GB,,2026-08-04,,GB4195
+BARN.SW,BARRY CALLEBAUT,CH,,2026-08-04,,547692
+FOUG.PA,EIFFAGE,FR,,2026-08-04,,936469
+RHMG.DE,RHEINMETALL,DE,,2026-08-04,,533458
+IMCD.AS,IMCD,NL,,2026-08-04,,NL402E
+RBREW.CO,ROYAL UNIBREW,DK,,2026-08-04,,DK1020
+BAYGn.DE,BAYER,DE,,2026-08-04,,408530
+SAGAb.ST,SAGAX 'B',SE,,2026-08-04,,SE50KV
+PIRC.MI,PIRELLI & C. S.P.A.,IT,,2026-08-04,,IT708Q
+AAF.L,AIRTEL AFRICA PLC,GB,,2026-08-04,,GB90KK
+DHLn.DE,DEUTSCHE POST,DE,,2026-08-04,,461785
+FNTGn.DE,FREENET,DE,,2026-08-04,,582300
+ISP.MI,INTESA SANPAOLO,IT,,2026-08-04,,407683
+G1AG.DE,GEA GRP,DE,,2026-08-04,,458260
+GSK.L,GSK,GB,,2026-08-04,,037178
+CSG.AS,CSG A,NL,,2026-08-04,,NL608M
+PUMG.DE,PUMA,DE,,2026-08-04,,506472
+NWG.L,NATWEST GROUP,GB,,2026-08-04,,075478
+DANO.PA,DANONE,FR,,2026-08-04,,407023
+AYV.PA,Ayvens,FR,,2026-08-04,,FR703G
+ANA.MC,ACCIONA S.A.,ES,,2026-08-04,,423932
+YAR.OL,YARA,NO,,2026-08-04,,775125
+SFSN.SW,SFS GROUP,CH,,2026-08-04,,CH4030
+ISS.CO,ISS AS,DK,,2026-08-04,,DK4012
+BLND.L,BRITISH LAND COMPANY,GB,,2026-08-04,,013670
+TRYG.CO,TRYG,DK,,2026-08-04,,B0LL2W
+VSURE.ST,VERISURE,SE,,2026-08-04,,SE51O0
+ROR.L,ROTORK,GB,,2026-08-04,,075069
+LUNDb.ST,LUNDBERGFORETAGEN B,SE,,2026-08-04,,453800
+IFXGn.DE,INFINEON TECHNOLOGIES,DE,,2026-08-04,,588950
+AGES.BR,AGEAS,BE,,2026-08-04,,400169
+ENR1n.DE,SIEMENS ENERGY,DE,,2026-08-04,,DE004V
+GL9.I,GLANBIA,IE,,2026-08-04,,IE102Z
+VOPA.AS,VOPAK,NL,,2026-08-04,,465975
+GLEN.L,GLENCORE PLC,GB,,2026-08-04,,GB10B3
+TECN.SW,TECAN,CH,,2026-08-04,,569620
+LEGn.DE,LEG IMMOBILIEN,DE,,2026-08-04,,DE301V
+AV.L,AVIVA,GB,,2026-08-04,,021623
+ABI.BR,ANHEUSER-BUSCH INBEV,BE,,2026-08-04,,475531
+ITX.MC,Industria de Diseno Textil SA,ES,,2026-08-04,,711131
+SBRY.L,SAINSBURY (J),GB,,2026-08-04,,076764
+HUH1V.HE,HUHTAMAKI,FI,,2026-08-04,,444747
+CLNX.MC,CELLNEX TELECOM,ES,,2026-08-04,,ES502D
+CARLb.CO,CARLSBERG B,DK,,2026-08-04,,416921
+STAN.L,STANDARD CHARTERED,GB,,2026-08-04,,083860
+PST.MI,POSTE ITALIANE,IT,,2026-08-04,,IT602J
+ACPP.WA,ASSECO POLAND,PL,,2026-08-04,,597895
+SPMI.MI,SAIPEM,IT,,2026-08-04,,476876
+SIKA.SW,SIKA,CH,,2026-08-04,,480808
+CPRI.MI,DAVIDE CAMPARI,IT,,2026-08-04,,715672
+ADDTb.ST,ADDTECH B,SE,,2026-08-04,,SE10CJ
+BOL.ST,BOLIDEN,SE,,2026-08-04,,726619
+BMED.MI,BANCA MEDIOLANUM,IT,,2026-08-04,,506088
+VWS.CO,VESTAS WIND SYSTEMS,DK,,2026-08-04,,544489
+KOG.OL,KONGSBERG GRUPPEN,NO,,2026-08-04,,520824
+REP.MC,REPSOL,ES,,2026-08-04,,473322
+ORAN.PA,ORANGE,FR,,2026-08-04,,517617
+URW.PA,UNIBAIL-RODAMCO-WESTFIELD,FR,,2026-08-04,,491134
+SHLG.DE,SIEMENS HEALTHINEERS,DE,,2026-08-04,,DE8087
+CRDA.L,CRODA INTERNATIONAL,GB,,2026-08-04,,900476
+KYGa.I,KERRY GRP,IE,,2026-08-04,,049065
+IHG.L,INTERCONTINENTAL HOTELS GRP,GB,,2026-08-04,,008320
+PLUSP.L,PLUS500,GB,,2026-08-04,,GB21IC
+LOTB.BR,LOTUS BAKERIES,BE,,2026-08-04,,BE601W
+EBP.WA,ERSTE BANK POLSKA,PL,,2026-08-04,,715363
+KLR.L,KELLER,GB,,2026-08-04,,GB1ELR
+MBK.WA,MBANK,PL,,2026-08-04,,414305
+SUBC.OL,SUBSEA7,NO,,2026-08-04,,525824
+VOD.L,VODAFONE GRP,GB,,2026-08-04,,071921
+DEMANT.CO,DEMANT,DK,,2026-08-04,,521711
+FMEG.DE,FRESENIUS MEDICAL CARE,DE,,2026-08-04,,512907
+CDR.WA,CD PROJECT SA,PL,,2026-08-04,,PL106H
+WRT1V.HE,WARTSILA,FI,,2026-08-04,,452518
+BEAN.SW,BELIMO HOLDING,CH,,2026-08-04,,CH6032
+AENA.MC,AENA SME,ES,,2026-08-04,,ES504F
+SMIN.L,SMITHS GRP,GB,,2026-08-04,,081827
+SAF.PA,SAFRAN,FR,,2026-08-04,,476776
+ORNBV.HE,ORION B,FI,,2026-08-04,,462220
+TEF.MC,TELEFONICA,ES,,2026-08-04,,488082
+HRMS.PA,HERMES INTERNATIONAL,FR,,2026-08-04,,441842
+EVDG.DE,CTS EVENTIM,DE,,2026-08-04,,DE104W
+AKZO.AS,AKZO NOBEL,NL,,2026-08-04,,401190
+PKO.WA,PKO BANK,PL,,2026-08-04,,B03NGS
+BKGH.L,BERKELEY GRP HLDG,GB,,2026-08-04,,009417
+DTEGn.DE,DEUTSCHE TELEKOM,DE,,2026-08-04,,511938
+QIA.DE,QIAGEN,DE,,2026-08-04,,573282
+NIBEb.ST,NIBE INDUSTRIER B,SE,,2026-08-04,,SE103A
+AG1G.DE,AUTO1 GROUP,DE,,2026-08-04,,DE10IA
+SLHN.SW,SWISS LIFE HLDG,CH,,2026-08-04,,528586
+PRTP.PA,Kering,FR,,2026-08-04,,470384
+INDUc.ST,INDUSTRIVARDEN C,SE,,2026-08-04,,546346
+ZALG.DE,ZALANDO,DE,,2026-08-04,,DE4061
+SCOR.PA,SCOR,FR,,2026-08-04,,479736
+KPN.AS,KPN,NL,,2026-08-04,,453456
+NDAFI.HE,NORDEA BANK,FI,,2026-08-04,,478184
+JYSK.CO,JYSKE BANK,DK,,2026-08-04,,447996
+RACE.MI,FERRARI,IT,,2026-08-04,,IT509P
+QQ.L,QINETIQ GRP,GB,,2026-08-04,,B0WMWD
+FRAG.DE,FRAPORT,DE,,2026-08-04,,710755
+SDLF.L,STANDARD LIFE,GB,,2026-08-04,,GB30E8
+BC8G.DE,BECHTLE,DE,,2026-08-04,,DE7086
+MKS.L,MARKS & SPENCER GRP,GB,,2026-08-04,,056540
+ASML.AS,ASML HLDG,NL,,2026-08-04,,546078
+BEIG.DE,BEIERSDORF,DE,,2026-08-04,,408930
+SFZN.SW,SIEGFRIED 'R',CH,,2026-08-04,,CH8078
+SGRO.L,SEGRO,GB,,2026-08-04,,081410
+CNA.L,CENTRICA,GB,,2026-08-04,,018390
+NHY.OL,NORSK HYDRO,NO,,2026-08-04,,464580
+ASMDEEb.ST,ASMODEE GROUP B,SE,,2026-08-04,,SE50V6
+PZU.WA,PZU GROUP,PL,,2026-08-04,,PL001B
+TEMN.SW,TEMENOS,CH,,2026-08-04,,714789
+SIGNC.SW,SIG GROUP AG,CH,,2026-08-04,,CH809A
+LTMC.MI,LOTTOMATICA GROUP,IT,,2026-08-04,,IT358R
+BMPS.MI,BANCA MONTE DEI PASCHI,IT,,2026-08-04,,569954
+BMWG.DE,BMW,DE,,2026-08-04,,408522
+ELISA.HE,ELISA CORPORATION,FI,,2026-08-04,,570151
+SCAb.ST,SVENSKA CELLULOSA AKTIE. SCA B,SE,,2026-08-04,,486537
+AVOL.SW,AVOLTA,CH,,2026-08-04,,B0R80X
+SECTb.ST,SECTRA 'B',SE,,2026-08-04,,SE80CQ
+ACX.MC,ACERINOX,ES,,2026-08-04,,400523
+NEXS.PA,NEXANS,FR,,2026-08-04,,713083
+VOES.VI,VOESTALPINE,AT,,2026-08-04,,494340
+NSISb.CO,NOVONESIS,DK,,2026-08-04,,465853
+ASMI.AS,ASM INTERNATIONAL,NL,,2026-08-04,,888051
+BKWB.SW,BKW,CH,,2026-08-04,,739160
+AIR.PA,AIRBUS,FR,,2026-08-04,,401225
+EXOR.AS,EXOR NV,NL,,2026-08-04,,445573
+SIEGn.DE,SIEMENS,DE,,2026-08-04,,480710
+BAB.L,BABCOCK INTERNATIONAL,GB,,2026-08-04,,096970
+LOOMIS.ST,LOOMIS,SE,,2026-08-04,,ES032
+ESSITYb.ST,Essity B,SE,,2026-08-04,,SE707K
+SOBIV.ST,SWEDISH ORPHAN BIOVITRUM,SE,,2026-08-04,,SE1018
+AKE.PA,ARKEMA,FR,,2026-08-04,,B0Z5YZ
+NESN.SW,NESTLE,CH,,2026-08-04,,461669
+NKT.CO,NKT,DK,,2026-08-04,,464246
+DANSKE.CO,DANSKE BANK,DK,,2026-08-04,,426292
+ALRR.WA,ALIOR BANK,PL,,2026-08-04,,PL303G
+MTO.L,MITIE GROUP,GB,,2026-08-04,,042364
+GALP.LS,GALP ENERGIA,PT,,2026-08-04,,B1FW75
+ABBN.SW,ABB,CH,,2026-08-04,,408580
+DPLM.L,DIPLOMA,GB,,2026-08-04,,GB7020
+DKSH.SW,DKSH HOLDING,CH,,2026-08-04,,CH201W
+EPIRa.ST,EPIROC A,SE,,2026-08-04,,SE80GU
+CTEC.L,CONVATEC PLC,GB,,2026-08-04,,GB60RO
+SAN.MC,BCO SANTANDER,ES,,2026-08-04,,407228
+LMPL.L,LONDONMETRIC PROPERTY PLC,GB,,2026-08-04,,GB2092
+VEND.OL,VEND MARKETPLACES,NO,,2026-08-04,,NO503J
+VERB.VI,VERBUND,AT,,2026-08-04,,466160
+VONN.SW,VONTOBEL,CH,,2026-08-04,,492109
+UHR.SW,SWATCH BEARER,CH,,2026-08-04,,476240
+SSE.L,SCOTTISH & SOUTHERN ENERGY,GB,,2026-08-04,,079087
+LHAG.DE,LUFTHANSA,DE,,2026-08-04,,453770
+ELI.BR,ELIA GROUP,BE,,2026-08-04,,B09M9F
+TUI1n.DE,TUI,DE,,2026-08-04,,DE40C7
+CWK.L,CRANSWICK,GB,,2026-08-04,,GB60B8
+ERICb.ST,ERICSSON LM B,SE,,2026-08-04,,430384
+GAW.L,GAMES WORKSHOP,GB,,2026-08-04,,GB9044
+DRX.L,DRAX GRP,GB,,2026-08-04,,B0MBCM
+NOVOb.CO,NOVO NORDISK B,DK,,2026-08-04,,465191
+WISEa.L,WISE GROUP A,GB,,2026-08-04,,GB1EW2
+GTT.PA,GAZTRANSPORT ET TECHNIGAZ,FR,,2026-08-04,,FR402C
+AM.PA,DASSAULT AVIATION,FR,,2026-08-04,,FR506H
+JMAT.L,JOHNSON MATTHEY,GB,,2026-08-04,,047640
+PKN.WA,ORLEN,PL,,2026-08-04,,581006
+ERST.VI,ERSTE GROUP BANK,AT,,2026-08-04,,528983
+BP.L,BP,GB,,2026-08-04,,013849
+BNZL.L,BUNZL,GB,,2026-08-04,,015400
+ALLFG.AS,ALLFUNDS GROUP,NL,,2026-08-04,,NL106F
+GALE.SW,GALENICA SANTE AG,CH,,2026-08-04,,CH7011
+IETB.BR,D'IETEREN GROUP,BE,,2026-08-04,,424749
+WPP.L,WPP,GB,,2026-08-04,,097404
+LGEN.L,LEGAL & GENERAL GRP,GB,,2026-08-04,,051152
+SATG_p.DE,SARTORIUS PREF.,DE,,2026-08-04,,DE5084
+BCVN.SW,BANQUE CANTONALE VAUDOISE,CH,,2026-08-04,,432684
+MANTA.HE,Mandatum,FI,,2026-08-04,,FI31QR
+ALCC.SW,ALCON,CH,,2026-08-04,,CH90EG
+RENA.PA,RENAULT,FR,,2026-08-04,,471279
+EONGn.DE,E.ON,DE,,2026-08-04,,492752
+HAGG.DE,HENSOLDT,DE,,2026-08-04,,DE006X
+ENT.L,ENTAIN,GB,,2026-08-04,,GB60DA
+GETP.PA,Getlink,FR,,2026-08-04,,EF024
+SPSN.SW,SWISS PRIME SITE,CH,,2026-08-04,,594176
+TW.L,TAYLOR WIMPEY,GB,,2026-08-04,,087823
+SHBa.ST,SVENSKA HANDELSBANKEN A,SE,,2026-08-04,,486863
+P911_p.DE,DR ING HC F PORSCHE PREF.,DE,,2026-08-04,,DE20C5
+PHG.AS,PHILIPS,NL,,2026-08-04,,468520
+SHCS.L,SHAFTESBURY CAPITAL,GB,,2026-08-04,,EB382
+DSFIR.AS,DSM FIRMENICH AG,NL,,2026-08-04,,424910
+HWDN.L,HOWDEN JOINERY GRP,GB,,2026-08-04,,055768
+AALB.AS,AALBERTS,NL,,2026-08-04,,513962
+BANB.SW,BACHEM HOLDING,CH,,2026-08-04,,CH002V
+REY.MI,REPLY,IT,,2026-08-04,,IT703L
+AXAF.PA,AXA,FR,,2026-08-04,,458887
+CCH.L,COCA-COLA HBC,GB,,2026-08-04,,442072
+GBFG.DE,BILFINGER,DE,,2026-08-04,,409830
+KBCA.BR,KBC ANCORA,BE,,2026-08-04,,B1YWXY
+KSP.I,KINGSPAN GRP,IE,,2026-08-04,,449123
+ENEI.MI,ENEL,IT,,2026-08-04,,579802
+RKT.L,RECKITT BENCKISER GRP,GB,,2026-08-04,,072769
+SAMPO.HE,SAMPO,FI,,2026-08-04,,477319
+ADML.L,ADMIRAL GRP,GB,,2026-08-04,,926294
+BAMN.AS,BAM GROEP KON.,NL,,2026-08-04,,486097
+BASFn.DE,BASF,DE,,2026-08-04,,408348
+UMG.AS,UMG,NL,,2026-08-04,,NL123E
+BRBY.L,BURBERRY,GB,,2026-08-04,,317430
+STLAM.MI,STELLANTIS,IT,,2026-08-04,,433560
+LSEG.L,LONDON STOCK EXCHANGE,GB,,2026-08-04,,095298
+LIFCOb.ST,LIFCO B,SE,,2026-08-04,,SE40AK
+BKT.MC,BANKINTER,ES,,2026-08-04,,407141
+ADEN.SW,ADECCO,CH,,2026-08-04,,400702
+SEBa.ST,SKANDINAVISKA ENSKILDA BK A,SE,,2026-08-04,,481334
+DCC.L,DCC ENERGY,GB,,2026-08-04,,024249
+CBKG.DE,COMMERZBANK,DE,,2026-08-04,,421342
+AKRBP.OL,AKER BP,NO,,2026-08-04,,NO10Q2
+MRON.L,MELROSE INDUSTRIES,GB,,2026-08-04,,GB10C4
+IBE.MC,IBERDROLA,ES,,2026-08-04,,442464
+ITV.L,ITV,GB,,2026-08-04,,038112
+MICP.PA,MICHELIN,FR,,2026-08-04,,458836
+DLN.L,DERWENT LONDON,GB,,2026-08-04,,026527
+WTB.L,WHITBREAD,GB,,2026-08-04,,096050
+ASSAb.ST,ASSA ABLOY,SE,,2026-08-04,,400930
+ULVR.L,UNILEVER PLC,GB,,2026-08-04,,091321
+COLOb.CO,COLOPLAST B,DK,,2026-08-04,,420958
+SPX.L,SPIRAX,GB,,2026-08-04,,083470
+IG.MI,ITALGAS,IT,,2026-08-04,,IT607O

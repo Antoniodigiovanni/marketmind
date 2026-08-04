@@ -86,10 +86,16 @@ write through MCP, and free-text views are structured automatically.
 - [ ] Delisted tickers logged in `data/universe/delisted.csv` and included in
       historical price fetches (survivorship compensation)
 - [x] Test: point-in-time filtering with known add/remove dates
-- [ ] Automated daily refresh — `data/universe/update.py` pulls S&P 500 (live
-      Wikipedia) and STOXX Europe 600 (pinned baseline revision; the live page
-      was trimmed in July 2026), diffs against the CSVs, applies append-only
-      changes, and refuses removals if a source drops >5% of members
+- [x] Automated refresh — `data/universe/update.py` pulls the official STOXX
+      Europe 600 selection list (stoxx.com, keyless CSV, 600 members via
+      rank <= 600) and S&P 500 holdings from iShares CSPX via the BlackRock
+      fund-document API; applies append-only changes and refuses removals if a
+      source drops >5% of members
+- [ ] ISIN enrichment — every member mapped to its ISIN (OpenFIGI / official
+      files), stored in the universe CSVs as the canonical identifier
+- [ ] `symbol_map` table + resolution job — ISIN -> provider symbol resolved via
+      Yahoo search (`v1/finance/search` accepts ISINs and CUSIPs), validated
+      against the chart API, with a review queue for unresolved symbols
 - [ ] Daily cron runs the refresh before the price fetch so new members enter
       scope the same day
 
