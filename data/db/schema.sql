@@ -96,3 +96,21 @@ CREATE TABLE IF NOT EXISTS market_view_structures (
     extracted_by    VARCHAR     NOT NULL,  -- extraction model
     extracted_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+
+-- ── Symbol map ───────────────────────────────────────────────────────────────
+-- Persistent provider-symbol resolution keyed by stable security identifiers
+-- (ISIN / CUSIP / ticker). Built by data/universe/resolve.py and re-resolved
+-- periodically so symbol changes are absorbed without code changes.
+
+CREATE TABLE IF NOT EXISTS symbol_map (
+    id_type          VARCHAR     NOT NULL,  -- 'ISIN' | 'CUSIP' | 'TICKER'
+    id_value         VARCHAR     NOT NULL,  -- e.g. 'US0378331005', 'AAPL'
+    provider         VARCHAR     NOT NULL DEFAULT 'yahoo',
+    symbol           VARCHAR     NOT NULL,  -- resolved provider symbol
+    name             VARCHAR,               -- resolved display name, if known
+    resolved_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_validated_at TIMESTAMPTZ,
+    status           VARCHAR     NOT NULL DEFAULT 'valid',  -- 'valid'|'review'|'unresolved'
+    PRIMARY KEY (id_type, id_value, provider)
+);

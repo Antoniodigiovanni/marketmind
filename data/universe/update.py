@@ -73,6 +73,9 @@ def _apply_universe(
         }
         if "internal_key" in additions[0]:
             base["internal_key"] = [a.get("internal_key") for a in additions]
+        for column in ("isin", "cusip"):
+            if column in additions[0]:
+                base[column] = [a.get(column) for a in additions]
         new_rows = pl.DataFrame(base)
         existing = pl.concat([existing, new_rows], how="diagonal_relaxed")
 
@@ -187,6 +190,8 @@ def update_universe(
                 "sector": row["sector"],
                 "added_date": row.get("added_date") or as_of_date.isoformat(),
                 "internal_key": row.get("internal_key"),
+                "isin": row.get("isin"),
+                "cusip": row.get("cusip"),
             }
             for row in added_rows.to_dicts()
         ]

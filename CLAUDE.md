@@ -24,6 +24,7 @@ uv run ruff check . && uv run ruff format .                  # lint + format
 uv run python -m data.db.init                                # create/verify research.duckdb
 uv run python data/fetch.py                                  # daily price + macro refresh
 uv run python -m data.universe.update                        # refresh S&P 500 / STOXX 600 lists
+uv run python -m data.universe.resolve                      # resolve symbols into symbol_map (DB)
 uv run python -m agent.ingestion {YYYY-MM-DD}               # daily news + fact ingest
 uv run python -m agent.views {YYYY-MM-DD}                   # structure free-text market views
 uv run python -m server.mcp                                  # run the MCP server (stdio)
@@ -91,6 +92,7 @@ marketmind/
 | STOXX selection list | `requests` | Official STOXX 600 membership + internal keys (keyless CSV) |
 | BlackRock fund API | `requests` | iShares CSPX S&P 500 holdings (keyless) |
 | OpenFIGI | `requests` | Free ISIN/CUSIP mapping for universe enrichment |
+| Yahoo search API | `requests` | ISIN/CUSIP/ticker → symbol resolution (keyless) |
 
 NewsAPI, OpenBB, and arXiv/SSRN are **optional supplements only** — never the
 backbone. NewsAPI's free tier (100 req/day, 24h delay) is too constrained to
@@ -116,6 +118,7 @@ Structured queryable data lives in **DuckDB** (`data/db/research.duckdb`):
 | `agent_runs` | Audit log for every job execution |
 | `market_views` | Free-text market snapshots written by the harness |
 | `market_view_structures` | Structured JSON derived from free-text views |
+| `symbol_map` | Stable-ID → provider symbol resolution (ISIN/CUSIP/ticker) |
 
 The schema is defined in `data/db/schema.sql` and is the single source of truth.
 Never modify the database schema outside of that file.

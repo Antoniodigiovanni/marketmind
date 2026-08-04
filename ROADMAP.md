@@ -91,11 +91,13 @@ write through MCP, and free-text views are structured automatically.
       rank <= 600) and S&P 500 holdings from iShares CSPX via the BlackRock
       fund-document API; applies append-only changes and refuses removals if a
       source drops >5% of members
-- [ ] ISIN enrichment — every member mapped to its ISIN (OpenFIGI / official
-      files), stored in the universe CSVs as the canonical identifier
-- [ ] `symbol_map` table + resolution job — ISIN -> provider symbol resolved via
-      Yahoo search (`v1/finance/search` accepts ISINs and CUSIPs), validated
-      against the chart API, with a review queue for unresolved symbols
+- [x] `symbol_map` table + resolution job — members resolved by ISIN, then CUSIP,
+      then ticker via Yahoo search (`v1/finance/search` accepts ISINs and
+      CUSIPs — verified), validated against the chart API, with a review queue
+      for unresolved symbols (`uv run python -m data.universe.resolve`)
+- [ ] ISIN/CUSIP enrichment — SEC EDGAR N-PORT holdings for US CUSIPs
+      (quarterly, official) and the iShares STOXX 600 UCITS fund document for EU
+      ISINs; OpenFIGI does not return ISINs, so it is not used for enrichment
 - [ ] Daily cron runs the refresh before the price fetch so new members enter
       scope the same day
 

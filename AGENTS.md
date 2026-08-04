@@ -91,6 +91,7 @@ marketmind/
 | STOXX selection list | `requests` | Official STOXX 600 membership + internal keys (keyless CSV) |
 | BlackRock fund API | `requests` | iShares CSPX S&P 500 holdings (keyless) |
 | OpenFIGI | `requests` | Free ISIN/CUSIP mapping for universe enrichment |
+| Yahoo search API | `requests` | ISIN/CUSIP/ticker → symbol resolution (keyless) |
 
 NewsAPI, OpenBB, and arXiv/SSRN are **optional supplements only** — never the
 backbone. NewsAPI's free tier (100 req/day, 24h delay) is too constrained to
