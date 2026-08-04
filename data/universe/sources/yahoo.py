@@ -3,12 +3,37 @@
 from __future__ import annotations
 
 import requests
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from data.universe.sources.http import get_with_ca_fallback
 
 SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 USER_AGENT = "marketmind/0.1 (universe maintenance; free data only)"
+
+RETRYABLE = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    requests.exceptions.SSLError,
+)
+
+
+@retry(
+    retry=retry_if_exception_type(RETRYABLE),
+    wait=wait_exponential(multiplier=0.5, max=5),
+    stop=stop_after_attempt(3),
+    reraise=True,
+)
+def _get(
+    url: str,
+    *,
+    session: requests.Session | None,
+    params: dict[str, str],
+) -> requests.Response:
+    """GET a Yahoo endpoint with retries on transient network errors."""
+    return get_with_ca_fallback(
+        url, session=session, params=params, timeout=20, headers={"User-Agent": USER_AGENT}
+    )
 
 
 def search_by_id(
@@ -28,13 +53,7 @@ def search_by_id(
     Raises:
         requests.RequestException: On non-2xx response.
     """
-    resp = get_with_ca_fallback(
-        SEARCH_URL,
-        session=session,
-        params={"q": id_value},
-        timeout=20,
-        headers={"User-Agent": USER_AGENT},
-    )
+    resp = _get(SEARCH_URL, session=session, params={"q": id_value})
     resp.raise_for_status()
     quotes = resp.json().get("quotes") or []
     quote = next((q for q in quotes if q.get("quoteType") == "EQUITY"), None)
@@ -58,12 +77,10 @@ def symbol_has_data(symbol: str, *, session: requests.Session | None = None) -> 
     Returns:
         True when the chart endpoint returns timestamps, False otherwise.
     """
-    resp = get_with_ca_fallback(
+    resp = _get(
         CHART_URL.format(symbol=symbol),
         session=session,
         params={"range": "5d", "interval": "1d"},
-        timeout=20,
-        headers={"User-Agent": USER_AGENT},
     )
     if resp.status_code != 200:
         return False

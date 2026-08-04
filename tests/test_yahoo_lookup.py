@@ -57,3 +57,34 @@ def test_symbol_has_data_true_when_chart_returns_bars() -> None:
 def test_symbol_has_data_false_when_chart_empty() -> None:
     assert symbol_has_data("NOPE", session=_fake_session({"chart": {"result": []}})) is False
     assert symbol_has_data("NOPE", session=_fake_session({}, status=404)) is False
+
+
+def test_search_retries_transient_connection_errors() -> None:
+    payload = {"quotes": [{"symbol": "AAPL", "quoteType": "EQUITY", "shortname": "Apple Inc."}]}
+    calls = {"count": 0}
+
+    class FlakySession:
+        def get(self, url: str, **kwargs: object) -> object:
+            calls["count"] += 1
+            if calls["count"] < 3:
+                raise requests.exceptions.ConnectionError("flaky")
+            return _fake_session(payload).get(url, **kwargs)
+
+    result = search_by_id("US0378331005", session=FlakySession())
+    assert result == {"symbol": "AAPL", "name": "Apple Inc."}
+    assert calls["count"] == 3
+
+
+def test_chart_retries_transient_connection_errors() -> None:
+    payload = {"chart": {"result": [{"timestamp": [1, 2, 3]}]}}
+    calls = {"count": 0}
+
+    class FlakySession:
+        def get(self, url: str, **kwargs: object) -> object:
+            calls["count"] += 1
+            if calls["count"] < 3:
+                raise requests.exceptions.ConnectionError("flaky")
+            return _fake_session(payload).get(url, **kwargs)
+
+    assert symbol_has_data("AAPL", session=FlakySession()) is True
+    assert calls["count"] == 3
