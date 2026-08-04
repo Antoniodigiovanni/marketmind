@@ -70,6 +70,8 @@ def resolve_universe(
     for row in _members(universe_dir).to_dicts():
         id_type, id_value = _id_for(row)
         found = search(id_value)
+        if not found and row.get("name"):
+            found = search(str(row["name"]), name_hint=str(row["name"]))
         if not found:
             status = "unresolved"
             symbol = str(row["ticker"])

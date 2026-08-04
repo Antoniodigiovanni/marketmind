@@ -40,6 +40,24 @@ def test_search_by_id_prefers_equity_quote() -> None:
     assert result == {"symbol": "AAPL", "name": "Apple Inc."}
 
 
+def test_search_by_id_name_hint_filters_mismatches() -> None:
+    payload = {
+        "quotes": [
+            {"symbol": "WMT", "quoteType": "EQUITY", "shortname": "Walmart Inc."},
+            {"symbol": "AI.PA", "quoteType": "EQUITY", "shortname": "Air Liquide SA"},
+        ]
+    }
+    result = search_by_id("Air Liquide", session=_fake_session(payload), name_hint="AIR LIQUIDE")
+    assert result == {"symbol": "AI.PA", "name": "Air Liquide SA"}
+
+
+def test_search_by_id_name_hint_no_match_returns_none() -> None:
+    payload = {"quotes": [{"symbol": "WMT", "quoteType": "EQUITY", "shortname": "Walmart Inc."}]}
+    assert (
+        search_by_id("Air Liquide", session=_fake_session(payload), name_hint="AIR LIQUIDE") is None
+    )
+
+
 def test_search_by_id_returns_none_without_quotes() -> None:
     assert search_by_id("DE0000000000", session=_fake_session({"quotes": []})) is None
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -16,6 +18,11 @@ RETRYABLE = (
     requests.exceptions.Timeout,
     requests.exceptions.SSLError,
 )
+
+
+def _tokens(text: str) -> set[str]:
+    """Lowercased significant tokens for name matching."""
+    return {t for t in re.findall(r"[a-z0-9&]+", text.lower()) if len(t) > 2}
 
 
 @retry(
@@ -37,7 +44,10 @@ def _get(
 
 
 def search_by_id(
-    id_value: str, *, session: requests.Session | None = None
+    id_value: str,
+    *,
+    session: requests.Session | None = None,
+    name_hint: str | None = None,
 ) -> dict[str, str] | None:
     """Resolve a security identifier (ISIN, CUSIP, or ticker) to a Yahoo symbol.
 
@@ -45,6 +55,8 @@ def search_by_id(
         id_value: ISIN (e.g. 'US0378331005'), CUSIP (e.g. '037833100'), or a
             ticker as fallback.
         session: Optional requests.Session for connection reuse.
+        name_hint: When provided, only quotes whose name shares a token with
+            this hint are considered, to avoid wrong-company matches.
 
     Returns:
         {'symbol': ..., 'name': ...} for the best equity match, or None when
@@ -56,6 +68,13 @@ def search_by_id(
     resp = _get(SEARCH_URL, session=session, params={"q": id_value})
     resp.raise_for_status()
     quotes = resp.json().get("quotes") or []
+    if name_hint:
+        hint_tokens = _tokens(name_hint)
+        quotes = [
+            q
+            for q in quotes
+            if hint_tokens & _tokens(q.get("shortname") or q.get("longname") or "")
+        ]
     quote = next((q for q in quotes if q.get("quoteType") == "EQUITY"), None)
     if quote is None and quotes:
         quote = quotes[0]

@@ -39,7 +39,7 @@ def _write_universe(tmp_path) -> None:
 
 
 def _fake_lookup(by_id: dict[str, dict[str, str] | None]) -> None:
-    def searcher(id_value: str) -> dict[str, str] | None:
+    def searcher(id_value: str, **kwargs: object) -> dict[str, str] | None:
         return by_id.get(id_value)
 
     resolve.search_by_id = searcher
@@ -65,6 +65,32 @@ def test_resolution_populates_symbol_map(tmp_path) -> None:
         assert ("CUSIP", "037833100", "AAPL", "valid") in rows
         assert ("ISIN", "US0846707026", "BRK-B", "valid") in rows
         assert ("TICKER", "ASML.AS", "ASML.AS", "valid") in rows
+    finally:
+        conn.close()
+
+
+def test_name_fallback_resolves_when_ticker_search_fails(tmp_path) -> None:
+    _write_universe(tmp_path)
+    calls: list[str] = []
+
+    def searcher(id_value: str, **kwargs: object) -> dict[str, str] | None:
+        calls.append(id_value)
+        if id_value == "No Such Co":
+            return {"symbol": "REAL", "name": "Real Company"}
+        return None
+
+    resolve.search_by_id = searcher
+    resolve.symbol_has_data = lambda symbol: True  # noqa: E731
+
+    conn = init_db(":memory:")
+    try:
+        stats = resolve.resolve_universe(conn, universe_dir=tmp_path)
+        assert stats["valid"] == 1  # NOPE resolved via name fallback
+        assert calls.count("No Such Co") == 1
+        row = conn.execute(
+            "SELECT symbol, status FROM symbol_map WHERE id_value = 'NOPE'"
+        ).fetchone()
+        assert row == ("REAL", "valid")
     finally:
         conn.close()
 
