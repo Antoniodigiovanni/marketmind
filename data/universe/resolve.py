@@ -10,6 +10,7 @@ import polars as pl
 
 from data.db.init import DEFAULT_DB_PATH, init_db
 from data.universe.loader import UNIVERSE_DIR
+from data.universe.sources.ric import ric_variants
 from data.universe.sources.yahoo import search_by_id, symbol_has_data
 
 UNIVERSE_FILES = ("sp500.csv", "eurostoxx600.csv")
@@ -69,7 +70,13 @@ def resolve_universe(
 
     for row in _members(universe_dir).to_dicts():
         id_type, id_value = _id_for(row)
-        found = search(id_value)
+        candidates = ric_variants(id_value) if id_type == "TICKER" else [id_value]
+        found = None
+        for candidate in candidates:
+            hit = search(candidate)
+            if hit:
+                found = hit
+                break
         if not found and row.get("name"):
             found = search(str(row["name"]), name_hint=str(row["name"]))
         if not found:

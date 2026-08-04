@@ -9,7 +9,7 @@ import pytest
 import requests
 
 from data.universe.sources.http import SYSTEM_CA_BUNDLE, get_with_ca_fallback
-from data.universe.sources.ric import ric_to_yahoo
+from data.universe.sources.ric import ric_to_yahoo, ric_variants
 from data.universe.sources.sp500 import parse_cspx_holdings
 from data.universe.sources.stoxx import parse_selection_list
 
@@ -66,6 +66,26 @@ def test_ric_to_yahoo_known_mismatches() -> None:
     assert ric_to_yahoo("TCFP.PA") == "HO.PA"
     assert ric_to_yahoo("SAPG.DE") == "SAP.DE"
     assert ric_to_yahoo("CONG.DE") == "CON.DE"
+
+
+def test_ric_variants_share_class_hyphenation() -> None:
+    assert ric_variants("ERICb.ST") == ["ERICb.ST", "ERIC-B.ST"]
+    assert ric_variants("SEBa.ST") == ["SEBa.ST", "SEB-A.ST"]
+    assert ric_variants("INDUc.ST") == ["INDUc.ST", "INDU-C.ST"]
+
+
+def test_ric_variants_preference_and_irish_suffix() -> None:
+    assert ric_variants("FPE3_p.DE") == ["FPE3_p.DE", "FPE3.DE"]
+    assert ric_variants("KSP.I") == ["KSP.I", "KSP.IR"]
+
+
+def test_ric_variants_no_extra_candidates_for_clean_symbols() -> None:
+    assert ric_variants("ASML.AS") == ["ASML.AS"]
+    assert ric_variants("NOVN.S") == ["NOVN.SW"]
+
+
+def test_ric_variants_override_takes_precedence() -> None:
+    assert ric_variants("MCF.PA") == ["MC.PA"]
 
 
 def test_us_class_shares_are_normalised() -> None:

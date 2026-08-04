@@ -95,6 +95,49 @@ def test_name_fallback_resolves_when_ticker_search_fails(tmp_path) -> None:
         conn.close()
 
 
+def test_candidate_variants_resolve_share_class(tmp_path) -> None:
+    _write_universe(tmp_path)
+    calls: list[str] = []
+
+    def searcher(id_value: str, **kwargs: object) -> dict[str, str] | None:
+        calls.append(id_value)
+        if id_value == "ERIC-B.ST":
+            return {"symbol": "ERIC-B.ST", "name": "Ericsson B"}
+        return None
+
+    resolve.search_by_id = searcher
+    resolve.symbol_has_data = lambda symbol: True  # noqa: E731
+
+    # A STOXX-style member whose RIC needs share-class hyphenation.
+    import polars as pl
+
+    st = pl.DataFrame(
+        {
+            "ticker": ["ERICb.ST"],
+            "name": ["ERICSSON LM B"],
+            "country": ["SE"],
+            "sector": ["Technology"],
+            "added_date": ["2026-08-04"],
+            "removed_date": [None],
+            "internal_key": ["KEYX"],
+            "isin": [None],
+            "cusip": [None],
+        }
+    )
+    st.write_csv(tmp_path / "eurostoxx600.csv")
+    (tmp_path / "sp500.csv").unlink(missing_ok=True)
+
+    conn = init_db(":memory:")
+    try:
+        resolve.resolve_universe(conn, universe_dir=tmp_path)
+        assert calls[0] == "ERICb.ST"
+        assert calls[1] == "ERIC-B.ST"
+        row = conn.execute("SELECT symbol, status FROM symbol_map").fetchone()
+        assert row == ("ERIC-B.ST", "valid")
+    finally:
+        conn.close()
+
+
 def test_chart_failure_marks_review(tmp_path) -> None:
     _write_universe(tmp_path)
     _fake_lookup({"037833100": {"symbol": "AAPL", "name": "Apple Inc."}})

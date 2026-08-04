@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 # Reuters uses '.S' for Swiss listings; Yahoo uses '.SW'.
 SWISS_SUFFIX = (".S", ".SW")
 
@@ -35,3 +37,39 @@ def ric_to_yahoo(ric: str) -> str:
     if ric.endswith(".S") and not ric.endswith(".AS"):
         return ric[:-2] + SWISS_SUFFIX[1]
     return ric
+
+
+def ric_variants(ric: str) -> list[str]:
+    """Generate candidate Yahoo symbols for a RIC, most likely first.
+
+    Covers share-class hyphenation (ERICb.ST -> ERIC-B.ST), preference-share
+    '_p' suffixes (FPE3_p.DE -> FPE3.DE), and the Irish '.I' -> '.IR' suffix.
+    Explicit overrides return only the canonical symbol. Candidates are
+    validated against the chart API by the resolution job, never trusted
+    blindly.
+
+    Args:
+        ric: Reuters instrument code.
+
+    Returns:
+        Ordered, de-duplicated candidate list.
+    """
+    override = RIC_OVERRIDES.get(ric)
+    if override:
+        return [override]
+
+    candidates = [ric_to_yahoo(ric)]
+    base, _, suffix = ric.rpartition(".")
+
+    if base.endswith("_p"):
+        candidates.append(f"{base[:-2]}.{suffix}")
+
+    match = re.fullmatch(r"(.+)([a-z])", base)
+    if match and not base.endswith("_p") and len(match.group(1)) >= 3:
+        candidates.append(f"{match.group(1)}-{match.group(2).upper()}.{suffix}")
+
+    if suffix == "I":
+        candidates.append(f"{base}.IR")
+
+    seen: set[str] = set()
+    return [candidate for candidate in candidates if not (candidate in seen or seen.add(candidate))]
