@@ -1,4 +1,4 @@
--- alpha-wire DuckDB schema
+-- marketmind DuckDB schema
 -- All timestamps are UTC. Run once at DB initialisation.
 
 -- ── Articles ──────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-"""MCP server — exposes the alpha-wire market database to the agent harness."""
+"""MCP server — exposes the marketmind market database to the agent harness."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from agent.knowledge import get_current_facts, write_fact
 from agent.views import get_market_views as get_views
 from agent.views import save_market_view as save_view
 
-mcp = FastMCP("alpha-wire")
+mcp = FastMCP("marketmind")
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT_DIR / "data" / "db" / "research.duckdb"
