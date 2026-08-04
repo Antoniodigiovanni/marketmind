@@ -68,15 +68,49 @@ def test_ric_to_yahoo_known_mismatches() -> None:
     assert ric_to_yahoo("CONG.DE") == "CON.DE"
 
 
+def test_ric_to_yahoo_verified_override_table() -> None:
+    expected = {
+        "ADML.L": "ADM.L",  # Admiral
+        "AVANZ.ST": "AZA.ST",  # Avanza Bank
+        "AZMT.MI": "AZM.MI",  # Azimut
+        "BAMN.AS": "BAMNB.AS",  # BAM Groep
+        "BKGH.L": "BKG.L",  # Berkeley Group
+        "BT.L": "BT-A.L",  # BT Group
+        "CAPP.PA": "CAP.PA",  # Capgemini
+        "COTNE.SW": "COTN.SW",  # Comet Holdings
+        "DAST.PA": "DSY.PA",  # Dassault Systèmes
+        "EONGn.DE": "EOAN.DE",  # E.ON
+        "FTKn.DE": "FTK.DE",  # Flatexdegiro
+        "G1AG.DE": "G1A.DE",  # GEA
+        "HMb.ST": "HM-B.ST",  # Hennes & Mauritz B
+        "HNKG_p.DE": "HNKG.DE",  # Henkel pref
+        "ICAG.L": "IAG.L",  # IAG
+        "INGP.WA": "ING.WA",  # ING Bank Slaski
+        "ITPG.MI": "IP.MI",  # Interpump
+        "KSP.I": "KRX.IR",  # Kingspan
+        "PSHG_p.DE": "PAH3.DE",  # Porsche Automobil Holding pref
+        "PUBP.PA": "PUB.PA",  # Publicis
+        "SABE.MC": "SAB.MC",  # Banco Sabadell
+        "SDFGn.DE": "SDF.DE",  # K+S
+        "SOGN.PA": "GLE.PA",  # Société Générale
+        "SRENH.SW": "SREN.SW",  # Swiss Re
+        "VOWG_p.DE": "VOW3.DE",  # Volkswagen pref
+        "WDPP.BR": "WDP.BR",  # WDP
+    }
+    for ric, symbol in expected.items():
+        assert ric_to_yahoo(ric) == symbol
+
+
 def test_ric_variants_share_class_hyphenation() -> None:
     assert ric_variants("ERICb.ST") == ["ERICb.ST", "ERIC-B.ST"]
     assert ric_variants("SEBa.ST") == ["SEBa.ST", "SEB-A.ST"]
     assert ric_variants("INDUc.ST") == ["INDUc.ST", "INDU-C.ST"]
+    assert "HM-B.ST" in ric_variants("HMb.ST")
 
 
 def test_ric_variants_preference_and_irish_suffix() -> None:
     assert ric_variants("FPE3_p.DE") == ["FPE3_p.DE", "FPE3.DE"]
-    assert ric_variants("KSP.I") == ["KSP.I", "KSP.IR"]
+    assert ric_variants("KSP.I") == ["KRX.IR"]  # verified override
 
 
 def test_ric_variants_no_extra_candidates_for_clean_symbols() -> None:

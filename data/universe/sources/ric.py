@@ -16,6 +16,32 @@ RIC_OVERRIDES: dict[str, str] = {
     "TCFP.PA": "HO.PA",  # Thales
     "SAPG.DE": "SAP.DE",  # SAP SE
     "CONG.DE": "CON.DE",  # Continental
+    "ADML.L": "ADM.L",  # Admiral
+    "AVANZ.ST": "AZA.ST",  # Avanza Bank
+    "AZMT.MI": "AZM.MI",  # Azimut
+    "BAMN.AS": "BAMNB.AS",  # BAM Groep
+    "BKGH.L": "BKG.L",  # Berkeley Group
+    "BT.L": "BT-A.L",  # BT Group
+    "CAPP.PA": "CAP.PA",  # Capgemini
+    "COTNE.SW": "COTN.SW",  # Comet Holdings
+    "DAST.PA": "DSY.PA",  # Dassault Systèmes
+    "EONGn.DE": "EOAN.DE",  # E.ON
+    "FTKn.DE": "FTK.DE",  # Flatexdegiro
+    "G1AG.DE": "G1A.DE",  # GEA
+    "HMb.ST": "HM-B.ST",  # Hennes & Mauritz B
+    "HNKG_p.DE": "HNKG.DE",  # Henkel pref
+    "ICAG.L": "IAG.L",  # IAG
+    "INGP.WA": "ING.WA",  # ING Bank Slaski
+    "ITPG.MI": "IP.MI",  # Interpump
+    "KSP.I": "KRX.IR",  # Kingspan
+    "PSHG_p.DE": "PAH3.DE",  # Porsche Automobil Holding pref
+    "PUBP.PA": "PUB.PA",  # Publicis
+    "SABE.MC": "SAB.MC",  # Banco Sabadell
+    "SDFGn.DE": "SDF.DE",  # K+S
+    "SOGN.PA": "GLE.PA",  # Société Générale
+    "SRENH.SW": "SREN.SW",  # Swiss Re
+    "VOWG_p.DE": "VOW3.DE",  # Volkswagen pref
+    "WDPP.BR": "WDP.BR",  # WDP
 }
 
 
@@ -65,7 +91,7 @@ def ric_variants(ric: str) -> list[str]:
         candidates.append(f"{base[:-2]}.{suffix}")
 
     match = re.fullmatch(r"(.+)([a-z])", base)
-    if match and not base.endswith("_p") and len(match.group(1)) >= 3:
+    if match and not base.endswith("_p") and len(match.group(1)) >= 2:
         candidates.append(f"{match.group(1)}-{match.group(2).upper()}.{suffix}")
 
     if suffix == "I":
