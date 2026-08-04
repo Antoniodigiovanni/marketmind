@@ -1,0 +1,46 @@
+# Environment
+.env
+*.env.*
+!.env.example
+
+# Raw data — never committed
+data/raw/
+data/processed/*.parquet
+
+# Database — generated, not committed
+data/db/*.duckdb
+data/db/vectors/
+
+# Notebooks with outputs — strip outputs before committing
+**/.ipynb_checkpoints/
+*.ipynb
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual envs / uv
+.venv/
+venv/
+.uv/
+
+# Test / coverage artefacts
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
