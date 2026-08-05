@@ -17,9 +17,19 @@ from data.universe.loader import UNIVERSE_DIR, get_universe
 FULL_HISTORY_START = "1900-01-01"
 OVERLAP_DAYS = 30
 CURRENCY_BY_SUFFIX = {
-    "DE": "EUR", "PA": "EUR", "AS": "EUR", "BR": "EUR", "MI": "EUR",
-    "MC": "EUR", "VI": "EUR", "HE": "EUR",
-    "L": "GBP", "SW": "CHF", "ST": "SEK", "CO": "DKK", "OL": "NOK",
+    "DE": "EUR",
+    "PA": "EUR",
+    "AS": "EUR",
+    "BR": "EUR",
+    "MI": "EUR",
+    "MC": "EUR",
+    "VI": "EUR",
+    "HE": "EUR",
+    "L": "GBP",
+    "SW": "CHF",
+    "ST": "SEK",
+    "CO": "DKK",
+    "OL": "NOK",
 }
 
 

@@ -31,9 +31,7 @@ def sync_settlement(date: dt.date, si_dir: Path = SHORT_INTEREST_DIR) -> int:
     return write_settlement(date, frame, si_dir)
 
 
-def sync_short_interest(
-    *, as_of: str, si_dir: Path = SHORT_INTEREST_DIR
-) -> dict[str, int]:
+def sync_short_interest(*, as_of: str, si_dir: Path = SHORT_INTEREST_DIR) -> dict[str, int]:
     """Probe recent settlement dates and ingest any new FINRA files.
 
     Args:

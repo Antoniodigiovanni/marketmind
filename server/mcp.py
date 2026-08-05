@@ -597,8 +597,14 @@ def get_short_interest(
     return _rows_to_dicts(
         rows,
         [
-            "symbol", "issue_name", "market_class", "current_short",
-            "previous_short", "avg_daily_volume", "days_to_cover", "change_pct",
+            "symbol",
+            "issue_name",
+            "market_class",
+            "current_short",
+            "previous_short",
+            "avg_daily_volume",
+            "days_to_cover",
+            "change_pct",
             "settlement_date",
         ],
     )

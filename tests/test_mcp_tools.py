@@ -291,7 +291,5 @@ def test_get_short_interest_reads_partitions(tmp_path, monkeypatch) -> None:
 
 
 def test_get_short_interest_no_partitions_returns_empty(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        mcp_mod, "SHORT_INTEREST_GLOB", str(tmp_path / "si" / "*.parquet")
-    )
+    monkeypatch.setattr(mcp_mod, "SHORT_INTEREST_GLOB", str(tmp_path / "si" / "*.parquet"))
     assert mcp_mod.get_short_interest("AAPL") == []

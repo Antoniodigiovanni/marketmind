@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import datetime as dt
 
-import polars as pl
 import pytest
 import requests
 
@@ -48,9 +47,16 @@ def test_fetch_short_interest_file_parses_csv(monkeypatch) -> None:
     assert captured["url"] == finra.SHORT_INTEREST_URL.format(date="20260715")
     assert "User-Agent" in captured["headers"]
     assert frame.columns == [
-        "symbol", "symbol_code", "issue_name", "market_class",
-        "current_short", "previous_short", "avg_daily_volume",
-        "days_to_cover", "change_pct", "settlement_date",
+        "symbol",
+        "symbol_code",
+        "issue_name",
+        "market_class",
+        "current_short",
+        "previous_short",
+        "avg_daily_volume",
+        "days_to_cover",
+        "change_pct",
+        "settlement_date",
     ]
     assert frame["symbol"].to_list() == ["A", "BRK-B"]
     assert frame["days_to_cover"].to_list() == [3.53, None]

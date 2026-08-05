@@ -115,7 +115,10 @@ def fetch_dividends(
         ValueError: If the history frame lacks required columns.
     """
     if history_fn is None:
-        history_fn = lambda **kwargs: yf.Ticker(symbol).history(**kwargs)
+
+        def history_fn(**kwargs: object) -> pd.DataFrame:
+            return yf.Ticker(symbol).history(**kwargs)
+
     history = history_fn(start=start, end=end, actions=True)
 
     empty = pl.DataFrame(schema={"ex_date": pl.Date, "amount": pl.Float64})
@@ -134,6 +137,6 @@ def fetch_dividends(
             columns={"Date": "ex_date", "Dividends": "amount"}
         )
     )
-    return frame.with_columns(
-        pl.col("ex_date").dt.convert_time_zone("UTC").dt.date()
-    ).sort("ex_date")
+    return frame.with_columns(pl.col("ex_date").dt.convert_time_zone("UTC").dt.date()).sort(
+        "ex_date"
+    )

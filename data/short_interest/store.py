@@ -9,13 +9,18 @@ from pathlib import Path
 import polars as pl
 
 REQUIRED_COLUMNS = [
-    "symbol", "symbol_code", "issue_name", "market_class",
-    "current_short", "previous_short", "avg_daily_volume",
-    "days_to_cover", "change_pct", "settlement_date",
+    "symbol",
+    "symbol_code",
+    "issue_name",
+    "market_class",
+    "current_short",
+    "previous_short",
+    "avg_daily_volume",
+    "days_to_cover",
+    "change_pct",
+    "settlement_date",
 ]
-SHORT_INTEREST_DIR = (
-    Path(__file__).resolve().parents[2] / "data" / "raw" / "short_interest"
-)
+SHORT_INTEREST_DIR = Path(__file__).resolve().parents[2] / "data" / "raw" / "short_interest"
 
 
 def settlement_path(date: dt.date, si_dir: Path = SHORT_INTEREST_DIR) -> Path:
@@ -28,9 +33,7 @@ def settlement_exists(date: dt.date, si_dir: Path = SHORT_INTEREST_DIR) -> bool:
     return settlement_path(date, si_dir).exists()
 
 
-def write_settlement(
-    date: dt.date, frame: pl.DataFrame, si_dir: Path = SHORT_INTEREST_DIR
-) -> int:
+def write_settlement(date: dt.date, frame: pl.DataFrame, si_dir: Path = SHORT_INTEREST_DIR) -> int:
     """Write one settlement date's short interest parquet (atomic).
 
     Returns:

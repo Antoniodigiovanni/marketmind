@@ -48,15 +48,11 @@ def test_sync_dividends_backfills_and_appends(tmp_path, monkeypatch) -> None:
     def fake_fetch(symbol: str, start: str, end: str) -> pl.DataFrame:
         calls.append((symbol, start, end))
         if symbol == "AAPL":
-            return _div_frame(
-                [dt.date(2026, 2, 13), dt.date(2026, 5, 15)], [0.25, 0.25]
-            )
+            return _div_frame([dt.date(2026, 2, 13), dt.date(2026, 5, 15)], [0.25, 0.25])
         return _empty()
 
     monkeypatch.setattr(div_mod, "fetch_dividends", fake_fetch)
-    monkeypatch.setattr(
-        div_mod, "_symbols_for_universe", lambda db, members: {"AAPL": "AAPL"}
-    )
+    monkeypatch.setattr(div_mod, "_symbols_for_universe", lambda db, members: {"AAPL": "AAPL"})
 
     summary = div_mod.sync_dividends(
         as_of="2026-08-04",
@@ -72,6 +68,7 @@ def test_sync_dividends_backfills_and_appends(tmp_path, monkeypatch) -> None:
     assert out["currency"].to_list() == ["USD", "USD"]
 
     calls.clear()
+
     def record_fetch(symbol: str, start: str, end: str) -> pl.DataFrame:
         calls.append((symbol, start, end))
         if symbol == "AAPL":
@@ -99,18 +96,14 @@ def test_sync_dividends_backfills_and_appends(tmp_path, monkeypatch) -> None:
     ]
 
 
-def test_sync_dividends_skips_unresolved_and_isolates_failures(
-    tmp_path, monkeypatch
-) -> None:
+def test_sync_dividends_skips_unresolved_and_isolates_failures(tmp_path, monkeypatch) -> None:
     def fake_fetch(symbol: str, start: str, end: str) -> pl.DataFrame:
         if symbol == "AAPL":
             raise RuntimeError("boom")
         return _empty()
 
     monkeypatch.setattr(div_mod, "fetch_dividends", fake_fetch)
-    monkeypatch.setattr(
-        div_mod, "_symbols_for_universe", lambda db, members: {"AAPL": "AAPL"}
-    )
+    monkeypatch.setattr(div_mod, "_symbols_for_universe", lambda db, members: {"AAPL": "AAPL"})
 
     summary = div_mod.sync_dividends(
         as_of="2026-08-04",
@@ -132,15 +125,11 @@ def test_fetch_main_includes_dividends(monkeypatch) -> None:
         return {"fetched": [], "skipped_unresolved": [], "errors": []}
 
     monkeypatch.setattr(fetch_entry, "fetch_daily_prices", fake_prices)
-    monkeypatch.setattr(
-        fetch_entry, "fetch_volatility_indices", lambda as_of: called.append("vol")
-    )
+    monkeypatch.setattr(fetch_entry, "fetch_volatility_indices", lambda as_of: called.append("vol"))
     monkeypatch.setattr(
         fetch_entry, "run_daily_macro_sync", lambda **kwargs: called.append("macro")
     )
-    monkeypatch.setattr(
-        fetch_entry, "sync_dividends", lambda **kwargs: called.append("dividends")
-    )
+    monkeypatch.setattr(fetch_entry, "sync_dividends", lambda **kwargs: called.append("dividends"))
     monkeypatch.setattr("sys.argv", ["data/fetch.py", "--as-of", "2026-08-04"])
 
     fetch_entry.main()

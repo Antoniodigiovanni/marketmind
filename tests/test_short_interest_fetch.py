@@ -7,8 +7,8 @@ import datetime as dt
 import polars as pl
 
 import data.short_interest.fetch as si_mod
-from data.sources.finra import COLUMNS
 from data.short_interest.store import settlement_exists, write_settlement
+from data.sources.finra import COLUMNS
 
 
 def _frame() -> pl.DataFrame:
@@ -86,15 +86,11 @@ def test_fetch_main_includes_short_interest(monkeypatch) -> None:
         return {"fetched": [], "skipped_unresolved": [], "errors": []}
 
     monkeypatch.setattr(fetch_entry, "fetch_daily_prices", fake_prices)
-    monkeypatch.setattr(
-        fetch_entry, "fetch_volatility_indices", lambda as_of: called.append("vol")
-    )
+    monkeypatch.setattr(fetch_entry, "fetch_volatility_indices", lambda as_of: called.append("vol"))
     monkeypatch.setattr(
         fetch_entry, "run_daily_macro_sync", lambda **kwargs: called.append("macro")
     )
-    monkeypatch.setattr(
-        fetch_entry, "sync_dividends", lambda **kwargs: called.append("dividends")
-    )
+    monkeypatch.setattr(fetch_entry, "sync_dividends", lambda **kwargs: called.append("dividends"))
     monkeypatch.setattr(
         fetch_entry,
         "sync_short_interest",

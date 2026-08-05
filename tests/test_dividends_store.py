@@ -26,9 +26,7 @@ def _frame(dates: list[dt.date], amounts: list[float]) -> pl.DataFrame:
 
 
 def test_append_symbol_creates_new_file(tmp_path) -> None:
-    appended = append_symbol(
-        "AAPL", _frame([dt.date(2026, 2, 13)], [0.25]), tmp_path
-    )
+    appended = append_symbol("AAPL", _frame([dt.date(2026, 2, 13)], [0.25]), tmp_path)
 
     assert appended == 1
     assert symbol_path("AAPL", tmp_path).exists()
