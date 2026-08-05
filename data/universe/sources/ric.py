@@ -46,6 +46,7 @@ RIC_OVERRIDES: dict[str, str] = {
     "HBANC.SW": "HBAN.SW",  # Helvetia
     "KYGa.I": "KRZ.IR",  # Kerry Group
     "SJP.L": "STJ.L",  # St James's Place (renamed symbol)
+    "SCOR.PA": "SCR.PA",  # SCOR SE
 }
 
 

@@ -100,6 +100,7 @@ def test_ric_to_yahoo_verified_override_table() -> None:
         "HBANC.SW": "HBAN.SW",  # Helvetia
         "KYGa.I": "KRZ.IR",  # Kerry Group
         "SJP.L": "STJ.L",  # St James's Place (renamed symbol)
+        "SCOR.PA": "SCR.PA",  # SCOR SE
     }
     for ric, symbol in expected.items():
         assert ric_to_yahoo(ric) == symbol
