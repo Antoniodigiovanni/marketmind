@@ -1,0 +1,70 @@
+<?xml version="1.0"?>
+<ownershipDocument>
+  <schemaVersion>X0202</schemaVersion>
+  <documentType>4</documentType>
+  <periodOfReport>2026-05-02</periodOfReport>
+  <issuer>
+    <issuerCik>0000320193</issuerCik>
+    <issuerName>APPLE INC</issuerName>
+    <issuerTradingSymbol>AAPL</issuerTradingSymbol>
+  </issuer>
+  <reportingOwner>
+    <reportingOwnerId>
+      <rptOwnerCik>0001003781</rptOwnerCik>
+      <rptOwnerName>COOK TIMOTHY D</rptOwnerName>
+    </reportingOwnerId>
+    <reportingOwnerRelationship>
+      <isDirector>1</isDirector>
+      <isOfficer>1</isOfficer>
+      <officerTitle>Chief Executive Officer</officerTitle>
+    </reportingOwnerRelationship>
+  </reportingOwner>
+  <nonDerivativeTable>
+    <nonDerivativeTransaction>
+      <securityTitle>Common Stock</securityTitle>
+      <transactionDate>2026-04-30</transactionDate>
+      <transactionCoding>
+        <transactionFormType>4</transactionFormType>
+        <transactionCode>S</transactionCode>
+      </transactionCoding>
+      <transactionAmounts>
+        <transactionShares>500</transactionShares>
+        <transactionPricePerShare>180.25</transactionPricePerShare>
+        <transactionAcquiredDisposedCode>D</transactionAcquiredDisposedCode>
+      </transactionAmounts>
+      <postTransactionAmounts>
+        <sharesOwnedFollowingTransaction>9500</sharesOwnedFollowingTransaction>
+      </postTransactionAmounts>
+      <ownershipNature>
+        <directOrIndirectOwnership>D</directOrIndirectOwnership>
+      </ownershipNature>
+    </nonDerivativeTransaction>
+    <nonDerivativeHolding>
+      <securityTitle>Common Stock</securityTitle>
+      <postTransactionAmounts>
+        <sharesOwnedFollowingTransaction>9500</sharesOwnedFollowingTransaction>
+      </postTransactionAmounts>
+      <ownershipNature>
+        <directOrIndirectOwnership>D</directOrIndirectOwnership>
+      </ownershipNature>
+    </nonDerivativeHolding>
+  </nonDerivativeTable>
+  <derivativeTable>
+    <derivativeTransaction>
+      <securityTitle>Restricted Stock Unit</securityTitle>
+      <underlyingSecurity>
+        <underlyingSecurityTitle>Common Stock</underlyingSecurityTitle>
+      </underlyingSecurity>
+      <transactionDate>2026-04-28</transactionDate>
+      <transactionCoding>
+        <transactionFormType>4</transactionFormType>
+        <transactionCode>A</transactionCode>
+      </transactionCoding>
+      <transactionAmounts>
+        <transactionShares>120</transactionShares>
+        <transactionPricePerShare>0</transactionPricePerShare>
+        <transactionAcquiredDisposedCode>A</transactionAcquiredDisposedCode>
+      </transactionAmounts>
+    </derivativeTransaction>
+  </derivativeTable>
+</ownershipDocument>
