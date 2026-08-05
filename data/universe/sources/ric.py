@@ -29,7 +29,7 @@ RIC_OVERRIDES: dict[str, str] = {
     "FTKn.DE": "FTK.DE",  # Flatexdegiro
     "G1AG.DE": "G1A.DE",  # GEA
     "HMb.ST": "HM-B.ST",  # Hennes & Mauritz B
-    "HNKG_p.DE": "HNKG.DE",  # Henkel pref
+    "HNKG_p.DE": "1HEN3.MI",  # Henkel pref (HNKG.DE has no Yahoo data; Milan line is quoted)
     "ICAG.L": "IAG.L",  # IAG
     "INGP.WA": "ING.WA",  # ING Bank Slaski
     "ITPG.MI": "IP.MI",  # Interpump
@@ -42,10 +42,11 @@ RIC_OVERRIDES: dict[str, str] = {
     "SRENH.SW": "SREN.SW",  # Swiss Re
     "VOWG_p.DE": "VOW3.DE",  # Volkswagen pref
     "WDPP.BR": "WDP.BR",  # WDP
-    "4HEI.TI": "HEI.DE",  # Heidelberg Materials
+    "HEIG.DE": "HEI.DE",  # Heidelberg Materials
     "HBANC.SW": "HBAN.SW",  # Helvetia
     "KYGa.I": "KRZ.IR",  # Kerry Group
     "SJP.L": "STJ.L",  # St James's Place (renamed symbol)
+    "SCOR.PA": "SCR.PA",  # SCOR SE
 }
 
 

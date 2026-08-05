@@ -151,3 +151,38 @@ def test_connect_raises_when_db_missing(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(mcp_mod, "DB_PATH", tmp_path / "missing.duckdb")
     with pytest.raises(FileNotFoundError, match="not initialised"):
         mcp_mod._connect()
+
+
+def test_get_macro_reads_parquet_with_filters(tmp_path, monkeypatch) -> None:
+    macro_dir = tmp_path / "macro"
+    macro_dir.mkdir()
+    pl.DataFrame(
+        {
+            "date": [dt.date(2026, 8, 3), dt.date(2026, 8, 4)],
+            "value": [4.11, 4.09],
+        }
+    ).write_parquet(macro_dir / "DGS10.parquet")
+    monkeypatch.setattr(mcp_mod, "MACRO_DIR", macro_dir)
+
+    rows = mcp_mod.get_macro("DGS10")
+
+    assert len(rows) == 2
+    assert rows[0]["series"] == "DGS10"
+    assert rows[0]["name"] == "10-Year Treasury Constant Maturity Rate"
+    assert rows[0]["unit"] == "percent"
+    assert rows[0]["frequency"] == "daily"
+    assert rows[0]["date"] == "2026-08-03"
+
+    filtered = mcp_mod.get_macro("DGS10", start="2026-08-04", end="2026-08-04")
+    assert len(filtered) == 1
+    assert filtered[0]["value"] == 4.09
+
+
+def test_get_macro_unknown_series_returns_empty(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(mcp_mod, "MACRO_DIR", tmp_path / "macro")
+    assert mcp_mod.get_macro("NOPE") == []
+
+
+def test_get_macro_missing_file_returns_empty(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(mcp_mod, "MACRO_DIR", tmp_path / "macro")
+    assert mcp_mod.get_macro("DGS10") == []
