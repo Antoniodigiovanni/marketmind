@@ -110,6 +110,53 @@ def test_get_news_and_search(tmp_path, monkeypatch) -> None:
     assert mcp_mod.search_news("bonds") == []
 
 
+def test_get_news_since_filter_and_empty_search(tmp_path, monkeypatch) -> None:
+    news_file = tmp_path / "news.ndjson"
+    news_file.write_text(
+        '{"url": "https://a.com/1", "source": "google", "ticker": "AAPL", '
+        '"published_at": "2026-08-04 08:00:00+00", "title": "Newer", '
+        '"description": "desc", "content": "..."}\n'
+        '{"url": "https://a.com/2", "source": "google", "ticker": "AAPL", '
+        '"published_at": "2026-08-01 08:00:00+00", "title": "Older", '
+        '"description": "desc", "content": "..."}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mcp_mod, "NEWS_GLOB", str(news_file))
+
+    rows = mcp_mod.get_news("AAPL", since="2026-08-02")
+    assert [r["title"] for r in rows] == ["Newer"]
+
+    monkeypatch.setattr(mcp_mod, "NEWS_GLOB", str(tmp_path / "missing" / "*.ndjson"))
+    assert mcp_mod.get_news("AAPL") == []
+    assert mcp_mod.search_news("anything") == []
+
+
+def test_get_volatility_missing_file_and_date_window(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(mcp_mod, "PROCESSED_VOL_PATH", tmp_path / "missing.parquet")
+    assert mcp_mod.get_volatility("AAPL") == []
+
+    vol_path = tmp_path / "volatility.parquet"
+    pl.DataFrame(
+        {
+            "date": [dt.date(2026, 8, 3), dt.date(2026, 8, 4)],
+            "ticker": ["AAPL", "AAPL"],
+            "rv_20d": [17.0, 18.5],
+            "rv_60d": [20.0, 21.0],
+        }
+    ).write_parquet(vol_path)
+    monkeypatch.setattr(mcp_mod, "PROCESSED_VOL_PATH", vol_path)
+
+    rows = mcp_mod.get_volatility("AAPL", start="2026-08-04", end="2026-08-04")
+    assert [r["date"] for r in rows] == ["2026-08-04"]
+
+
+def test_main_runs_server(monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(mcp_mod.mcp, "run", lambda: calls.append("run"))
+    mcp_mod.main()
+    assert calls == ["run"]
+
+
 def test_facts_tool_point_in_time(monkeypatch, db_file) -> None:
     monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
     mcp_mod.save_fact(
