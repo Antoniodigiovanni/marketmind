@@ -165,6 +165,43 @@ def test_unresolved_members_are_retried(tmp_path) -> None:
         conn.close()
 
 
+def test_override_symbols_are_chart_validated_without_search(tmp_path) -> None:
+    import polars as pl
+
+    def searcher(id_value: str, **kwargs: object) -> dict[str, str]:
+        raise AssertionError(f"search should be bypassed for overrides, got {id_value}")
+
+    resolve.search_by_id = searcher
+    checked: list[str] = []
+    resolve.symbol_has_data = lambda symbol: checked.append(symbol) or True  # noqa: E731
+
+    st = pl.DataFrame(
+        {
+            "ticker": ["SCOR.PA"],
+            "name": ["SCOR"],
+            "country": ["FR"],
+            "sector": ["Insurance"],
+            "added_date": ["2026-08-04"],
+            "removed_date": [None],
+            "internal_key": ["KEYSCOR"],
+            "isin": [None],
+            "cusip": [None],
+        }
+    )
+    st.write_csv(tmp_path / "eurostoxx600.csv")
+    (tmp_path / "sp500.csv").unlink(missing_ok=True)
+
+    conn = init_db(":memory:")
+    try:
+        stats = resolve.resolve_universe(conn, universe_dir=tmp_path)
+        assert stats["valid"] == 1
+        assert checked == ["SCR.PA"]
+        row = conn.execute("SELECT symbol, status FROM symbol_map").fetchone()
+        assert row == ("SCR.PA", "valid")
+    finally:
+        conn.close()
+
+
 def test_chart_failure_marks_review(tmp_path) -> None:
     _write_universe(tmp_path)
     _fake_lookup({"037833100": {"symbol": "AAPL", "name": "Apple Inc."}})

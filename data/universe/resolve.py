@@ -10,7 +10,7 @@ import polars as pl
 
 from data.db.init import DEFAULT_DB_PATH, init_db
 from data.universe.loader import UNIVERSE_DIR
-from data.universe.sources.ric import ric_variants
+from data.universe.sources.ric import RIC_OVERRIDES, ric_variants
 from data.universe.sources.yahoo import search_by_id, symbol_has_data
 
 UNIVERSE_FILES = ("sp500.csv", "eurostoxx600.csv")
@@ -71,6 +71,10 @@ def resolve_universe(
     def _resolve(row: dict[str, object]) -> dict[str, str] | None:
         """Resolve one member, trying candidates then the company name."""
         id_type, id_value = _id_for(row)
+        if id_type == "TICKER" and id_value in RIC_OVERRIDES:
+            # Explicit overrides are chart-verified by the caller; no search
+            # round-trip needed (Yahoo search misses some known-good symbols).
+            return {"symbol": RIC_OVERRIDES[id_value], "name": str(row["name"])}
         candidates = ric_variants(id_value) if id_type == "TICKER" else [id_value]
         for candidate in candidates:
             hit = search(candidate)
