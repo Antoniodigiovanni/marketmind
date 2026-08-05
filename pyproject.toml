@@ -10,18 +10,11 @@ requires-python = ">=3.11"
 dependencies = [
     # Data sources
     "yfinance>=0.2",
-    "fredapi>=0.5",
     "requests>=2.31",
-    # OpenBB free tier — core only to avoid heavy optional extras
-    "openbb-core>=1.3",
     # Data processing
     "polars>=0.20",
     "pandas>=2.0",
     "numpy>=1.26",
-    # Backtesting
-    "vectorbt>=0.26",
-    # Portfolio optimisation
-    "cvxpy>=1.4",
     # LLM / agent
     "anthropic>=0.25",
     "tenacity>=8.2",
@@ -38,9 +31,6 @@ dependencies = [
     "loguru>=0.7",
     "python-dotenv>=1.0",
     "pyarrow>=14.0",
-    "scipy>=1.12",
-    "statsmodels>=0.14",
-    "newsapi-python>=0.2",
 ]
 
 [project.optional-dependencies]
@@ -74,4 +64,4 @@ indent-style = "space"
 omit = ["tests/*", "*/prompts/*"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["agent", "data", "factors", "portfolio", "research", "server"]
+packages = ["agent", "data", "server"]
