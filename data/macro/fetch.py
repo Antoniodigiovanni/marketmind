@@ -25,9 +25,7 @@ HY_OAS_ID = "BAMLH0A0HYM2"
 BBB_OAS_ID = "BAMLC0A4CBBB"
 
 
-def fetch_series_observations(
-    series: MacroSeries, start: str, end: str
-) -> pl.DataFrame:
+def fetch_series_observations(series: MacroSeries, start: str, end: str) -> pl.DataFrame:
     """Fetch observations for a series from its provider.
 
     Args:
@@ -52,9 +50,7 @@ def fetch_series_observations(
     raise ValueError(f"Unknown provider: {series.provider}")
 
 
-def sync_series(
-    series: MacroSeries, macro_dir: Path = MACRO_DIR, today: str | None = None
-) -> int:
+def sync_series(series: MacroSeries, macro_dir: Path = MACRO_DIR, today: str | None = None) -> int:
     """Incrementally sync one series into its raw parquet file.
 
     Full backfill on first run; otherwise fetches from the last stored

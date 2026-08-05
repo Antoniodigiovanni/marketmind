@@ -19,9 +19,7 @@ def _frame(dates: list[dt.date], values: list[float]) -> pl.DataFrame:
 
 def test_compute_hy_minus_bbb_known_output() -> None:
     dates = [dt.date(2026, 8, 3), dt.date(2026, 8, 4), dt.date(2026, 8, 5)]
-    spread = compute_hy_minus_bbb(
-        _frame(dates, [6.5, 7.0, 6.8]), _frame(dates, [1.5, 1.6, 1.7])
-    )
+    spread = compute_hy_minus_bbb(_frame(dates, [6.5, 7.0, 6.8]), _frame(dates, [1.5, 1.6, 1.7]))
 
     assert spread.columns == ["date", "hy_oas", "bbb_oas", "hy_minus_bbb_oas"]
     assert spread["hy_minus_bbb_oas"].to_list() == [5.0, 5.4, 5.1]

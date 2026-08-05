@@ -47,9 +47,7 @@ def read_series(series_id: str, macro_dir: Path = MACRO_DIR) -> pl.DataFrame | N
     return frame.sort("date")
 
 
-def append_series(
-    series_id: str, frame: pl.DataFrame, macro_dir: Path = MACRO_DIR
-) -> int:
+def append_series(series_id: str, frame: pl.DataFrame, macro_dir: Path = MACRO_DIR) -> int:
     """Merge new observations into a series parquet file (atomic).
 
     Deduplicates on date (last value wins), sorts, and writes atomically via
@@ -70,11 +68,7 @@ def append_series(
     existing = read_series(series_id, macro_dir)
     before = 0 if existing is None else len(existing)
     merged = frame if existing is None else pl.concat([existing, frame])
-    merged = (
-        merged.unique(subset=["date"], keep="last")
-        .sort("date")
-        .select(REQUIRED_COLUMNS)
-    )
+    merged = merged.unique(subset=["date"], keep="last").sort("date").select(REQUIRED_COLUMNS)
 
     path = series_path(series_id, macro_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,9 +78,7 @@ def append_series(
     return len(merged) - before
 
 
-def last_observation_date(
-    series_id: str, macro_dir: Path = MACRO_DIR
-) -> dt.date | None:
+def last_observation_date(series_id: str, macro_dir: Path = MACRO_DIR) -> dt.date | None:
     """Return the latest observation date for a series.
 
     Args:

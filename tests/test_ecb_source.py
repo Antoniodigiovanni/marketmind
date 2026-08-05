@@ -66,9 +66,7 @@ def test_fetch_series_empty_body(monkeypatch) -> None:
 
 
 def test_fetch_series_raises_on_http_error(monkeypatch) -> None:
-    monkeypatch.setattr(
-        ecb.requests, "get", lambda *args, **kwargs: FakeResponse(status_code=404)
-    )
+    monkeypatch.setattr(ecb.requests, "get", lambda *args, **kwargs: FakeResponse(status_code=404))
 
     with pytest.raises(requests.HTTPError):
         ecb.fetch_series("NOPE", "2026-08-01", "2026-08-04")

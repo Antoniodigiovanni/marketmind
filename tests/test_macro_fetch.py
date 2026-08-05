@@ -69,17 +69,13 @@ def test_incremental_sync_appends_only_new_dates(tmp_path, monkeypatch) -> None:
     assert out["value"].to_list() == [4.2, 4.09]  # revision wins
 
 
-def test_monthly_series_overlap_catches_same_period_revision(
-    tmp_path, monkeypatch
-) -> None:
+def test_monthly_series_overlap_catches_same_period_revision(tmp_path, monkeypatch) -> None:
     append_series("CPIAUCSL", _frame([dt.date(2026, 6, 1)], [320.0]), tmp_path)
 
     def fake_fetch(series: object, start: str, end: str) -> pl.DataFrame:
         assert isinstance(series, fetch_mod.MacroSeries)
         if series.id == "CPIAUCSL":
-            return _frame(
-                [dt.date(2026, 6, 1), dt.date(2026, 7, 1)], [320.1, 322.0]
-            )
+            return _frame([dt.date(2026, 6, 1), dt.date(2026, 7, 1)], [320.1, 322.0])
         return _empty_frame()
 
     monkeypatch.setattr(fetch_mod, "fetch_series_observations", fake_fetch)
@@ -137,9 +133,7 @@ def test_fetch_main_invokes_macro_sync(monkeypatch) -> None:
     import data.fetch as fetch_entry
 
     called: list[object] = []
-    monkeypatch.setattr(
-        fetch_entry, "run_daily_macro_sync", lambda: called.append(True)
-    )
+    monkeypatch.setattr(fetch_entry, "run_daily_macro_sync", lambda: called.append(True))
 
     fetch_entry.main()
 

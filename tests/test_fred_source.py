@@ -81,9 +81,7 @@ def test_fetch_series_empty_observations(monkeypatch) -> None:
 
 def test_fetch_series_raises_on_http_error(monkeypatch) -> None:
     monkeypatch.setenv("FRED_API_KEY", "test-key")
-    monkeypatch.setattr(
-        fred.requests, "get", lambda *args, **kwargs: FakeResponse(status_code=500)
-    )
+    monkeypatch.setattr(fred.requests, "get", lambda *args, **kwargs: FakeResponse(status_code=500))
 
     with pytest.raises(requests.HTTPError):
         fred.fetch_series("DGS10", "2026-08-01", "2026-08-04")
