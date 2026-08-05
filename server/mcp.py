@@ -19,6 +19,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT_DIR / "data" / "db" / "research.duckdb"
 PRICES_DIR = ROOT_DIR / "data" / "raw" / "prices"
 MACRO_DIR = ROOT_DIR / "data" / "raw" / "macro"
+DIVIDENDS_DIR = ROOT_DIR / "data" / "raw" / "dividends"
+SHORT_INTEREST_GLOB = str(ROOT_DIR / "data" / "raw" / "short_interest" / "*.parquet")
 NEWS_GLOB = str(ROOT_DIR / "data" / "raw" / "news" / "*.ndjson")
 PROCESSED_VOL_PATH = ROOT_DIR / "data" / "processed" / "volatility.parquet"
 FILINGS_13F_GLOB = str(ROOT_DIR / "data" / "raw" / "13f" / "**" / "*.parquet")
@@ -506,6 +508,100 @@ def get_macro(
             }
         )
     return records
+
+
+@mcp.tool()
+def get_dividends(
+    ticker: str,
+    since: str | None = None,
+    as_of: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, object]]:
+    """Return dividend history for a ticker (point-in-time by ex-date).
+
+    Args:
+        ticker: Yahoo symbol (e.g. 'AAPL', 'ASML.AS').
+        since: Optional earliest ex-date (YYYY-MM-DD).
+        as_of: Optional latest ex-date (YYYY-MM-DD); pass as_of for
+            point-in-time reads.
+        limit: Maximum rows.
+
+    Returns:
+        List of {symbol, ex_date, amount, currency} ordered by ex_date desc.
+    """
+    from data.dividends.store import symbol_path
+
+    path = symbol_path(ticker, DIVIDENDS_DIR)
+    if not path.exists():
+        return []
+    conn = duckdb.connect()
+    try:
+        query = "SELECT ex_date, amount, currency FROM read_parquet(?)"
+        params: list[object] = [str(path)]
+        if since or as_of:
+            query += " WHERE ex_date BETWEEN ? AND ?"
+            params += [since or "1900-01-01", as_of or "2999-12-31"]
+        query += " ORDER BY ex_date DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+    finally:
+        conn.close()
+    records = _rows_to_dicts(rows, ["ex_date", "amount", "currency"])
+    for record in records:
+        record["symbol"] = ticker
+    return records
+
+
+@mcp.tool()
+def get_short_interest(
+    ticker: str,
+    as_of: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, object]]:
+    """Return FINRA short interest observations for a ticker.
+
+    Args:
+        ticker: Normalized Yahoo symbol (e.g. 'AAPL', 'BRK-B').
+        as_of: Optional settlement-date filter (YYYY-MM-DD); returns rows with
+            settlement_date <= as_of.
+        limit: Maximum rows.
+
+    Returns:
+        List of {symbol, issue_name, market_class, current_short,
+        previous_short, avg_daily_volume, days_to_cover, change_pct,
+        settlement_date} ordered by settlement_date desc.
+    """
+    import glob
+
+    files = glob.glob(SHORT_INTEREST_GLOB)
+    if not files:
+        return []
+    conn = duckdb.connect()
+    try:
+        query = """
+            SELECT symbol, issue_name, market_class, current_short,
+                   previous_short, avg_daily_volume, days_to_cover, change_pct,
+                   settlement_date
+            FROM read_parquet(?, union_by_name = true)
+            WHERE symbol = ?
+        """
+        params: list[object] = [SHORT_INTEREST_GLOB, ticker.upper().replace(".", "-")]
+        if as_of:
+            query += " AND settlement_date <= ?"
+            params.append(as_of)
+        query += " ORDER BY settlement_date DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+    finally:
+        conn.close()
+    return _rows_to_dicts(
+        rows,
+        [
+            "symbol", "issue_name", "market_class", "current_short",
+            "previous_short", "avg_daily_volume", "days_to_cover", "change_pct",
+            "settlement_date",
+        ],
+    )
 
 
 @mcp.tool()
