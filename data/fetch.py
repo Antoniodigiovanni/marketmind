@@ -11,6 +11,7 @@ import polars as pl
 from loguru import logger
 
 from data.db.init import DEFAULT_DB_PATH
+from data.dividends.fetch import sync_dividends
 from data.macro.fetch import run_daily_macro_sync
 from data.sources.yfinance import fetch_ohlcv
 from data.universe.loader import UNIVERSE_DIR, get_universe
@@ -166,6 +167,7 @@ def main() -> None:
     summary = fetch_daily_prices(as_of=args.as_of)
     fetch_volatility_indices(as_of_date)
     run_daily_macro_sync(today=args.as_of)
+    sync_dividends(as_of=args.as_of)
     logger.info(
         f"prices fetched={len(summary['fetched'])} "
         f"skipped={len(summary['skipped_unresolved'])} errors={len(summary['errors'])}"
