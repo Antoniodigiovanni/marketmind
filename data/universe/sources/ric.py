@@ -29,7 +29,7 @@ RIC_OVERRIDES: dict[str, str] = {
     "FTKn.DE": "FTK.DE",  # Flatexdegiro
     "G1AG.DE": "G1A.DE",  # GEA
     "HMb.ST": "HM-B.ST",  # Hennes & Mauritz B
-    "HNKG_p.DE": "HNKG.DE",  # Henkel pref
+    "HNKG_p.DE": "1HEN3.MI",  # Henkel pref (HNKG.DE has no Yahoo data; Milan line is quoted)
     "ICAG.L": "IAG.L",  # IAG
     "INGP.WA": "ING.WA",  # ING Bank Slaski
     "ITPG.MI": "IP.MI",  # Interpump

@@ -83,7 +83,7 @@ def test_ric_to_yahoo_verified_override_table() -> None:
         "FTKn.DE": "FTK.DE",  # Flatexdegiro
         "G1AG.DE": "G1A.DE",  # GEA
         "HMb.ST": "HM-B.ST",  # Hennes & Mauritz B
-        "HNKG_p.DE": "HNKG.DE",  # Henkel pref
+        "HNKG_p.DE": "1HEN3.MI",  # Henkel pref (quoted Milan line)
         "ICAG.L": "IAG.L",  # IAG
         "INGP.WA": "ING.WA",  # ING Bank Slaski
         "ITPG.MI": "IP.MI",  # Interpump
