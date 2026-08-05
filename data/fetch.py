@@ -11,8 +11,7 @@ import polars as pl
 from loguru import logger
 
 from data.db.init import DEFAULT_DB_PATH
-from data.sources.ecb import fetch_series as fetch_ecb_series
-from data.sources.fred import fetch_series as fetch_fred_series
+from data.macro.fetch import run_daily_macro_sync
 from data.sources.yfinance import fetch_ohlcv
 from data.universe.loader import UNIVERSE_DIR, get_universe
 
@@ -21,11 +20,6 @@ PRICES_DIR = ROOT_DIR / "data" / "raw" / "prices"
 MACRO_DIR = ROOT_DIR / "data" / "raw" / "macro"
 HISTORY_START = "2015-01-01"
 
-FRED_SERIES = ["DGS10", "BAMLH0A0HYM2", "CPIAUCSL"]
-ECB_SERIES = {
-    "deposit": "FM.B.U2.EUR.FR.BB.U2.EUR.MR.R",
-    "eurusd": "EXR.D.USD.EUR.SP00.A",
-}
 VOL_INDICES = ["^VIX", "^VSTOXX"]
 
 
@@ -162,27 +156,6 @@ def fetch_volatility_indices(as_of: dt.date, macro_dir: Path = MACRO_DIR) -> Non
             subset.write_parquet(macro_dir / f"{symbol}.parquet")
 
 
-def fetch_macro_series(as_of: dt.date, macro_dir: Path = MACRO_DIR) -> None:
-    """Fetch FRED/ECB macro series into data/raw/macro/ (best effort)."""
-    macro_dir.mkdir(parents=True, exist_ok=True)
-    start = (as_of - dt.timedelta(days=400)).isoformat()
-    end = (as_of + dt.timedelta(days=1)).isoformat()
-
-    for series_id in FRED_SERIES:
-        try:
-            frame = fetch_fred_series(series_id, start, end)
-            frame.write_parquet(macro_dir / f"{series_id}.parquet")
-        except Exception as exc:  # noqa: BLE001 - missing key/network must not block prices
-            logger.warning(f"FRED fetch failed for {series_id}: {exc}")
-
-    for name, key in ECB_SERIES.items():
-        try:
-            frame = fetch_ecb_series(key, start, end)
-            frame.write_parquet(macro_dir / f"{name}.parquet")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"ECB fetch failed for {name}: {exc}")
-
-
 def main() -> None:
     """Run the daily price/macro refresh."""
     parser = argparse.ArgumentParser(description="Daily price + macro refresh")
@@ -192,7 +165,7 @@ def main() -> None:
     as_of_date = dt.date.fromisoformat(args.as_of)
     summary = fetch_daily_prices(as_of=args.as_of)
     fetch_volatility_indices(as_of_date)
-    fetch_macro_series(as_of_date)
+    run_daily_macro_sync(today=args.as_of)
     logger.info(
         f"prices fetched={len(summary['fetched'])} "
         f"skipped={len(summary['skipped_unresolved'])} errors={len(summary['errors'])}"

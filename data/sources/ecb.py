@@ -5,41 +5,38 @@ from __future__ import annotations
 import polars as pl
 import requests
 
-ECB_SDW_URL = "https://sdw-wsrest.ecb.europa.eu/service/data"
+ECB_DATA_URL = "https://data-api.ecb.europa.eu/service/data"
 
 
 def fetch_series(series_key: str, start: str, end: str) -> pl.DataFrame:
     """Fetch a time series from the ECB SDW REST API.
 
     Args:
-        series_key: ECB SDW series key (e.g. 'FM.B.U2.EUR.FR.BB.U2.EUR.MR.R').
+        series_key: Full SDMX series path including dataflow, e.g.
+            'EXR/D.USD.EUR.SP00.A'.
         start: Start date string (YYYY-MM-DD).
         end: End date string (YYYY-MM-DD).
 
     Returns:
-        DataFrame with columns [date, series_id, value].
+        DataFrame with columns [date, value] sorted by date. Missing
+        observations are NULL.
 
     Raises:
         requests.HTTPError: On non-2xx response from ECB API.
     """
-    resp = requests.get(
-        f"{ECB_SDW_URL}/{series_key}",
-        params={"startPeriod": start, "endPeriod": end, "format": "jsondata"},
+    response = requests.get(
+        f"{ECB_DATA_URL}/{series_key}",
+        params={"startPeriod": start, "endPeriod": end, "format": "csvdata"},
         timeout=30,
     )
-    resp.raise_for_status()
+    response.raise_for_status()
 
-    payload = resp.json()
-    observations = next(iter(payload["dataSets"][0]["series"].values()))["observations"]
-    dates = [
-        value["id"][:10] for value in payload["structure"]["dimensions"]["observation"][0]["values"]
-    ]
-    values = [float(observations[str(i)][0]) for i in range(len(observations))]
-
-    return pl.DataFrame(
-        {
-            "date": dates[: len(values)],
-            "series_id": [series_key] * len(values),
-            "value": values,
-        }
-    ).with_columns(pl.col("date").str.to_date())
+    if not response.content.strip():
+        return pl.DataFrame(schema={"date": pl.Date, "value": pl.Float64})
+    frame = pl.read_csv(response.content)
+    if frame.is_empty():
+        return pl.DataFrame(schema={"date": pl.Date, "value": pl.Float64})
+    return frame.select(
+        pl.col("TIME_PERIOD").str.to_date().alias("date"),
+        pl.col("OBS_VALUE").cast(pl.Float64).alias("value"),
+    ).sort("date")
