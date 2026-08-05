@@ -24,6 +24,113 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_content_hash ON articles (content
 CREATE        INDEX IF NOT EXISTS idx_articles_ticker_date  ON articles (ticker, published_at);
 
 
+-- ── SEC filings ─────────────────────────────────────────────────────────────
+-- One row per EDGAR filing for covered form types. filed_at is the
+-- point-in-time anchor (when the market could see it); period_of_report is
+-- what the filing refers to.
+
+CREATE TABLE IF NOT EXISTS filings (
+    id               VARCHAR PRIMARY KEY,   -- uuid4 hex
+    accession_number VARCHAR NOT NULL,      -- EDGAR accession, no dashes
+    cik              VARCHAR NOT NULL,      -- 10-digit issuer CIK
+    ticker           VARCHAR,               -- resolved at ingest
+    form_type        VARCHAR NOT NULL,      -- '10-K', '10-Q', '8-K', '3', '4', '5', '13F-HR', ...
+    filed_at         DATE NOT NULL,         -- filing date (point-in-time anchor)
+    period_of_report DATE,                  -- report period / event date
+    primary_document VARCHAR,               -- archive document filename
+    url              VARCHAR NOT NULL,
+    url_hash         VARCHAR NOT NULL,      -- sha256(url)
+    text_path        VARCHAR,               -- path under data/raw/filings/
+    text_hash        VARCHAR,               -- sha256(normalized text) / raw XML
+    size_bytes       INTEGER,
+    status           VARCHAR NOT NULL DEFAULT 'fetched',
+    article_id       VARCHAR REFERENCES articles(id),  -- set when queued for fact extraction
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (accession_number, cik)
+);
+
+CREATE INDEX IF NOT EXISTS idx_filings_ticker_date ON filings (ticker, filed_at);
+CREATE INDEX IF NOT EXISTS idx_filings_form_type   ON filings (form_type);
+CREATE INDEX IF NOT EXISTS idx_filings_status      ON filings (status);
+
+
+-- ── Filing full text (DuckDB FTS input) ──────────────────────────────────────
+CREATE TABLE IF NOT EXISTS filing_text (
+    filing_id  VARCHAR PRIMARY KEY REFERENCES filings(id),
+    text       VARCHAR NOT NULL,
+    indexed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
+-- ── Insider forms 3/4/5 ──────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS insider_transactions (
+    id                    VARCHAR PRIMARY KEY,
+    filing_id             VARCHAR NOT NULL REFERENCES filings(id),
+    ticker                VARCHAR NOT NULL,
+    owner_name            VARCHAR NOT NULL,
+    owner_cik             VARCHAR,
+    owner_title           VARCHAR,
+    security_title        VARCHAR NOT NULL,
+    transaction_date      DATE,
+    deemed_execution_date DATE,
+    transaction_code      VARCHAR,           -- 'P' | 'S' | 'A' | 'D' | ...
+    shares_transacted     DOUBLE,
+    price_per_share       DOUBLE,
+    shares_held_after     DOUBLE,
+    direct_or_indirect    VARCHAR,           -- 'D' | 'I'
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_insider_tx_ticker_date
+    ON insider_transactions (ticker, transaction_date);
+
+CREATE TABLE IF NOT EXISTS insider_holdings (
+    id                 VARCHAR PRIMARY KEY,
+    filing_id          VARCHAR NOT NULL REFERENCES filings(id),
+    ticker             VARCHAR NOT NULL,
+    owner_name         VARCHAR NOT NULL,
+    owner_cik          VARCHAR,
+    owner_title        VARCHAR,
+    security_title     VARCHAR NOT NULL,
+    ref_date           DATE,                 -- transaction / report date
+    shares_held_after  DOUBLE,
+    direct_or_indirect VARCHAR,
+    form_type          VARCHAR NOT NULL,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_insider_holdings_ticker_date
+    ON insider_holdings (ticker, ref_date);
+
+
+-- ── 13F filings (metadata) and holdings (Parquet-backed view) ───────────────
+CREATE TABLE IF NOT EXISTS form13f_filings (
+    id            VARCHAR PRIMARY KEY,
+    filing_id     VARCHAR NOT NULL REFERENCES filings(id),
+    filer_cik     VARCHAR NOT NULL,
+    filer_name    VARCHAR,
+    report_period DATE NOT NULL,             -- quarter end
+    total_value   DOUBLE,                    -- USD
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_13f_filings_period ON form13f_filings (report_period);
+
+-- Holdings live in data/raw/13f/{year}/Q{n}.parquet. There is deliberately no
+-- view here: DuckDB evaluates read_parquet globs eagerly at CREATE VIEW time
+-- and errors when no partitions exist yet. Tools read the guarded glob
+-- directly (see server.mcp.get_13f_holdings).
+
+
+-- ── Backfill checkpoints ─────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS fetch_checkpoints (
+    source       VARCHAR NOT NULL,
+    target_key   VARCHAR NOT NULL,
+    processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (source, target_key)
+);
+
+
 -- ── Ticker facts ──────────────────────────────────────────────────────────────
 -- Versioned knowledge base. Facts are never mutated — only superseded.
 -- Always query with a point-in-time filter to avoid look-ahead bias:
@@ -53,6 +160,7 @@ CREATE INDEX IF NOT EXISTS idx_facts_type          ON ticker_facts (fact_type);
 CREATE TABLE IF NOT EXISTS agent_runs (
     id               VARCHAR PRIMARY KEY,
     run_date         DATE        NOT NULL,
+    job_type         VARCHAR     NOT NULL DEFAULT 'news',   -- 'news' | 'filings'
     started_at       TIMESTAMPTZ NOT NULL,
     finished_at      TIMESTAMPTZ,
     articles_fetched INTEGER,
@@ -60,6 +168,11 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     articles_redundant INTEGER,  -- Level-2 (LLM) redundant
     facts_written    INTEGER,
     facts_superseded INTEGER,
+    filings_fetched  INTEGER,
+    filings_parsed   INTEGER,
+    filings_skipped  INTEGER,
+    insider_rows     INTEGER,
+    form13f_rows     INTEGER,
     error            VARCHAR     -- NULL if run succeeded
 );
 
