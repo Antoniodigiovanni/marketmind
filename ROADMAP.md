@@ -102,23 +102,25 @@ write through MCP, and free-text views are structured automatically.
       scope the same day
 
 ### 1.3 Price + macro fetch (daily)
-- [ ] `data/sources/yfinance.py::fetch_ohlcv` — adjusted OHLCV, EU tickers via
-      exchange suffixes (`ASML.AS`, `SAP.DE`), UTC timestamps
-- [ ] Exchange calendars (`exchange_calendars`) for US/EU sessions — each day
+- [x] `data/sources/yfinance.py::fetch_ohlcv` — adjusted OHLCV + volume, EU
+      tickers via exchange suffixes (`ASML.AS`, `SAP.DE`), UTC timestamps
+- [x] Exchange calendars (`exchange_calendars`) for US/EU sessions — each day
       fetches the correct last close per exchange
-- [ ] Incremental daily append after the US close (~23:00 UTC); one-time bulk backfill
-- [ ] Volatility indices fetched daily: `^VIX` (US) and `^VSTOXX` (Eurostoxx)
-      via yfinance; `VIXCLS` cross-check from FRED
-- [ ] `data/sources/fred.py` — `DGS10`, `BAMLH0A0HYM2`, `CPIAUCSL`
-- [ ] `data/sources/ecb.py` — deposit rate, EUR/USD
-- [ ] Tests: mocked HTTP/yfinance responses, schema + UTC index asserted
+- [x] Incremental daily append after the US close (~23:00 UTC); one-time bulk
+      backfill from 2015 via `uv run python data/fetch.py`
+- [x] Volatility indices fetched daily: `^VIX` (US) and `^VSTOXX` (Eurostoxx)
+      via yfinance into `data/raw/macro/`
+- [ ] `VIXCLS` cross-check from FRED (optional)
+- [x] `data/sources/fred.py` — `DGS10`, `BAMLH0A0HYM2`, `CPIAUCSL`
+- [x] `data/sources/ecb.py` — deposit rate, EUR/USD
+- [x] Tests: mocked HTTP/yfinance responses, schema + UTC index asserted
 
 ### 1.3b Realized volatility (derived)
-- [ ] `data/processed/volatility.py` — rolling annualised realized volatility
+- [x] `data/processed/volatility.py` — rolling annualised realized volatility
       (20d and 60d windows) from adjusted close returns → `volatility.parquet`
-- [ ] `get_volatility` MCP tool returns per-ticker realized vol plus market
+- [x] `get_volatility` MCP tool returns per-ticker realized vol plus market
       implied vol (VIX / VSTOXX) for the same window
-- [ ] Test: known return series → known realized vol output
+- [x] Test: known return series → known realized vol output
 
 ### 1.4 News ingest (RSS-first)
 - [ ] `data/sources/rss.py` — Google News RSS per ticker, Yahoo Finance RSS per
