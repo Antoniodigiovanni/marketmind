@@ -68,17 +68,21 @@ def resolve_universe(
     check = checker if checker is not None else symbol_has_data
     stats = {"valid": 0, "review": 0, "unresolved": 0}
 
-    for row in _members(universe_dir).to_dicts():
+    def _resolve(row: dict[str, object]) -> dict[str, str] | None:
+        """Resolve one member, trying candidates then the company name."""
         id_type, id_value = _id_for(row)
         candidates = ric_variants(id_value) if id_type == "TICKER" else [id_value]
-        found = None
         for candidate in candidates:
             hit = search(candidate)
             if hit:
-                found = hit
-                break
-        if not found and row.get("name"):
-            found = search(str(row["name"]), name_hint=str(row["name"]))
+                return hit
+        if row.get("name"):
+            return search(str(row["name"]), name_hint=str(row["name"]))
+        return None
+
+    def _upsert(row: dict[str, object], found: dict[str, str] | None) -> str:
+        """Upsert a symbol_map row; returns the assigned status."""
+        id_type, id_value = _id_for(row)
         if not found:
             status = "unresolved"
             symbol = str(row["ticker"])
@@ -87,7 +91,6 @@ def resolve_universe(
             symbol = found["symbol"]
             name = found.get("name") or str(row["name"])
             status = "valid" if check(symbol) else "review"
-
         conn.execute(
             """
             INSERT INTO symbol_map (id_type, id_value, provider, symbol, name, status, last_validated_at)
@@ -101,7 +104,22 @@ def resolve_universe(
             """,
             [id_type, id_value, symbol, name, status],
         )
+        return status
+
+    unresolved_rows: list[dict[str, object]] = []
+    for row in _members(universe_dir).to_dicts():
+        status = _upsert(row, _resolve(row))
         stats[status] += 1
+        if status == "unresolved":
+            unresolved_rows.append(row)
+
+    # Second pass: transient lookups (rate limiting) often clear on retry.
+    for row in unresolved_rows:
+        status = _upsert(row, _resolve(row))
+        if status == "unresolved":
+            continue
+        stats[status] += 1
+        stats["unresolved"] -= 1
 
     return stats
 

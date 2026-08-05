@@ -138,6 +138,33 @@ def test_candidate_variants_resolve_share_class(tmp_path) -> None:
         conn.close()
 
 
+def test_unresolved_members_are_retried(tmp_path) -> None:
+    _write_universe(tmp_path)
+    counts: dict[str, int] = {}
+
+    def searcher(id_value: str, **kwargs: object) -> dict[str, str] | None:
+        counts[id_value] = counts.get(id_value, 0) + 1
+        if id_value == "NOPE" and counts["NOPE"] >= 2:
+            return {"symbol": "REAL", "name": "Real Company"}
+        return None
+
+    resolve.search_by_id = searcher
+    resolve.symbol_has_data = lambda symbol: True  # noqa: E731
+
+    conn = init_db(":memory:")
+    try:
+        stats = resolve.resolve_universe(conn, universe_dir=tmp_path)
+        assert stats["valid"] == 1
+        assert stats["unresolved"] == 3
+        row = conn.execute(
+            "SELECT symbol, status FROM symbol_map WHERE id_value = 'NOPE'"
+        ).fetchone()
+        assert row == ("REAL", "valid")
+        assert counts["NOPE"] == 2
+    finally:
+        conn.close()
+
+
 def test_chart_failure_marks_review(tmp_path) -> None:
     _write_universe(tmp_path)
     _fake_lookup({"037833100": {"symbol": "AAPL", "name": "Apple Inc."}})

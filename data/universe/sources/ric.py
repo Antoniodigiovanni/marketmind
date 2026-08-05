@@ -42,6 +42,10 @@ RIC_OVERRIDES: dict[str, str] = {
     "SRENH.SW": "SREN.SW",  # Swiss Re
     "VOWG_p.DE": "VOW3.DE",  # Volkswagen pref
     "WDPP.BR": "WDP.BR",  # WDP
+    "4HEI.TI": "HEI.DE",  # Heidelberg Materials
+    "HBANC.SW": "HBAN.SW",  # Helvetia
+    "KYGa.I": "KRZ.IR",  # Kerry Group
+    "SJP.L": "STJ.L",  # St James's Place (renamed symbol)
 }
 
 
