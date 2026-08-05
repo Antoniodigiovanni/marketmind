@@ -455,6 +455,60 @@ def get_13f_holdings(
 
 
 @mcp.tool()
+def get_macro(
+    series: str,
+    start: str | None = None,
+    end: str | None = None,
+) -> list[dict[str, object]]:
+    """Return macro series observations (point-in-time rows).
+
+    Args:
+        series: Macro series id from the registry (e.g. 'DGS10', 'VIXCLS',
+            'EURUSD', 'ESTR'). See data/macro/series.py for the full list.
+        start: Optional earliest observation date (YYYY-MM-DD).
+        end: Optional latest observation date (YYYY-MM-DD). Pass end=as_of
+            for point-in-time reads.
+
+    Returns:
+        List of {series, name, unit, frequency, date, value} ordered by date.
+        Empty if the series is unknown or its parquet file is missing.
+    """
+    from data.macro.series import get_series
+    from data.macro.store import series_path
+
+    meta = get_series(series)
+    if meta is None:
+        return []
+    path = series_path(series, MACRO_DIR)
+    if not path.exists():
+        return []
+
+    conn = duckdb.connect()
+    try:
+        query = "SELECT date, value FROM read_parquet(?)"
+        params: list[object] = [str(path)]
+        if start or end:
+            query += " WHERE date BETWEEN ? AND ?"
+            params += [start or "1900-01-01", end or "2999-12-31"]
+        query += " ORDER BY date"
+        rows = conn.execute(query, params).fetchall()
+    finally:
+        conn.close()
+
+    records = _rows_to_dicts(rows, ["date", "value"])
+    for record in records:
+        record.update(
+            {
+                "series": meta.id,
+                "name": meta.name,
+                "unit": meta.unit,
+                "frequency": meta.frequency,
+            }
+        )
+    return records
+
+
+@mcp.tool()
 def get_facts(ticker: str, as_of: str) -> list[dict[str, object]]:
     """Return facts for a ticker as of a date (point-in-time safe).
 
