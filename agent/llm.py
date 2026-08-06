@@ -103,9 +103,7 @@ class ChatClient:
                     timeout=self.timeout_seconds,
                 )
                 if response.status_code >= 400:
-                    raise LLMError(
-                        f"chat API error {response.status_code}: {response.text[:500]}"
-                    )
+                    raise LLMError(f"chat API error {response.status_code}: {response.text[:500]}")
                 data = response.json()
                 return str(data["choices"][0]["message"]["content"])
         raise LLMError("chat API request failed")  # pragma: no cover - unreachable

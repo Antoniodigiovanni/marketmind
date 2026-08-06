@@ -95,7 +95,9 @@ def test_companies_and_aggregate_facts_schema() -> None:
             "description_source",
         } <= company_cols
 
-        agg_cols = {row[1] for row in conn.execute("PRAGMA table_info('aggregate_facts')").fetchall()}
+        agg_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info('aggregate_facts')").fetchall()
+        }
         assert {
             "id",
             "dimension",

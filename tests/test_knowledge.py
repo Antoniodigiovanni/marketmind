@@ -166,9 +166,7 @@ def test_write_fact_embeds_when_vector_store_given(conn) -> None:
     ).fetchone()[0]
     assert embedding_id == f"fact:{fact_id}"
 
-    similar = search_similar_facts(
-        "AAPL", "Apple guidance", "2026-01-03", conn, vector_store=store
-    )
+    similar = search_similar_facts("AAPL", "Apple guidance", "2026-01-03", conn, vector_store=store)
     assert similar and similar[0]["id"] == fact_id
 
 

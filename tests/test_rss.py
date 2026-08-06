@@ -60,7 +60,12 @@ def test_yahoo_finance_url_contains_symbol() -> None:
 
 
 def test_parse_feed_extracts_article_fields() -> None:
-    articles = parse_feed(_feed_bytes("https://example.com/1", "https://example.com/2"), "google-news", "AAPL", limit=10)
+    articles = parse_feed(
+        _feed_bytes("https://example.com/1", "https://example.com/2"),
+        "google-news",
+        "AAPL",
+        limit=10,
+    )
 
     assert len(articles) == 2
     assert articles[0].ticker == "AAPL"
@@ -71,7 +76,12 @@ def test_parse_feed_extracts_article_fields() -> None:
 
 
 def test_parse_feed_honours_limit() -> None:
-    articles = parse_feed(_feed_bytes("https://example.com/1", "https://example.com/2"), "google-news", "AAPL", limit=1)
+    articles = parse_feed(
+        _feed_bytes("https://example.com/1", "https://example.com/2"),
+        "google-news",
+        "AAPL",
+        limit=1,
+    )
 
     assert len(articles) == 1
 
@@ -93,9 +103,7 @@ def test_fetch_company_news_combines_feeds_and_deduplicates_urls() -> None:
 
 
 def test_fetch_company_news_skips_failed_feed() -> None:
-    session = _FakeSession(
-        {yahoo_finance_url("AAPL"): _feed_bytes("https://example.com/y1")}
-    )
+    session = _FakeSession({yahoo_finance_url("AAPL"): _feed_bytes("https://example.com/y1")})
 
     articles = fetch_company_news("AAPL", "Apple Inc", session=session, max_per_feed=10)
 

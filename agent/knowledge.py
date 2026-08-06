@@ -316,8 +316,16 @@ def write_aggregate_fact(
              valid_from, evidence)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        [fact_id, dimension, dimension_key, fact_type, statement, confidence,
-         valid_from_date, json.dumps(evidence)],
+        [
+            fact_id,
+            dimension,
+            dimension_key,
+            fact_type,
+            statement,
+            confidence,
+            valid_from_date,
+            json.dumps(evidence),
+        ],
     )
 
     if supersedes_id:
