@@ -118,7 +118,9 @@ Structured queryable data lives in **DuckDB** (`data/db/research.duckdb`):
 | Table | Purpose |
 |---|---|
 | `articles` | Deduplication registry and ingest audit trail |
+| `companies` | Cached per-company metadata: name, country, sector, description |
 | `ticker_facts` | Versioned knowledge base — one row per extracted fact |
+| `aggregate_facts` | Versioned sector/geography facts derived from ticker facts |
 | `agent_runs` | Audit log for every job execution |
 | `market_views` | Free-text market snapshots written by the harness |
 | `market_view_structures` | Structured JSON derived from free-text views |
@@ -136,7 +138,8 @@ Runs daily as a batch job. Steps in order:
 
 1. **Fetch** — `data/sources/rss.py` + `data/sources/sec.py` pull articles for
    all universe tickers. Raw JSON is written to `data/raw/news/{date}.ndjson`
-   (immutable after write).
+   (immutable after write). Company descriptions are cached in `companies`
+   (Wikipedia, keyless) and included as model context.
 2. **Level-1 dedup** — skip any article whose `url_hash` or `content_hash`
    already exists in `articles` table. Cheap, no LLM call.
 3. **Pre-score** — `pre_score = source_credibility[source] × exp(-λ × days_old)`.
@@ -150,7 +153,10 @@ Runs daily as a batch job. Steps in order:
    score (LLM adjusts pre_score based on language hedging).
 6. **Write** — new facts inserted into `ticker_facts`; superseded facts get
    `valid_until`; statements embedded in ChromaDB.
-7. **Audit** — run metadata written to `agent_runs`.
+7. **Aggregate** — the day's new facts are grouped by sector and country; a
+   second model pass writes group-level statements into `aggregate_facts`
+   (prompt: `agent/prompts/aggregate_fact_extraction.md`).
+8. **Audit** — run metadata written to `agent_runs`.
 
 ## Fact store conventions
 
@@ -207,8 +213,9 @@ written incrementally by the harness.
 - All prompt templates live in `agent/prompts/*.md` — never hardcode prompts in
   Python strings.
 - LLM calls wrapped with `tenacity` retry and explicit timeout.
-- Model: `claude-sonnet-4-5` (configurable via `LLM_MODEL` env var). Document in
-  a comment if deviating.
+- Model: `deepseek-chat` via the DeepSeek-compatible OpenAI-style endpoint
+  (configurable via `LLM_MODEL` / `LLM_BASE_URL`; key from `DEEPSEEK_API_KEY`).
+  Document in a comment if deviating.
 - Every agent tool has a corresponding test in `tests/test_agent_tools.py` using
   mocked responses. No live API calls in tests.
 
@@ -226,8 +233,9 @@ written incrementally by the harness.
 ## Env vars (load via python-dotenv, never commit .env)
 
 ```
-ANTHROPIC_API_KEY
-LLM_MODEL               # default: claude-sonnet-4-5
+DEEPSEEK_API_KEY        # OpenAI-compatible (DeepSeek) chat API key
+LLM_BASE_URL            # default: https://api.deepseek.com
+LLM_MODEL               # default: deepseek-chat
 FRED_API_KEY
 TELEGRAM_BOT_TOKEN      # owned by the harness, not marketmind
 TELEGRAM_CHAT_ID
