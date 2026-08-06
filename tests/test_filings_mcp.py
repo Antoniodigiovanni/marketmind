@@ -7,6 +7,7 @@ import pytest
 
 import server.mcp as mcp_mod
 from data.db.init import init_db
+from data.filings.esef import insert_esef_filing
 from data.filings.store import insert_filing, insert_filing_text
 
 
@@ -31,6 +32,29 @@ def _seed_filing(
         primary_document=f"{accession}.htm",
         url=f"https://www.sec.gov/Archives/edgar/data/0000320193/{accession}/{accession}.htm",
         ticker=ticker,
+    )
+
+
+def _seed_esef(
+    conn, *, fxo_id: str, lei: str, ticker: str, country: str, filed_at: str
+) -> str:
+    return insert_esef_filing(
+        conn,
+        fxo_id=fxo_id,
+        lei=lei,
+        ticker=ticker,
+        entity_name="Issuer",
+        country=country,
+        filing_system="ESEF",
+        filed_at=filed_at,
+        period_end="2026-06-30",
+        primary_document=f"{fxo_id}.zip",
+        package_url=f"https://x/{fxo_id}.zip",
+        xhtml_url=None,
+        json_url=None,
+        text_path=f"filings-eu/{lei}/{fxo_id}.zip",
+        text_hash="deadbeef",
+        size_bytes=10,
     )
 
 
@@ -118,6 +142,32 @@ def test_get_insider_transactions_and_holdings(monkeypatch, db_file) -> None:
     holdings = mcp_mod.get_insider_holdings("AAPL", as_of="2026-05-02")
     assert holdings[0]["shares_held_after"] == 9500.0
     assert mcp_mod.get_insider_holdings("AAPL", as_of="2026-05-01") == []
+
+
+def test_get_european_filings_filters_and_orders(monkeypatch, db_file) -> None:
+    conn = duckdb.connect(db_file)
+    _seed_esef(conn, fxo_id="ESEF/IT/1", lei="815600AB", ticker="BAMI.MI", country="IT", filed_at="2022-01-10")
+    _seed_esef(conn, fxo_id="ESEF/FR/1", lei="969500Y", ticker="SOPR.PA", country="FR", filed_at="2023-02-01")
+    conn.close()
+    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
+
+    by_country = mcp_mod.get_european_filings(country="IT")
+    assert [r["fxo_id"] for r in by_country] == ["ESEF/IT/1"]
+
+    by_ticker = mcp_mod.get_european_filings(ticker="SOPR.PA")
+    assert by_ticker[0]["country"] == "FR"
+
+    by_lei = mcp_mod.get_european_filings(lei="815600AB")
+    assert by_lei[0]["ticker"] == "BAMI.MI"
+
+    window = mcp_mod.get_european_filings(as_of="2022-12-31")
+    assert [r["fxo_id"] for r in window] == ["ESEF/IT/1"]
+
+
+def test_get_european_filings_empty(monkeypatch, db_file) -> None:
+    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
+    assert mcp_mod.get_european_filings() == []
+    assert mcp_mod.get_european_filings(ticker="NOPE") == []
 
 
 def test_get_13f_holdings_reads_partitions(monkeypatch, tmp_path, db_file) -> None:
