@@ -120,7 +120,7 @@ if [[ -n "$ENV_FILE" ]]; then
   log "installed .env from $ENV_FILE"
 elif [[ ! -f "$INSTALL_DIR/.env" ]]; then
   install -o "$APP_USER" -g "$APP_USER" -m 0600 "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
-  log "WARNING: created .env from the example — set real secrets (DEEPSEEK_API_KEY, "
+  log "WARNING: created .env from the example — set real secrets (AI_API_KEY, "
   log "         FRED_API_KEY) and rerun this installer"
 else
   log "keeping existing .env"

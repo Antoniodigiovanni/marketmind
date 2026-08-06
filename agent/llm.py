@@ -28,7 +28,7 @@ class LLMError(RuntimeError):
 class ChatClient:
     """Thin client for the OpenAI-compatible chat completions endpoint.
 
-    Configured via env vars: DEEPSEEK_API_KEY (or LLM_API_KEY),
+    Configured via env vars: AI_API_KEY (or LLM_API_KEY),
     LLM_BASE_URL (default https://api.deepseek.com), LLM_MODEL
     (default deepseek-chat). A session may be injected for tests.
     """
@@ -44,9 +44,9 @@ class ChatClient:
         session: requests.Session | None = None,
     ) -> None:
         """Initialise the client from explicit args or environment variables."""
-        self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY") or os.getenv("LLM_API_KEY")
+        self.api_key = api_key or os.getenv("AI_API_KEY") or os.getenv("LLM_API_KEY")
         if not self.api_key:
-            raise LLMError("no API key: set DEEPSEEK_API_KEY or LLM_API_KEY")
+            raise LLMError("no API key: set AI_API_KEY or LLM_API_KEY")
         self.base_url = (base_url or os.getenv("LLM_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
         self.model = model or os.getenv("LLM_MODEL") or DEFAULT_MODEL
         self.timeout_seconds = int(os.getenv("LLM_TIMEOUT_SECONDS", timeout_seconds))

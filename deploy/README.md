@@ -72,7 +72,7 @@ sudo bash deploy/install.sh   # or: REPO_URL=git@github.com:... sudo -E bash dep
 3. Installs the `uv` binary (static, arch-aware) to `/usr/local/bin`.
 4. `uv sync --frozen` (dependencies locked by `uv.lock`).
 5. Installs `.env` — from `ENV_FILE` if given, otherwise from `.env.example`
-   (rerun after adding real secrets: `DEEPSEEK_API_KEY`, `FRED_API_KEY`).
+   (rerun after adding real secrets: `AI_API_KEY`, `FRED_API_KEY`).
 6. Initialises `data/db/research.duckdb` from `schema.sql`.
 7. Installs hardened systemd units and enables timers.
 
