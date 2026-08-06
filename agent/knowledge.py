@@ -265,6 +265,130 @@ def get_company_description(
     return row[0] if row else None
 
 
+def write_company_profile(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    ticker: str,
+    description: str,
+    products_services: list[str],
+    valid_from: str,
+    website_url: str | None = None,
+    sources: dict[str, object] | None = None,
+    generated_by: str = "deepseek-chat",
+    supersedes_id: str | None = None,
+) -> str:
+    """Write a versioned generated company profile.
+
+    If supersedes_id is provided, sets valid_until on the superseded row.
+
+    Args:
+        conn: DuckDB connection.
+        ticker: Company ticker.
+        description: Generated one-paragraph profile.
+        products_services: Category strings (≤12).
+        valid_from: Date the profile became valid (YYYY-MM-DD).
+        website_url: Official website used as input.
+        sources: JSON-serialisable provenance dict.
+        generated_by: Model id that produced the profile.
+        supersedes_id: Prior profile version this one replaces, if any.
+
+    Returns:
+        ID of the newly created profile row.
+
+    Raises:
+        ValueError: On invalid dates or a non-list products_services.
+    """
+    valid_from_date = dt.date.fromisoformat(valid_from)
+    if not isinstance(products_services, list):
+        raise ValueError("products_services must be a list")
+
+    profile_id = uuid.uuid4().hex
+    conn.execute(
+        """
+        INSERT INTO company_profiles
+            (id, ticker, description, products_services, website_url, sources,
+             generated_by, valid_from)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            profile_id,
+            ticker,
+            description,
+            json.dumps(products_services),
+            website_url,
+            json.dumps(sources or {}),
+            generated_by,
+            valid_from_date,
+        ],
+    )
+    if supersedes_id:
+        conn.execute(
+            """
+            UPDATE company_profiles
+            SET valid_until = ?
+            WHERE id = ? AND valid_until IS NULL
+            """,
+            [valid_from_date, supersedes_id],
+        )
+    return profile_id
+
+
+def get_current_company_profile(
+    conn: duckdb.DuckDBPyConnection,
+    ticker: str,
+    as_of: str,
+) -> dict[str, object] | None:
+    """Return the company profile valid as of a date, or None.
+
+    Point-in-time safe: only profiles where valid_from <= as_of AND
+    (valid_until IS NULL OR valid_until > as_of) are considered.
+
+    Args:
+        conn: DuckDB connection.
+        ticker: Company ticker.
+        as_of: Date string (YYYY-MM-DD).
+
+    Returns:
+        Profile dict or None when no version is current as of the date.
+
+    Raises:
+        ValueError: If as_of is missing or invalid.
+    """
+    if not as_of:
+        raise ValueError(
+            "as_of is required — querying profiles without a date is a look-ahead violation"
+        )
+    as_of_date = dt.date.fromisoformat(as_of)
+
+    row = conn.execute(
+        """
+        SELECT id, ticker, description, products_services, website_url, sources,
+               generated_by, valid_from, valid_until
+        FROM company_profiles
+        WHERE ticker = ?
+          AND valid_from <= ?
+          AND (valid_until IS NULL OR valid_until > ?)
+        ORDER BY valid_from DESC
+        LIMIT 1
+        """,
+        [ticker, as_of_date, as_of_date],
+    ).fetchone()
+    if row is None:
+        return None
+
+    return {
+        "id": row[0],
+        "ticker": row[1],
+        "description": row[2],
+        "products_services": json.loads(row[3]) if row[3] else [],
+        "website_url": row[4],
+        "sources": json.loads(row[5]) if row[5] else {},
+        "generated_by": row[6],
+        "valid_from": row[7].isoformat() if row[7] else None,
+        "valid_until": row[8].isoformat() if row[8] else None,
+    }
+
+
 def write_aggregate_fact(
     conn: duckdb.DuckDBPyConnection,
     *,
