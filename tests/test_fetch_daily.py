@@ -63,7 +63,7 @@ def test_fetch_daily_prices_writes_parquet(tmp_path, monkeypatch) -> None:
     assert written.height == 1
 
 
-def test_fetch_daily_prices_skips_unresolved(tmp_path, monkeypatch) -> None:
+def test_fetch_daily_prices_falls_back_to_ticker_when_unresolved(tmp_path, monkeypatch) -> None:
     prices_dir = tmp_path / "prices"
     prices_dir.mkdir()
     monkeypatch.setattr(
@@ -82,12 +82,30 @@ def test_fetch_daily_prices_skips_unresolved(tmp_path, monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(fetch_mod, "symbols_for_universe", lambda conn, members: {})
+    captured: list[list[str]] = []
+
+    def fake_ohlcv(tickers: object, start: str, end: str) -> pl.DataFrame:
+        captured.append(list(tickers))  # type: ignore[arg-type]
+        return pl.DataFrame(
+            {
+                "date": [dt.datetime(2026, 8, 3, 20, 0, tzinfo=dt.UTC)],
+                "ticker": ["NOPE"],
+                "open": [10.0],
+                "high": [11.0],
+                "low": [9.0],
+                "close": [10.5],
+                "volume": [100],
+            }
+        )
+
+    monkeypatch.setattr(fetch_mod, "fetch_ohlcv", fake_ohlcv)
 
     summary = fetch_mod.fetch_daily_prices(
         as_of="2026-08-04", prices_dir=prices_dir, db_path=":memory:"
     )
-    assert summary["fetched"] == []
-    assert summary["skipped_unresolved"] == ["NOPE"]
+    assert captured == [["NOPE"]]
+    assert summary["fetched"] == ["NOPE"]
+    assert summary["skipped_unresolved"] == []
 
 
 def test_fetch_daily_prices_uses_last_trading_day(tmp_path, monkeypatch) -> None:

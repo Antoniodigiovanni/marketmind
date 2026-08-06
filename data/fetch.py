@@ -136,7 +136,10 @@ def fetch_daily_prices(
     errors: list[tuple[str, str]] = []
     for row in members.to_dicts():
         ticker = row["ticker"]
-        symbol = symbols.get(ticker) or row.get("yahoo_symbol")
+        # Prefer the resolved symbol, then the CSV fallback, then the universe
+        # ticker itself (already Yahoo-style for this universe) so an empty
+        # symbol_map never blocks the daily fetch.
+        symbol = symbols.get(ticker) or row.get("yahoo_symbol") or ticker
         if not symbol:
             skipped.append(ticker)
             continue
