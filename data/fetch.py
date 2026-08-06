@@ -11,8 +11,10 @@ import polars as pl
 from loguru import logger
 
 from data.db.init import DEFAULT_DB_PATH
+from data.dividends.fetch import sync_dividends
 from data.macro.fetch import run_daily_macro_sync
 from data.processed.volatility import build_volatility_file
+from data.short_interest.fetch import sync_short_interest
 from data.sources.calendars import exchange_for_suffix, last_trading_day
 from data.sources.yfinance import fetch_ohlcv
 from data.universe.loader import UNIVERSE_DIR, get_universe
@@ -172,6 +174,8 @@ def main() -> None:
     build_volatility_file(PRICES_DIR, PROCESSED_VOL_PATH)
     fetch_volatility_indices(as_of_date)
     run_daily_macro_sync(today=args.as_of)
+    sync_dividends(as_of=args.as_of)
+    sync_short_interest(as_of=args.as_of)
     logger.info(
         f"prices fetched={len(summary['fetched'])} "
         f"skipped={len(summary['skipped_unresolved'])} errors={len(summary['errors'])}"

@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS articles (
     url_hash         VARCHAR NOT NULL,      -- sha256(url), dedup key
     content_hash     VARCHAR NOT NULL,      -- sha256(normalized_text), dedup key
     url              VARCHAR NOT NULL,
-    source           VARCHAR NOT NULL,      -- e.g. 'reuters', 'ft', 'newsapi:bbc-news'
+    source           VARCHAR NOT NULL,      -- e.g. 'google-news', 'yahoo-finance', 'sec:10-K'
     ticker           VARCHAR NOT NULL,      -- primary ticker this article was fetched for
     published_at     TIMESTAMPTZ NOT NULL,
     fetched_at       TIMESTAMPTZ NOT NULL,
