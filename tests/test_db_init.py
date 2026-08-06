@@ -6,7 +6,9 @@ from data.db.init import init_db
 
 EXPECTED_TABLES = {
     "agent_runs",
+    "aggregate_facts",
     "articles",
+    "companies",
     "fetch_checkpoints",
     "filing_text",
     "filings",
@@ -76,5 +78,35 @@ def test_market_views_has_used_fact_ids_column() -> None:
     try:
         view_cols = {row[1] for row in conn.execute("PRAGMA table_info('market_views')").fetchall()}
         assert "used_fact_ids" in view_cols
+    finally:
+        conn.close()
+
+
+def test_companies_and_aggregate_facts_schema() -> None:
+    conn = init_db(":memory:")
+    try:
+        company_cols = {row[1] for row in conn.execute("PRAGMA table_info('companies')").fetchall()}
+        assert {
+            "ticker",
+            "name",
+            "country",
+            "sector",
+            "description",
+            "description_source",
+        } <= company_cols
+
+        agg_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info('aggregate_facts')").fetchall()
+        }
+        assert {
+            "id",
+            "dimension",
+            "dimension_key",
+            "statement",
+            "valid_from",
+            "valid_until",
+            "evidence",
+            "embedding_id",
+        } <= agg_cols
     finally:
         conn.close()

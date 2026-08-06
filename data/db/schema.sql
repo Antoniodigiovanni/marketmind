@@ -154,6 +154,42 @@ CREATE INDEX IF NOT EXISTS idx_facts_ticker_valid  ON ticker_facts (ticker, vali
 CREATE INDEX IF NOT EXISTS idx_facts_type          ON ticker_facts (fact_type);
 
 
+-- ── Companies ────────────────────────────────────────────────────────────────
+-- Cached per-company metadata used as model context during ingest.
+
+CREATE TABLE IF NOT EXISTS companies (
+    ticker             VARCHAR PRIMARY KEY,
+    name               VARCHAR NOT NULL,
+    country            VARCHAR,               -- ISO country code from universe
+    sector             VARCHAR,               -- GICS-style sector from universe (may be NULL)
+    description        VARCHAR,               -- free-text company description
+    description_source VARCHAR,               -- e.g. 'wikipedia'
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
+-- ── Aggregate facts (sector / geography) ─────────────────────────────────────
+-- Versioned like ticker_facts, keyed by dimension + key ('sector'/'geography').
+-- Evidence links back to the ticker_facts rows that support each statement.
+
+CREATE TABLE IF NOT EXISTS aggregate_facts (
+    id            VARCHAR PRIMARY KEY,        -- uuid4 hex
+    dimension     VARCHAR NOT NULL,           -- 'sector' | 'geography'
+    dimension_key VARCHAR NOT NULL,           -- e.g. 'Technology' | 'US'
+    fact_type     VARCHAR NOT NULL,           -- free-form category
+    statement     VARCHAR NOT NULL,
+    confidence    DOUBLE  NOT NULL,           -- 0.0–1.0
+    valid_from    DATE    NOT NULL,
+    valid_until   DATE,                       -- NULL = still current
+    evidence      JSON,                       -- array of ticker_facts ids
+    embedding_id  VARCHAR,                    -- vector store ID
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_aggregate_facts_key
+    ON aggregate_facts (dimension, dimension_key, valid_from, valid_until);
+
+
 -- ── Agent runs ────────────────────────────────────────────────────────────────
 -- Audit log for every ingest pipeline execution.
 
