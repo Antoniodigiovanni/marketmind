@@ -88,7 +88,7 @@ ENV_FILE=/path/to/secrets.env sudo -E bash deploy/install.sh
 | Timer | Schedule | Job |
 |---|---|---|
 | `marketmind-daily.timer` | daily 06:10 (local) | `data/fetch.py` + `agent.ingestion` |
-| `marketmind-universe.timer` | Mondays 06:00 | `data.universe.update` |
+| `marketmind-universe.timer` | Mondays 06:00 | `data.universe.update` + `data.universe.resolve` (fills `symbol_map`, which the daily price fetch requires) |
 | `marketmind-profiles.timer` | annually on 5 Jan, 06:30 | `agent.ingestion --backfill --profiles-only` |
 | `marketmind-backup.timer` | nightly 02:30 | `deploy/backup.sh` → `/srv/marketmind-backups/` (14-day retention) |
 | `marketmind-update.timer` | Mondays 05:30 (opt-in) | `deploy/update.sh` self-update |
