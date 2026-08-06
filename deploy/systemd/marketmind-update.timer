@@ -1,0 +1,10 @@
+[Unit]
+Description=Run marketmind weekly self-update
+
+[Timer]
+OnCalendar=Mon *-*-* 05:30:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
