@@ -1,3 +1,7 @@
+# Local instruction files — never committed
+AGENTS.md
+CLAUDE.md
+
 # Environment
 .env
 *.env.*
