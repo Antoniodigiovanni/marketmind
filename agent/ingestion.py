@@ -16,13 +16,16 @@ import duckdb
 import polars as pl
 from loguru import logger
 
+from agent.company_profile import build_company_profile
 from agent.embeddings import ChromaVectorStore, HashEmbeddingFunction
 from agent.knowledge import (
     get_company_description,
+    get_current_company_profile,
     get_current_facts,
     search_similar_facts,
     upsert_company,
     write_aggregate_fact,
+    write_company_profile,
     write_fact,
 )
 from agent.llm import ChatClient, parse_json_response
@@ -43,6 +46,7 @@ PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 NewsFetcher = Callable[[str, str], list[Article]]
 DescriptionFetcher = Callable[[str], str]
 LLMCallable = Callable[[list[dict[str, str]]], str]
+ProfileBuilder = Callable[[str], dict[str, Any] | None]
 
 
 def _sha256(text: str) -> str:
@@ -135,6 +139,7 @@ def build_extraction_messages(
     article: Article,
     company_name: str,
     description: str,
+    products_services: str,
     sector: str | None,
     country: str | None,
     current_facts: list[dict[str, object]],
@@ -163,6 +168,7 @@ def build_extraction_messages(
         sector=sector or "unknown",
         country=country or "unknown",
         company_description=description or "(no description available)",
+        products_services=products_services or "(none)",
         current_facts=current_block,
         similar_facts=similar_block,
         pre_score=f"{score:.3f}",
@@ -171,6 +177,15 @@ def build_extraction_messages(
         {"role": "system", "content": "You are a precise market-research fact extractor."},
         {"role": "user", "content": prompt},
     ]
+
+
+def _default_profile_builder(llm: LLMCallable) -> ProfileBuilder:
+    """Return a profile builder bound to the injected chat client."""
+
+    def builder(name: str) -> dict[str, Any] | None:
+        return build_company_profile(name, llm=llm, model="deepseek-chat")
+
+    return builder
 
 
 def build_aggregate_messages(
@@ -294,6 +309,9 @@ def run_daily_ingest(
     universe: pl.DataFrame | None = None,
     news_fetcher: NewsFetcher | None = None,
     description_fetcher: DescriptionFetcher | None = None,
+    profile_builder: ProfileBuilder | None = None,
+    backfill: bool = False,
+    profiles_only: bool = False,
     llm: LLMCallable | None = None,
     vector_store: object | None = None,
     raw_news_dir: Path | None = None,
@@ -302,7 +320,8 @@ def run_daily_ingest(
 
     Steps:
     1. Load the point-in-time universe for the date.
-    2. Per company: cache a description, fetch news (RSS, keyless).
+    2. Per company: cache metadata, ensure a generated profile (lazy unless
+       backfill), fetch news (RSS, keyless).
     3. Level-1 dedup against the articles table (url/content hash).
     4. Pre-score each article.
     5. Per new article: retrieve current + similar past facts, call the model,
@@ -317,6 +336,12 @@ def run_daily_ingest(
         universe: Optional point-in-time universe frame (defaults to loader).
         news_fetcher: Callable(ticker, name) -> list[Article] (defaults to RSS).
         description_fetcher: Callable(name) -> str (defaults to Wikipedia).
+        profile_builder: Callable(name) -> profile dict or None (defaults to
+            build_company_profile bound to llm).
+        backfill: When True, build a new profile version for every company
+            (annual refresh); when False, only build missing profiles.
+        profiles_only: When True, only ensure profiles; skip news fetch,
+            fact extraction, and aggregates (used by the annual refresh job).
         llm: Callable(messages) -> text; required.
         vector_store: Optional ChromaVectorStore for embedding past facts.
         raw_news_dir: Directory for the immutable per-date NDJSON file.
@@ -324,7 +349,7 @@ def run_daily_ingest(
     Returns:
         Summary counts keyed by articles_fetched, articles_skipped,
         articles_redundant, articles_errored, facts_written,
-        facts_superseded, aggregate_written.
+        facts_superseded, aggregate_written, profiles_built, profiles_failed.
 
     Raises:
         ValueError: On an invalid date or a missing llm callable.
@@ -350,6 +375,8 @@ def run_daily_ingest(
         "facts_written": 0,
         "facts_superseded": 0,
         "aggregate_written": 0,
+        "profiles_built": 0,
+        "profiles_failed": 0,
     }
     all_articles: list[Article] = []
     todays_facts: list[dict[str, str | None]] = []
@@ -378,82 +405,116 @@ def run_daily_ingest(
                     description_source="wikipedia" if description else None,
                 )
 
-            try:
-                articles = (
-                    news_fetcher(ticker, name)
-                    if news_fetcher is not None
-                    else fetch_company_news(ticker, name)
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"news fetch failed for {ticker}: {exc}")
-                articles = []
-            all_articles.extend(articles)
-            summary["articles_fetched"] += len(articles)
-
-            for article in articles:
-                score = pre_score(article.source, article.published_at, date)
-                article_id = register_article(conn, article, score)
-                if article_id is None:
-                    summary["articles_skipped"] += 1
-                    continue
-
-                current_facts = get_current_facts(ticker, date, conn)
-                similar_facts = search_similar_facts(
-                    ticker,
-                    f"{article.title} {article.summary}",
-                    date,
-                    conn,
-                    vector_store=vector_store,
-                )
-                messages = build_extraction_messages(
-                    article=article,
-                    company_name=name,
-                    description=description or "",
-                    sector=str(sector) if sector else None,
-                    country=str(country) if country else None,
-                    current_facts=current_facts,
-                    similar_facts=similar_facts,
-                    score=score,
-                    date=date,
-                )
+            profile = get_current_company_profile(conn, ticker, date)
+            if profile is None or backfill:
                 try:
-                    parsed = parse_fact_list_response(llm(messages))
-                except Exception as exc:  # noqa: BLE001
-                    logger.error(f"extraction failed for article {article_id}: {exc}")
-                    _set_article_status(conn, article_id, "error")
-                    summary["articles_errored"] += 1
-                    continue
-
-                if parsed is None:
-                    _set_article_status(conn, article_id, "redundant")
-                    summary["articles_redundant"] += 1
-                    continue
-
-                written, superseded, fact_rows = apply_facts(
-                    conn,
-                    ticker=ticker,
-                    date=date,
-                    article_id=article_id,
-                    facts=parsed,
-                    current_facts=current_facts,
-                    vector_store=vector_store,
-                )
-                _set_article_status(conn, article_id, "processed")
-                summary["facts_written"] += written
-                summary["facts_superseded"] += superseded
-                for fact_row in fact_rows:
-                    todays_facts.append(
-                        {
-                            "ticker": fact_row["ticker"],
-                            "fact_id": fact_row["fact_id"],
-                            "fact_type": fact_row["fact_type"],
-                            "statement": fact_row["statement"],
-                            "sector": str(sector) if sector else None,
-                            "country": str(country) if country else None,
-                        }
+                    built = (profile_builder or _default_profile_builder(llm))(name)
+                except Exception as exc:  # noqa: BLE001 - one company must not sink the run
+                    logger.warning(f"profile build failed for {ticker}: {exc}")
+                    built = None
+                if built is None:
+                    summary["profiles_failed"] += 1
+                else:
+                    write_company_profile(
+                        conn,
+                        ticker=ticker,
+                        description=str(built["description"]),
+                        products_services=[str(c) for c in built.get("products_services") or []],
+                        valid_from=date,
+                        website_url=built.get("website_url"),
+                        sources=built.get("sources"),
+                        generated_by=str(built.get("generated_by") or "deepseek-chat"),
+                        supersedes_id=profile["id"] if backfill and profile else None,
                     )
+                    summary["profiles_built"] += 1
+                    profile = get_current_company_profile(conn, ticker, date)
 
-        _write_raw_news(all_articles, date, raw_news_dir)
+            profile_description = profile["description"] if profile else description or ""
+            profile_categories = (
+                ", ".join(profile["products_services"])
+                if profile and profile["products_services"]
+                else "(none)"
+            )
+
+            if not profiles_only:
+                try:
+                    articles = (
+                        news_fetcher(ticker, name)
+                        if news_fetcher is not None
+                        else fetch_company_news(ticker, name)
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"news fetch failed for {ticker}: {exc}")
+                    articles = []
+                all_articles.extend(articles)
+                summary["articles_fetched"] += len(articles)
+
+                for article in articles:
+                    score = pre_score(article.source, article.published_at, date)
+                    article_id = register_article(conn, article, score)
+                    if article_id is None:
+                        summary["articles_skipped"] += 1
+                        continue
+
+                    current_facts = get_current_facts(ticker, date, conn)
+                    similar_facts = search_similar_facts(
+                        ticker,
+                        f"{article.title} {article.summary}",
+                        date,
+                        conn,
+                        vector_store=vector_store,
+                    )
+                    messages = build_extraction_messages(
+                        article=article,
+                        company_name=name,
+                        description=profile_description,
+                        products_services=profile_categories,
+                        sector=str(sector) if sector else None,
+                        country=str(country) if country else None,
+                        current_facts=current_facts,
+                        similar_facts=similar_facts,
+                        score=score,
+                        date=date,
+                    )
+                    try:
+                        parsed = parse_fact_list_response(llm(messages))
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error(f"extraction failed for article {article_id}: {exc}")
+                        _set_article_status(conn, article_id, "error")
+                        summary["articles_errored"] += 1
+                        continue
+
+                    if parsed is None:
+                        _set_article_status(conn, article_id, "redundant")
+                        summary["articles_redundant"] += 1
+                        continue
+
+                    written, superseded, fact_rows = apply_facts(
+                        conn,
+                        ticker=ticker,
+                        date=date,
+                        article_id=article_id,
+                        facts=parsed,
+                        current_facts=current_facts,
+                        vector_store=vector_store,
+                    )
+                    _set_article_status(conn, article_id, "processed")
+                    summary["facts_written"] += written
+                    summary["facts_superseded"] += superseded
+                    for fact_row in fact_rows:
+                        todays_facts.append(
+                            {
+                                "ticker": fact_row["ticker"],
+                                "fact_id": fact_row["fact_id"],
+                                "fact_type": fact_row["fact_type"],
+                                "statement": fact_row["statement"],
+                                "sector": str(sector) if sector else None,
+                                "country": str(country) if country else None,
+                            }
+                        )
+
+        if all_articles:
+            _write_raw_news(all_articles, date, raw_news_dir)
 
         for dimension, key_field in (("sector", "sector"), ("geography", "country")):
             groups: dict[str, list[dict[str, str | None]]] = {}
@@ -504,8 +565,8 @@ def run_daily_ingest(
             INSERT INTO agent_runs
                 (id, run_date, job_type, started_at, finished_at,
                  articles_fetched, articles_skipped, articles_redundant,
-                 facts_written, facts_superseded)
-            VALUES (?, ?, 'news', ?, NOW(), ?, ?, ?, ?, ?)
+                 facts_written, facts_superseded, profiles_built, profiles_failed)
+            VALUES (?, ?, 'news', ?, NOW(), ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 run_id,
@@ -516,6 +577,8 @@ def run_daily_ingest(
                 summary["articles_redundant"],
                 summary["facts_written"],
                 summary["facts_superseded"],
+                summary["profiles_built"],
+                summary["profiles_failed"],
             ],
         )
     finally:
@@ -529,6 +592,16 @@ def main() -> None:
     """Run the daily ingest job from the command line."""
     parser = argparse.ArgumentParser(description="Daily news → facts ingest")
     parser.add_argument("date", help="YYYY-MM-DD")
+    parser.add_argument(
+        "--backfill",
+        action="store_true",
+        help="build a new profile version for every company (annual refresh)",
+    )
+    parser.add_argument(
+        "--profiles-only",
+        action="store_true",
+        help="only ensure/refresh profiles; skip news processing",
+    )
     args = parser.parse_args()
 
     client = ChatClient()
@@ -536,6 +609,9 @@ def main() -> None:
     summary = run_daily_ingest(
         args.date,
         llm=client.complete,
+        profile_builder=_default_profile_builder(client.complete),
+        backfill=args.backfill,
+        profiles_only=args.profiles_only,
         vector_store=vector_store,
     )
     logger.info(f"ingest summary for {args.date}: {summary}")

@@ -168,6 +168,28 @@ CREATE TABLE IF NOT EXISTS companies (
 );
 
 
+-- ── Company profiles ─────────────────────────────────────────────────────────
+-- Versioned generated profiles: description + product/service categories,
+-- built once per company and refreshed (new version) on an annual cadence.
+-- Same point-in-time semantics as ticker_facts.
+
+CREATE TABLE IF NOT EXISTS company_profiles (
+    id                VARCHAR PRIMARY KEY,    -- uuid4 hex
+    ticker            VARCHAR NOT NULL,
+    description       VARCHAR NOT NULL,       -- one paragraph (≤120 words)
+    products_services JSON,                   -- array of category strings (≤12)
+    website_url       VARCHAR,                -- official website used as input
+    sources           JSON,                   -- {"wikipedia": url|null, "crawled": [...]}
+    generated_by      VARCHAR NOT NULL,       -- model id, e.g. 'deepseek-chat'
+    valid_from        DATE    NOT NULL,
+    valid_until       DATE,                   -- NULL = still current
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_profiles_ticker
+    ON company_profiles (ticker, valid_from, valid_until);
+
+
 -- ── Aggregate facts (sector / geography) ─────────────────────────────────────
 -- Versioned like ticker_facts, keyed by dimension + key ('sector'/'geography').
 -- Evidence links back to the ticker_facts rows that support each statement.
@@ -204,6 +226,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     articles_redundant INTEGER,  -- Level-2 (LLM) redundant
     facts_written    INTEGER,
     facts_superseded INTEGER,
+    profiles_built   INTEGER,    -- company profiles generated in this run
+    profiles_failed  INTEGER,    -- companies whose profile build failed
     filings_fetched  INTEGER,
     filings_parsed   INTEGER,
     filings_skipped  INTEGER,

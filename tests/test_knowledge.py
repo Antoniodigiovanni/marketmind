@@ -8,10 +8,12 @@ from agent.embeddings import ChromaVectorStore
 from agent.knowledge import (
     get_company_description,
     get_current_aggregate_facts,
+    get_current_company_profile,
     get_current_facts,
     search_similar_facts,
     upsert_company,
     write_aggregate_fact,
+    write_company_profile,
     write_fact,
 )
 from data.db.init import init_db
@@ -218,3 +220,58 @@ def test_aggregate_fact_requires_valid_dimension(conn) -> None:
 def test_aggregate_facts_require_as_of(conn) -> None:
     with pytest.raises(ValueError, match="as_of"):
         get_current_aggregate_facts("sector", "Technology", "", conn)
+
+
+def test_company_profile_write_and_read_round_trip(conn) -> None:
+    profile_id = write_company_profile(
+        conn,
+        ticker="AAPL",
+        description="Apple designs consumer electronics.",
+        products_services=["smartphones", "laptops"],
+        valid_from="2026-08-04",
+        website_url="https://www.apple.com",
+        sources={"wikipedia": "https://en.wikipedia.org/wiki/Apple_Inc.", "crawled": []},
+        generated_by="deepseek-chat",
+    )
+
+    profile = get_current_company_profile(conn, "AAPL", "2026-08-05")
+
+    assert profile is not None
+    assert profile["id"] == profile_id
+    assert profile["products_services"] == ["smartphones", "laptops"]
+    assert profile["sources"]["wikipedia"].endswith("Apple_Inc.")
+    assert profile["generated_by"] == "deepseek-chat"
+
+
+def test_company_profile_point_in_time_and_supersede(conn) -> None:
+    first = write_company_profile(
+        conn,
+        ticker="AAPL",
+        description="Apple designs consumer electronics.",
+        products_services=["smartphones"],
+        valid_from="2026-01-01",
+    )
+    write_company_profile(
+        conn,
+        ticker="AAPL",
+        description="Apple designs devices and services.",
+        products_services=["smartphones", "cloud services"],
+        valid_from="2026-08-04",
+        supersedes_id=first,
+    )
+
+    before = get_current_company_profile(conn, "AAPL", "2026-06-01")
+    after = get_current_company_profile(conn, "AAPL", "2026-08-05")
+
+    assert before is not None and before["description"].startswith("Apple designs consumer")
+    assert after is not None and after["products_services"] == ["smartphones", "cloud services"]
+    assert before["id"] != after["id"]
+
+
+def test_company_profile_missing_as_of_raises(conn) -> None:
+    with pytest.raises(ValueError, match="as_of"):
+        get_current_company_profile(conn, "AAPL", "")
+
+
+def test_company_profile_absent_returns_none(conn) -> None:
+    assert get_current_company_profile(conn, "NOPE", "2026-08-05") is None
