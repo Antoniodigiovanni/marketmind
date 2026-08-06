@@ -178,6 +178,8 @@ written incrementally by the harness.
   supersedes contextually, it does not rewrite history.
 - Every view records `as_of` (the market date it refers to), `scope`
   (`market`/`ticker`/`theme`), the writing model, and `data_cutoff`.
+- Views optionally record `used_fact_ids` — the `ticker_facts` ids the harness
+  used when writing the view (write-time provenance, no FK).
 - **Structured data is derived, never authoritative.** The structuring job reads
   free-text views and writes JSON into `market_view_structures`, keyed by
   `schema_version`. Free text always remains available.

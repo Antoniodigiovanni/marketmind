@@ -22,6 +22,7 @@ def save_market_view(
     ticker: str | None = None,
     theme: str | None = None,
     data_cutoff: str | None = None,
+    used_fact_ids: list[str] | None = None,
 ) -> str:
     """Insert a free-text market view into market_views (immutable).
 
@@ -34,6 +35,7 @@ def save_market_view(
         ticker: Ticker symbol when scope == 'ticker'.
         theme: Theme label when scope == 'theme'.
         data_cutoff: ISO timestamp of the newest data used, if known.
+        used_fact_ids: ticker_facts ids that informed this view (provenance).
 
     Returns:
         New view ID.
@@ -57,10 +59,11 @@ def save_market_view(
 
     conn.execute(
         """
-        INSERT INTO market_views (id, as_of, scope, ticker, theme, view_text, model, data_cutoff)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO market_views
+            (id, as_of, scope, ticker, theme, view_text, model, data_cutoff, used_fact_ids)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        [view_id, as_of_date, scope, ticker, theme, view_text, model, data_cutoff],
+        [view_id, as_of_date, scope, ticker, theme, view_text, model, data_cutoff, used_fact_ids],
     )
     return view_id
 
@@ -102,7 +105,8 @@ def get_market_views(
 
     rows = conn.execute(
         f"""
-        SELECT id, as_of, scope, ticker, theme, view_text, model, data_cutoff, created_at
+        SELECT id, as_of, scope, ticker, theme, view_text, model, data_cutoff,
+               used_fact_ids, created_at
         FROM market_views
         WHERE {" AND ".join(clauses)}
         ORDER BY as_of DESC, created_at DESC
@@ -121,7 +125,8 @@ def get_market_views(
             "view_text": row[5],
             "model": row[6],
             "data_cutoff": row[7].isoformat() if row[7] else None,
-            "created_at": row[8].isoformat() if row[8] else None,
+            "used_fact_ids": row[8],
+            "created_at": row[9].isoformat() if row[9] else None,
         }
         for row in rows
     ]

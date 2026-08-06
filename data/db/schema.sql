@@ -190,6 +190,7 @@ CREATE TABLE IF NOT EXISTS market_views (
     view_text    VARCHAR     NOT NULL,  -- free text, never edited in place
     model        VARCHAR     NOT NULL,  -- harness model that produced the view
     data_cutoff  TIMESTAMPTZ,           -- newest data timestamp the view used
+    used_fact_ids VARCHAR[],            -- ticker_facts ids the harness used when writing this view (provenance)
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
