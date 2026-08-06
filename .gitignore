@@ -1,6 +1,7 @@
 # Local instruction files — never committed
 AGENTS.md
 CLAUDE.md
+todo.md
 
 # Environment
 .env
