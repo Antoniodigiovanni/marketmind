@@ -113,6 +113,10 @@ def test_removal_sets_removed_date_and_logs_delisted(tmp_path, monkeypatch) -> N
     delisted = pl.read_csv(tmp_path / "delisted.csv")
     assert delisted["ticker"].to_list() == ["T00"]
     assert delisted["delisted_date"].to_list() == ["2026-08-05"]
+    assert delisted["removed_date"].to_list() == ["2026-08-05"]
+    assert delisted["universe"].to_list() == ["sp500"]
+    assert delisted["added_date"].to_list() == ["2026-08-04"]
+    assert "yahoo_symbol" in delisted.columns
 
 
 def test_large_source_drop_raises_guard(tmp_path) -> None:

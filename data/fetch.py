@@ -13,13 +13,16 @@ from loguru import logger
 from data.db.init import DEFAULT_DB_PATH
 from data.dividends.fetch import sync_dividends
 from data.macro.fetch import run_daily_macro_sync
+from data.processed.volatility import build_volatility_file
 from data.short_interest.fetch import sync_short_interest
+from data.sources.calendars import exchange_for_suffix, last_trading_day
 from data.sources.yfinance import fetch_ohlcv
 from data.universe.loader import UNIVERSE_DIR, get_universe
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 PRICES_DIR = ROOT_DIR / "data" / "raw" / "prices"
 MACRO_DIR = ROOT_DIR / "data" / "raw" / "macro"
+PROCESSED_VOL_PATH = ROOT_DIR / "data" / "processed" / "volatility.parquet"
 HISTORY_START = "2015-01-01"
 
 VOL_INDICES = ["^VIX", "^VSTOXX"]
@@ -133,12 +136,14 @@ def fetch_daily_prices(
     errors: list[tuple[str, str]] = []
     for row in members.to_dicts():
         ticker = row["ticker"]
-        symbol = symbols.get(ticker)
+        symbol = symbols.get(ticker) or row.get("yahoo_symbol")
         if not symbol:
             skipped.append(ticker)
             continue
+        suffix = symbol.rsplit(".", 1)[1] if "." in symbol else ""
+        trade_date = last_trading_day(exchange_for_suffix(suffix), as_of_date)
         try:
-            if fetch_ticker_prices(ticker, symbol, as_of_date, prices_dir):
+            if fetch_ticker_prices(ticker, symbol, trade_date, prices_dir):
                 fetched.append(ticker)
         except Exception as exc:  # noqa: BLE001 - one bad ticker must not kill the run
             errors.append((ticker, str(exc)))
@@ -166,6 +171,7 @@ def main() -> None:
 
     as_of_date = dt.date.fromisoformat(args.as_of)
     summary = fetch_daily_prices(as_of=args.as_of)
+    build_volatility_file(PRICES_DIR, PROCESSED_VOL_PATH)
     fetch_volatility_indices(as_of_date)
     run_daily_macro_sync(today=args.as_of)
     sync_dividends(as_of=args.as_of)
