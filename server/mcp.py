@@ -9,7 +9,7 @@ from pathlib import Path
 import duckdb
 from mcp.server.fastmcp import FastMCP
 
-from agent.knowledge import get_current_facts, write_fact
+from agent.knowledge import get_current_company_profile, get_current_facts, write_fact
 from agent.views import get_market_views as get_views
 from agent.views import save_market_view as save_view
 
@@ -647,6 +647,47 @@ def get_market_views(
     """
     with _connect() as conn:
         return get_views(conn, as_of=as_of, ticker=ticker, scope=scope, limit=limit)
+
+
+@mcp.tool()
+def get_company_profile(
+    ticker: str,
+    as_of: str | None = None,
+) -> dict[str, object] | None:
+    """Return the generated company profile (description + categories) as of a date.
+
+    Args:
+        ticker: Company ticker symbol.
+        as_of: Date (YYYY-MM-DD); defaults to today. Profiles are versioned,
+            so this returns the version valid on that date.
+
+    Returns:
+        Dict with ticker, name, sector, country, description,
+        products_services, website_url, sources, valid_from, generated_by;
+        None when no profile exists as of the date.
+    """
+    effective_as_of = as_of or dt.date.today().isoformat()
+    with _connect() as conn:
+        profile = get_current_company_profile(conn, ticker, effective_as_of)
+        if profile is None:
+            return None
+        company = conn.execute(
+            "SELECT name, sector, country FROM companies WHERE ticker = ?",
+            [ticker],
+        ).fetchone()
+        name, sector, country = company if company else (None, None, None)
+        return {
+            "ticker": ticker,
+            "name": name,
+            "sector": sector,
+            "country": country,
+            "description": profile["description"],
+            "products_services": profile["products_services"],
+            "website_url": profile["website_url"],
+            "sources": profile["sources"],
+            "valid_from": profile["valid_from"],
+            "generated_by": profile["generated_by"],
+        }
 
 
 @mcp.tool()
