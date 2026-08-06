@@ -9,6 +9,7 @@ EXPECTED_TABLES = {
     "aggregate_facts",
     "articles",
     "companies",
+    "company_profiles",
     "fetch_checkpoints",
     "filing_text",
     "filings",
@@ -27,6 +28,8 @@ def test_filings_schema_columns_exist() -> None:
         run_cols = {row[1] for row in conn.execute("PRAGMA table_info('agent_runs')").fetchall()}
         assert {
             "job_type",
+            "profiles_built",
+            "profiles_failed",
             "filings_fetched",
             "filings_parsed",
             "filings_skipped",
@@ -108,5 +111,24 @@ def test_companies_and_aggregate_facts_schema() -> None:
             "evidence",
             "embedding_id",
         } <= agg_cols
+    finally:
+        conn.close()
+
+
+def test_company_profiles_schema() -> None:
+    conn = init_db(":memory:")
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info('company_profiles')").fetchall()}
+        assert {
+            "id",
+            "ticker",
+            "description",
+            "products_services",
+            "website_url",
+            "sources",
+            "generated_by",
+            "valid_from",
+            "valid_until",
+        } <= cols
     finally:
         conn.close()
