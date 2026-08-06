@@ -38,6 +38,44 @@ def test_get_universe_includes_future_removed_ticker(tmp_path) -> None:
     assert set(universe["ticker"].to_list()) == {"AAPL", "ASML", "INTC"}
 
 
+DELISTED_ROWS = [
+    "ticker,name,country,sector,added_date,removed_date,universe,yahoo_symbol",
+    "DELT,Delisted Corp.,US,Energy,2010-01-01,2020-06-30,sp500,",
+    "OLD,Old Co.,US,Financials,2005-01-01,2025-12-31,sp500,OLDQ.PK",
+]
+
+
+def test_get_universe_includes_delisted_in_window(tmp_path) -> None:
+    _write_universe(tmp_path)
+    (tmp_path / "delisted.csv").write_text("\n".join(DELISTED_ROWS) + "\n", encoding="utf-8")
+
+    universe = get_universe("2019-01-01", universe_dir=tmp_path)
+
+    assert set(universe["ticker"].to_list()) == {"AAPL", "ASML", "INTC", "DELT", "OLD"}
+
+
+def test_get_universe_excludes_delisted_after_removal(tmp_path) -> None:
+    _write_universe(tmp_path)
+    (tmp_path / "delisted.csv").write_text("\n".join(DELISTED_ROWS) + "\n", encoding="utf-8")
+
+    universe = get_universe("2021-01-01", universe_dir=tmp_path)
+
+    assert "DELT" not in universe["ticker"].to_list()
+
+
+def test_get_universe_missing_delisted_file_is_ok(tmp_path) -> None:
+    _write_universe(tmp_path)
+    universe = get_universe("2019-01-01", universe_dir=tmp_path)
+    assert "DELT" not in universe["ticker"].to_list()
+
+
+def test_get_universe_rejects_bad_delisted_columns(tmp_path) -> None:
+    _write_universe(tmp_path)
+    (tmp_path / "delisted.csv").write_text("ticker,name\nA,B\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="delisted.csv missing required columns"):
+        get_universe("2019-01-01", universe_dir=tmp_path)
+
+
 def test_get_universe_empty_before_add_dates(tmp_path) -> None:
     _write_universe(tmp_path)
     universe = get_universe("1980-01-01", universe_dir=tmp_path)
