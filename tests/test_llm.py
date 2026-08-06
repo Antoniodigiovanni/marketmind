@@ -21,7 +21,7 @@ class _FakeResponse:
 
 
 def test_client_requires_api_key(monkeypatch) -> None:
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("AI_API_KEY", raising=False)
     monkeypatch.delenv("LLM_API_KEY", raising=False)
 
     with pytest.raises(LLMError, match="API key"):
