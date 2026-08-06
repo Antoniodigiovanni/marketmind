@@ -108,9 +108,7 @@ def test_fetch_daily_prices_uses_last_trading_day(tmp_path, monkeypatch) -> None
             }
         ),
     )
-    monkeypatch.setattr(
-        fetch_mod, "symbols_for_universe", lambda conn, members: {"AAPL": "AAPL"}
-    )
+    monkeypatch.setattr(fetch_mod, "symbols_for_universe", lambda conn, members: {"AAPL": "AAPL"})
     captured: list[tuple[str, str]] = []
 
     def fake_ohlcv(tickers: object, start: str, end: str) -> pl.DataFrame:

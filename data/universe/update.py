@@ -119,7 +119,9 @@ def _apply_universe(
                 {
                     "ticker": removal["ticker"],
                     "name": rows["name"][0] if len(rows) else removal["ticker"],
-                    "country": rows["country"][0] if len(rows) and "country" in rows.columns else "",
+                    "country": rows["country"][0]
+                    if len(rows) and "country" in rows.columns
+                    else "",
                     "sector": rows["sector"][0] if len(rows) and "sector" in rows.columns else "",
                     "added_date": rows["added_date"][0]
                     if len(rows) and "added_date" in rows.columns

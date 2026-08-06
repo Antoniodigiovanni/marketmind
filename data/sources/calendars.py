@@ -63,7 +63,5 @@ def last_trading_day(exchange: str, day: dt.date) -> dt.date:
     Returns:
         The most recent trading day on or before day.
     """
-    session = xcals.get_calendar(exchange).date_to_session(
-        pd.Timestamp(day), direction="previous"
-    )
+    session = xcals.get_calendar(exchange).date_to_session(pd.Timestamp(day), direction="previous")
     return session.date()
