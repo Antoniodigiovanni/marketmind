@@ -398,3 +398,34 @@ def test_profile_failure_does_not_stop_run(tmp_path) -> None:
         assert summary["facts_written"] == 1  # news still processed
     finally:
         conn.close()
+
+
+def test_profiles_only_skips_news_processing(tmp_path) -> None:
+    fetched: list[str] = []
+
+    def counting_news(ticker: str, name: str) -> list[Article]:
+        fetched.append(ticker)
+        return _fake_news_fetcher(ticker, name)
+
+    conn = init_db(":memory:")
+    try:
+        summary = run_daily_ingest(
+            DATE,
+            conn=conn,
+            universe=UNIVERSE,
+            news_fetcher=counting_news,
+            description_fetcher=_CountingDescriptionFetcher(),
+            profile_builder=_fake_profile_builder,
+            backfill=True,
+            profiles_only=True,
+            llm=_fake_llm,
+            raw_news_dir=tmp_path / "news",
+        )
+
+        assert summary["profiles_built"] == 2
+        assert summary["articles_fetched"] == 0
+        assert summary["facts_written"] == 0
+        assert fetched == []
+        assert not (tmp_path / "news" / f"{DATE}.ndjson").exists()
+    finally:
+        conn.close()

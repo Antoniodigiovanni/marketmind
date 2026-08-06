@@ -311,6 +311,7 @@ def run_daily_ingest(
     description_fetcher: DescriptionFetcher | None = None,
     profile_builder: ProfileBuilder | None = None,
     backfill: bool = False,
+    profiles_only: bool = False,
     llm: LLMCallable | None = None,
     vector_store: object | None = None,
     raw_news_dir: Path | None = None,
@@ -339,6 +340,8 @@ def run_daily_ingest(
             build_company_profile bound to llm).
         backfill: When True, build a new profile version for every company
             (annual refresh); when False, only build missing profiles.
+        profiles_only: When True, only ensure profiles; skip news fetch,
+            fact extraction, and aggregates (used by the annual refresh job).
         llm: Callable(messages) -> text; required.
         vector_store: Optional ChromaVectorStore for embedding past facts.
         raw_news_dir: Directory for the immutable per-date NDJSON file.
@@ -433,83 +436,85 @@ def run_daily_ingest(
                 else "(none)"
             )
 
-            try:
-                articles = (
-                    news_fetcher(ticker, name)
-                    if news_fetcher is not None
-                    else fetch_company_news(ticker, name)
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"news fetch failed for {ticker}: {exc}")
-                articles = []
-            all_articles.extend(articles)
-            summary["articles_fetched"] += len(articles)
-
-            for article in articles:
-                score = pre_score(article.source, article.published_at, date)
-                article_id = register_article(conn, article, score)
-                if article_id is None:
-                    summary["articles_skipped"] += 1
-                    continue
-
-                current_facts = get_current_facts(ticker, date, conn)
-                similar_facts = search_similar_facts(
-                    ticker,
-                    f"{article.title} {article.summary}",
-                    date,
-                    conn,
-                    vector_store=vector_store,
-                )
-                messages = build_extraction_messages(
-                    article=article,
-                    company_name=name,
-                    description=profile_description,
-                    products_services=profile_categories,
-                    sector=str(sector) if sector else None,
-                    country=str(country) if country else None,
-                    current_facts=current_facts,
-                    similar_facts=similar_facts,
-                    score=score,
-                    date=date,
-                )
+            if not profiles_only:
                 try:
-                    parsed = parse_fact_list_response(llm(messages))
-                except Exception as exc:  # noqa: BLE001
-                    logger.error(f"extraction failed for article {article_id}: {exc}")
-                    _set_article_status(conn, article_id, "error")
-                    summary["articles_errored"] += 1
-                    continue
-
-                if parsed is None:
-                    _set_article_status(conn, article_id, "redundant")
-                    summary["articles_redundant"] += 1
-                    continue
-
-                written, superseded, fact_rows = apply_facts(
-                    conn,
-                    ticker=ticker,
-                    date=date,
-                    article_id=article_id,
-                    facts=parsed,
-                    current_facts=current_facts,
-                    vector_store=vector_store,
-                )
-                _set_article_status(conn, article_id, "processed")
-                summary["facts_written"] += written
-                summary["facts_superseded"] += superseded
-                for fact_row in fact_rows:
-                    todays_facts.append(
-                        {
-                            "ticker": fact_row["ticker"],
-                            "fact_id": fact_row["fact_id"],
-                            "fact_type": fact_row["fact_type"],
-                            "statement": fact_row["statement"],
-                            "sector": str(sector) if sector else None,
-                            "country": str(country) if country else None,
-                        }
+                    articles = (
+                        news_fetcher(ticker, name)
+                        if news_fetcher is not None
+                        else fetch_company_news(ticker, name)
                     )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"news fetch failed for {ticker}: {exc}")
+                    articles = []
+                all_articles.extend(articles)
+                summary["articles_fetched"] += len(articles)
 
-        _write_raw_news(all_articles, date, raw_news_dir)
+                for article in articles:
+                    score = pre_score(article.source, article.published_at, date)
+                    article_id = register_article(conn, article, score)
+                    if article_id is None:
+                        summary["articles_skipped"] += 1
+                        continue
+
+                    current_facts = get_current_facts(ticker, date, conn)
+                    similar_facts = search_similar_facts(
+                        ticker,
+                        f"{article.title} {article.summary}",
+                        date,
+                        conn,
+                        vector_store=vector_store,
+                    )
+                    messages = build_extraction_messages(
+                        article=article,
+                        company_name=name,
+                        description=profile_description,
+                        products_services=profile_categories,
+                        sector=str(sector) if sector else None,
+                        country=str(country) if country else None,
+                        current_facts=current_facts,
+                        similar_facts=similar_facts,
+                        score=score,
+                        date=date,
+                    )
+                    try:
+                        parsed = parse_fact_list_response(llm(messages))
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error(f"extraction failed for article {article_id}: {exc}")
+                        _set_article_status(conn, article_id, "error")
+                        summary["articles_errored"] += 1
+                        continue
+
+                    if parsed is None:
+                        _set_article_status(conn, article_id, "redundant")
+                        summary["articles_redundant"] += 1
+                        continue
+
+                    written, superseded, fact_rows = apply_facts(
+                        conn,
+                        ticker=ticker,
+                        date=date,
+                        article_id=article_id,
+                        facts=parsed,
+                        current_facts=current_facts,
+                        vector_store=vector_store,
+                    )
+                    _set_article_status(conn, article_id, "processed")
+                    summary["facts_written"] += written
+                    summary["facts_superseded"] += superseded
+                    for fact_row in fact_rows:
+                        todays_facts.append(
+                            {
+                                "ticker": fact_row["ticker"],
+                                "fact_id": fact_row["fact_id"],
+                                "fact_type": fact_row["fact_type"],
+                                "statement": fact_row["statement"],
+                                "sector": str(sector) if sector else None,
+                                "country": str(country) if country else None,
+                            }
+                        )
+
+        if all_articles:
+            _write_raw_news(all_articles, date, raw_news_dir)
 
         for dimension, key_field in (("sector", "sector"), ("geography", "country")):
             groups: dict[str, list[dict[str, str | None]]] = {}
@@ -592,6 +597,11 @@ def main() -> None:
         action="store_true",
         help="build a new profile version for every company (annual refresh)",
     )
+    parser.add_argument(
+        "--profiles-only",
+        action="store_true",
+        help="only ensure/refresh profiles; skip news processing",
+    )
     args = parser.parse_args()
 
     client = ChatClient()
@@ -601,6 +611,7 @@ def main() -> None:
         llm=client.complete,
         profile_builder=_default_profile_builder(client.complete),
         backfill=args.backfill,
+        profiles_only=args.profiles_only,
         vector_store=vector_store,
     )
     logger.info(f"ingest summary for {args.date}: {summary}")
