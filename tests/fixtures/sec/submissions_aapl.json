@@ -1,0 +1,15 @@
+{
+  "cik": "0000320193",
+  "name": "Apple Inc.",
+  "filings": {
+    "recent": {
+      "accessionNumber": ["0000320193-26-000045", "0000320193-26-000031", "0000320193-26-000012"],
+      "filingDate": ["2026-08-03", "2026-07-30", "2026-05-02"],
+      "form": ["8-K", "10-Q", "4"],
+      "primaryDocument": ["form8k.htm", "aapl-20260627.htm", "x1234.xml"],
+      "primaryDocDescription": ["8-K", "10-Q", "Form 4"],
+      "reportDate": ["2026-08-03", "2026-06-27", "2026-05-02"],
+      "items": ["1.01", "", ""]
+    }
+  }
+}

@@ -12,7 +12,6 @@ the database; a job then structures those views for querying.
 This is **not a standalone app**. There is no UI, no separate deployment stack,
 and no own notification system. marketmind runs as a service on the same box as
 the harness, shares its cron schedule and secrets, and is driven through MCP.
-Backtesting and strategy generation are Phase 2 (parked) — see ROADMAP.md.
 
 All data sources must be free. No paid APIs.
 
@@ -28,7 +27,6 @@ uv run python -m data.universe.resolve                      # resolve symbols in
 uv run python -m agent.ingestion {YYYY-MM-DD}               # daily news + fact ingest
 uv run python -m agent.views {YYYY-MM-DD}                   # structure free-text market views
 uv run python -m server.mcp                                  # run the MCP server (stdio)
-uv run python -m research.run {slug}                         # Phase 2: backtest by slug
 ```
 
 Always use `uv run` — never bare `python` or `pip`.
@@ -61,9 +59,6 @@ marketmind/
 │   ├── prompts/        ← all prompt templates as .md files
 ├── server/
 │   └── mcp.py          ← MCP server — the only harness-facing interface
-├── factors/            ← Phase 2 (parked)
-├── research/           ← Phase 2 (parked)
-├── portfolio/          ← Phase 2 (parked)
 ├── tests/
 └── journal/            ← Obsidian-compatible, one .md per day
 ```
@@ -74,7 +69,8 @@ marketmind/
 - Docstrings on all public functions: one-line summary + Args/Returns/Raises.
 - No `print()` in library code — use `loguru.logger`.
 - Max line length: 100 (configured in `pyproject.toml`).
-- `polars` for ETL and large transforms; `pandas` when interfacing with vectorbt (Phase 2).
+- `polars` for ETL and large transforms; `pandas` when interfacing with
+  yfinance and exchange-calendars.
 - All DataFrames must have a timezone-aware UTC `DatetimeIndex`. Column names: `snake_case`.
 - Assert schema explicitly on load — never silently accept unexpected columns.
 
@@ -94,7 +90,7 @@ marketmind/
 | Google News RSS | `feedparser` | Per-ticker news headlines, keyless |
 | Yahoo Finance RSS | `feedparser` | Per-ticker financial press headlines |
 | SEC EDGAR | `requests` | US filings: 8-K, 10-K, proxy, insider transactions |
-| FRED | `fredapi` | Macro: rates, inflation, credit spreads, VIXCLS |
+| FRED | `requests` (direct REST) | Macro: rates, inflation, credit spreads, VIXCLS |
 | ECB SDW | `requests` (REST) | EUR rates, FX, EA macro |
 | Company newsroom RSS | `feedparser` | Primary sources where available |
 | STOXX selection list | `requests` | Official STOXX 600 membership + internal keys (keyless CSV) |
@@ -161,7 +157,7 @@ Runs daily as a batch job. Steps in order:
 
 Facts are **versioned, never mutated**. When a fact changes (e.g. CEO
 replacement), set `valid_until` on the old row and insert a new one. This
-preserves full history and enables point-in-time queries for backtest safety.
+preserves full history and enables look-ahead-safe point-in-time queries.
 
 **Always query with a point-in-time filter:**
 ```sql
@@ -215,50 +211,6 @@ written incrementally by the harness.
 - Every agent tool has a corresponding test in `tests/test_agent_tools.py` using
   mocked responses. No live API calls in tests.
 
-## Phase 2 conventions (parked — backtesting & strategy)
-
-### Factor library
-
-Every factor in `factors/` must expose this exact interface:
-
-```python
-def compute(prices: pl.DataFrame, fundamentals: pl.DataFrame, **kwargs) -> pl.DataFrame:
-    """Returns DataFrame with columns [date, ticker, signal].
-    Signal is cross-sectionally z-scored and winsorised at ±3σ."""
-```
-
-Always z-score and winsorise before returning. Raw values must not leave the
-factor module.
-
-### Backtesting integrity rules — check every backtest against all six
-
-1. **No look-ahead bias**: features use only information available at time `t`.
-   When in doubt: `df['feature'].shift(1)`. For facts: always use
-   `get_current_facts(ticker, as_of=t)`, never query without `as_of`.
-2. **No survivorship bias**: universe uses point-in-time constituents from
-   `data/universe/`. Never filter to currently-existing companies before
-   computing returns.
-3. **Walk-forward only**: in-sample optimisation period followed by a held-out
-   OOS period. The split is fixed before inspecting OOS returns.
-4. **Transaction costs**: always included. Defaults: 10bps round-trip large-cap,
-   25bps mid-cap. Model slippage proportional to turnover.
-5. **Multiple testing**: document the number of hypotheses tested. Apply
-   Benjamini-Hochberg correction when reporting significance.
-6. **IC reporting**: report Spearman IC and IC decay at 1d, 5d, 21d, 63d horizons.
-
-When writing or modifying backtest code, verify all six before finishing.
-
-### Research artifact requirements
-
-A research folder is not complete until all four files exist and pass checks:
-
-- **hypothesis.md**: economic rationale, ≥2 literature references, predicted
-  signal direction, falsification criteria.
-- **report.md**: IC and IC decay table, equity curve + drawdown panel, turnover
-  and cost analysis, OOS vs. in-sample comparison, conclusion including failure
-  modes.
-- `research/run.py` must reject a backtest if `hypothesis.md` does not exist.
-
 ## Testing requirements
 
 - `agent/tools.py` and `server/mcp.py`: 100% coverage with mocked API calls.
@@ -266,18 +218,9 @@ A research folder is not complete until all four files exist and pass checks:
 - `data/universe/loader.py`: point-in-time filtering with known add/remove dates.
 - `agent/views.py`: write/read round-trip, as-of filtering, idempotent structuring.
 - `data/processed/volatility.py`: known return series → known realized vol output.
-- Phase 2: `tests/test_backtest_integrity.py` must include a test that
-  deliberately injects look-ahead bias and asserts the checker catches it.
 - Full test suite runs in <60 seconds with no network access. Use fixtures for
   all market data. Use an in-memory DuckDB instance (`:memory:`) in all
   DB-touching tests.
-
-## Portfolio construction defaults (Phase 2)
-
-- Risk-parity allocation unless explicitly overridden.
-- Half-Kelly position sizing. Document the volatility estimate and lookback.
-- Hard constraints: max 5% single name, 30% single sector, 20% single country.
-- Monthly rebalancing. Log turnover cost at each rebalance.
 
 ## Env vars (load via python-dotenv, never commit .env)
 

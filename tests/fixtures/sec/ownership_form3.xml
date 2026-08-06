@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<ownershipDocument>
+  <schemaVersion>X0202</schemaVersion>
+  <documentType>3</documentType>
+  <periodOfReport>2026-01-10</periodOfReport>
+  <issuer>
+    <issuerCik>0000320193</issuerCik>
+    <issuerName>APPLE INC</issuerName>
+    <issuerTradingSymbol>AAPL</issuerTradingSymbol>
+  </issuer>
+  <reportingOwner>
+    <reportingOwnerId>
+      <rptOwnerCik>0001900001</rptOwnerCik>
+      <rptOwnerName>NEW DIRECTOR</rptOwnerName>
+    </reportingOwnerId>
+    <reportingOwnerRelationship>
+      <isDirector>1</isDirector>
+    </reportingOwnerRelationship>
+  </reportingOwner>
+  <nonDerivativeTable>
+    <nonDerivativeHolding>
+      <securityTitle>Common Stock</securityTitle>
+      <postTransactionAmounts>
+        <sharesOwnedFollowingTransaction>1000</sharesOwnedFollowingTransaction>
+      </postTransactionAmounts>
+      <ownershipNature>
+        <directOrIndirectOwnership>D</directOrIndirectOwnership>
+      </ownershipNature>
+    </nonDerivativeHolding>
+  </nonDerivativeTable>
+</ownershipDocument>

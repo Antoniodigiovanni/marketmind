@@ -12,8 +12,7 @@ which a job then turns into structured data.
 marketmind is **not a standalone app**. No UI, no separate deployment stack, no
 own notification system. It runs as a service on the same box as the harness
 (the Hermes Hetzner machine), shares its cron schedule and secrets, and speaks
-only through MCP. Backtesting and strategy generation are **Phase 2** — parked
-until the market memory is solid.
+only through MCP.
 
 ## Architecture
 
@@ -37,7 +36,7 @@ Parquet/NDJSON under `data/raw/`.
 marketmind/
 ├── data/
 │   ├── raw/            ← immutable: prices/*.parquet, macro/*.parquet, news/{date}.ndjson
-│   ├── processed/      ← calendar-aligned derived series (Phase 2 returns)
+│   ├── processed/      ← calendar-aligned derived series
 │   ├── universe/       ← point-in-time constituents: sp500.csv, eurostoxx600.csv, delisted.csv
 │   ├── db/
 │   │   ├── schema.sql  ← DuckDB schema (source of truth)
@@ -50,9 +49,6 @@ marketmind/
 │   └── prompts/        ← all prompt templates as .md files
 ├── server/
 │   └── mcp.py          ← MCP server: all harness-facing tools
-├── factors/            ← Phase 2 (parked)
-├── research/           ← Phase 2 (parked)
-└── portfolio/          ← Phase 2 (parked)
 ```
 
 ## Branching & commit strategy
@@ -102,23 +98,25 @@ write through MCP, and free-text views are structured automatically.
       scope the same day
 
 ### 1.3 Price + macro fetch (daily)
-- [ ] `data/sources/yfinance.py::fetch_ohlcv` — adjusted OHLCV, EU tickers via
-      exchange suffixes (`ASML.AS`, `SAP.DE`), UTC timestamps
-- [ ] Exchange calendars (`exchange_calendars`) for US/EU sessions — each day
+- [x] `data/sources/yfinance.py::fetch_ohlcv` — adjusted OHLCV + volume, EU
+      tickers via exchange suffixes (`ASML.AS`, `SAP.DE`), UTC timestamps
+- [x] Exchange calendars (`exchange_calendars`) for US/EU sessions — each day
       fetches the correct last close per exchange
-- [ ] Incremental daily append after the US close (~23:00 UTC); one-time bulk backfill
-- [ ] Volatility indices fetched daily: `^VIX` (US) and `^VSTOXX` (Eurostoxx)
-      via yfinance; `VIXCLS` cross-check from FRED
-- [ ] `data/sources/fred.py` — `DGS10`, `BAMLH0A0HYM2`, `CPIAUCSL`
-- [ ] `data/sources/ecb.py` — deposit rate, EUR/USD
-- [ ] Tests: mocked HTTP/yfinance responses, schema + UTC index asserted
+- [x] Incremental daily append after the US close (~23:00 UTC); one-time bulk
+      backfill from 2015 via `uv run python data/fetch.py`
+- [x] Volatility indices fetched daily: `^VIX` (US) and `^VSTOXX` (Eurostoxx)
+      via yfinance into `data/raw/macro/`
+- [ ] `VIXCLS` cross-check from FRED (optional)
+- [x] `data/sources/fred.py` — `DGS10`, `BAMLH0A0HYM2`, `CPIAUCSL`
+- [x] `data/sources/ecb.py` — deposit rate, EUR/USD
+- [x] Tests: mocked HTTP/yfinance responses, schema + UTC index asserted
 
 ### 1.3b Realized volatility (derived)
-- [ ] `data/processed/volatility.py` — rolling annualised realized volatility
+- [x] `data/processed/volatility.py` — rolling annualised realized volatility
       (20d and 60d windows) from adjusted close returns → `volatility.parquet`
-- [ ] `get_volatility` MCP tool returns per-ticker realized vol plus market
+- [x] `get_volatility` MCP tool returns per-ticker realized vol plus market
       implied vol (VIX / VSTOXX) for the same window
-- [ ] Test: known return series → known realized vol output
+- [x] Test: known return series → known realized vol output
 
 ### 1.4 News ingest (RSS-first)
 - [ ] `data/sources/rss.py` — Google News RSS per ticker, Yahoo Finance RSS per
@@ -170,19 +168,6 @@ write through MCP, and free-text views are structured automatically.
 **Phase 1 done when:** daily cron on the Hermes box fetches prices + news, facts
 are extracted, the harness queries and writes through MCP, the structuring job
 runs unattended, and the full test suite is green offline.
-
-## Phase 2 — Backtesting & strategy generation (parked)
-
-Picked up once the market memory is stable. The existing conventions stay:
-
-- Factor library with the standard interface (z-scored, winsorised signals)
-- Backtest engine with the six integrity rules (no look-ahead, no survivorship
-  bias, walk-forward, transaction costs, multiple-testing correction, IC/IC-decay
-  reporting)
-- Portfolio construction defaults (risk-parity, half-Kelly, hard constraints,
-  monthly rebalancing)
-- Strategy generation as a harness-facing capability that consumes facts, views,
-  and structured view data — never raw sentiment
 
 ## Deployment
 
