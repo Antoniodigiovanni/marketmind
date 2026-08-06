@@ -642,7 +642,8 @@ def get_market_views(
         limit: Maximum views to return.
 
     Returns:
-        List of view dicts ordered by as_of descending.
+        List of view dicts (id, as_of, scope, ticker, theme, view_text, model,
+        data_cutoff, used_fact_ids, created_at) ordered by as_of descending.
     """
     with _connect() as conn:
         return get_views(conn, as_of=as_of, ticker=ticker, scope=scope, limit=limit)
@@ -657,6 +658,7 @@ def save_market_view_tool(
     ticker: str | None = None,
     theme: str | None = None,
     data_cutoff: str | None = None,
+    used_fact_ids: list[str] | None = None,
 ) -> str:
     """Persist a free-text market view (immutable once written).
 
@@ -668,6 +670,7 @@ def save_market_view_tool(
         ticker: Required when scope == 'ticker'.
         theme: Required when scope == 'theme'.
         data_cutoff: ISO timestamp of newest data used, optional.
+        used_fact_ids: ticker_facts ids that informed this view, optional.
 
     Returns:
         New view ID.
@@ -682,6 +685,7 @@ def save_market_view_tool(
             ticker=ticker,
             theme=theme,
             data_cutoff=data_cutoff,
+            used_fact_ids=used_fact_ids,
         )
 
 

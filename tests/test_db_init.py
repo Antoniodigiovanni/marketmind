@@ -69,3 +69,12 @@ def test_init_db_is_idempotent_and_preserves_data(tmp_path) -> None:
         assert count == 1
     finally:
         conn2.close()
+
+
+def test_market_views_has_used_fact_ids_column() -> None:
+    conn = init_db(":memory:")
+    try:
+        view_cols = {row[1] for row in conn.execute("PRAGMA table_info('market_views')").fetchall()}
+        assert "used_fact_ids" in view_cols
+    finally:
+        conn.close()

@@ -235,6 +235,21 @@ def test_get_macro_missing_file_returns_empty(tmp_path, monkeypatch) -> None:
     assert mcp_mod.get_macro("DGS10") == []
 
 
+def test_save_market_view_tool_stores_used_fact_ids(monkeypatch, db_file) -> None:
+    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
+
+    view_id = mcp_mod.save_market_view_tool(
+        as_of="2026-08-04",
+        view_text="Rates path is the key swing factor for H2.",
+        model="hermes",
+        used_fact_ids=["fact-1", "fact-2"],
+    )
+    views = mcp_mod.get_market_views(as_of="2026-08-05")
+
+    assert views[0]["id"] == view_id
+    assert views[0]["used_fact_ids"] == ["fact-1", "fact-2"]
+
+
 def test_get_dividends_reads_parquet_with_filters(tmp_path, monkeypatch) -> None:
     dividends_dir = tmp_path / "dividends"
     dividends_dir.mkdir()
