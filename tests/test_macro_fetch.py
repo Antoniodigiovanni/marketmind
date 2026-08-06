@@ -129,7 +129,7 @@ def test_per_series_failure_isolation(tmp_path, monkeypatch) -> None:
     assert set(summary) == {series.id for series in MACRO_SERIES if series.id != "DGS10"}
 
 
-def test_fetch_main_runs_prices_volatility_and_macro_sync(monkeypatch) -> None:
+def test_fetch_main_runs_all_daily_syncs(monkeypatch) -> None:
     import data.fetch as fetch_entry
 
     called: list[str] = []
@@ -139,12 +139,23 @@ def test_fetch_main_runs_prices_volatility_and_macro_sync(monkeypatch) -> None:
         return {"fetched": [], "skipped_unresolved": [], "errors": []}
 
     monkeypatch.setattr(fetch_entry, "fetch_daily_prices", fake_prices)
+    monkeypatch.setattr(
+        fetch_entry,
+        "build_volatility_file",
+        lambda *args, **kwargs: called.append("volatility"),
+    )
     monkeypatch.setattr(fetch_entry, "fetch_volatility_indices", lambda as_of: called.append("vol"))
     monkeypatch.setattr(
         fetch_entry, "run_daily_macro_sync", lambda **kwargs: called.append("macro")
+    )
+    monkeypatch.setattr(fetch_entry, "sync_dividends", lambda **kwargs: called.append("dividends"))
+    monkeypatch.setattr(
+        fetch_entry,
+        "sync_short_interest",
+        lambda **kwargs: called.append("short_interest"),
     )
     monkeypatch.setattr("sys.argv", ["data/fetch.py", "--as-of", "2026-08-04"])
 
     fetch_entry.main()
 
-    assert called == ["prices", "vol", "macro"]
+    assert called == ["prices", "volatility", "vol", "macro", "dividends", "short_interest"]

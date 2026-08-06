@@ -88,6 +88,98 @@ def test_fetch_daily_prices_skips_unresolved(tmp_path, monkeypatch) -> None:
     )
     assert summary["fetched"] == []
     assert summary["skipped_unresolved"] == ["NOPE"]
+
+
+def test_fetch_daily_prices_uses_last_trading_day(tmp_path, monkeypatch) -> None:
+    prices_dir = tmp_path / "prices"
+    prices_dir.mkdir()
+    monkeypatch.setattr(
+        fetch_mod,
+        "get_universe",
+        lambda as_of: pl.DataFrame(
+            {
+                "ticker": ["AAPL"],
+                "name": ["Apple"],
+                "country": ["US"],
+                "sector": ["Technology"],
+                "added_date": ["2026-01-01"],
+                "removed_date": [None],
+                "universe": ["sp500"],
+            }
+        ),
+    )
+    monkeypatch.setattr(fetch_mod, "symbols_for_universe", lambda conn, members: {"AAPL": "AAPL"})
+    captured: list[tuple[str, str]] = []
+
+    def fake_ohlcv(tickers: object, start: str, end: str) -> pl.DataFrame:
+        captured.append((start, end))
+        return pl.DataFrame(
+            {
+                "date": [dt.datetime(2026, 8, 7, 20, 0, tzinfo=dt.UTC)],
+                "ticker": ["AAPL"],
+                "open": [100.0],
+                "high": [102.0],
+                "low": [99.0],
+                "close": [101.0],
+                "volume": [1000],
+            }
+        )
+
+    monkeypatch.setattr(fetch_mod, "fetch_ohlcv", fake_ohlcv)
+
+    fetch_mod.fetch_daily_prices(
+        as_of="2026-08-08",  # Saturday
+        prices_dir=prices_dir,
+        db_path=":memory:",
+    )
+
+    assert captured[0][1] == "2026-08-08"  # Friday close + 1 day
+
+
+def test_fetch_daily_prices_uses_yahoo_symbol_fallback(tmp_path, monkeypatch) -> None:
+    prices_dir = tmp_path / "prices"
+    prices_dir.mkdir()
+    monkeypatch.setattr(
+        fetch_mod,
+        "get_universe",
+        lambda as_of: pl.DataFrame(
+            {
+                "ticker": ["DELT"],
+                "name": ["Delisted Corp."],
+                "country": ["US"],
+                "sector": ["Energy"],
+                "added_date": ["2010-01-01"],
+                "removed_date": ["2020-06-30"],
+                "universe": ["sp500"],
+                "yahoo_symbol": ["DELTQ"],
+            }
+        ),
+    )
+    monkeypatch.setattr(fetch_mod, "symbols_for_universe", lambda conn, members: {})
+    captured: list[str] = []
+
+    def fake_ohlcv(tickers: object, start: str, end: str) -> pl.DataFrame:
+        captured.append(str(tickers))
+        return pl.DataFrame(
+            {
+                "date": [dt.datetime(2019, 6, 3, 20, 0, tzinfo=dt.UTC)],
+                "ticker": ["DELTQ"],
+                "open": [10.0],
+                "high": [11.0],
+                "low": [9.0],
+                "close": [10.5],
+                "volume": [100],
+            }
+        )
+
+    monkeypatch.setattr(fetch_mod, "fetch_ohlcv", fake_ohlcv)
+
+    summary = fetch_mod.fetch_daily_prices(
+        as_of="2019-06-03", prices_dir=prices_dir, db_path=":memory:"
+    )
+
+    assert summary["fetched"] == ["DELT"]
+    assert captured == ["['DELTQ']"]
     assert not (prices_dir / "NOPE.parquet").exists()
 
 
