@@ -97,11 +97,10 @@ Loaded from `.env` via `python-dotenv`; never committed.
 
 | Variable | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | LLM calls for fact extraction / view structuring |
-| `LLM_MODEL` | Model identifier (default `claude-sonnet-4-5`) |
+| `AI_API_KEY` | Chat API key (DeepSeek-compatible endpoint) for extraction / structuring |
+| `LLM_BASE_URL` | Chat endpoint (default `https://api.deepseek.com`) |
+| `LLM_MODEL` | Model identifier (default `deepseek-chat`) |
 | `FRED_API_KEY` | FRED macro series |
-| `NEWS_API_KEY` | Optional news supplement only |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Owned by the harness, not marketmind |
 
 ## Commands
 
@@ -116,10 +115,108 @@ uv run python -m server.mcp                   # run the MCP server (stdio)
 uv run ruff check . && uv run ruff format .   # lint + format
 ```
 
-Some entry points are still stubs (`agent/ingestion.py` and the view-structuring
-extractor) — they raise `NotImplementedError` until the corresponding roadmap
-items land. The daily price/macro fetch, universe refresh, symbol resolution,
-market views write/read, filings pipeline, and MCP server are functional.
+The view-structuring extractor is still a stub (raises `NotImplementedError`
+until the corresponding roadmap item lands). The daily price/macro fetch,
+universe refresh, symbol resolution, news ingest, filings pipeline, company
+profiles, and MCP server are functional.
+
+## Deployment (generic VPS)
+
+marketmind is designed to run on the same Linux box as the harness: a
+dedicated system user, systemd timers for the daily jobs, and an MCP server
+spawned over stdio — **no ports are opened**.
+
+### Requirements
+
+- Linux with systemd (Ubuntu/Debian recommended), root access.
+- GitHub access: public clone, or a read-only deploy key for a private repo.
+- `uv` — installed automatically by the installer.
+
+### One-command install
+
+```bash
+# public repo
+curl -fsSL https://raw.githubusercontent.com/Antoniodigiovanni/marketmind/main/deploy/install.sh | sudo bash
+
+# private repo (clone once, then run locally)
+git clone git@github.com:<you>/marketmind.git
+cd marketmind
+sudo REPO_URL=git@github.com:<you>/marketmind.git bash deploy/install.sh
+```
+
+For a private repo, create a **read-only deploy key** (GitHub → repo →
+Settings → Deploy keys), place the private half at `/root/.ssh/marketmind_deploy`
+on the VPS, and add the `Host github.com` config entry so root's git uses it —
+full recipe in [deploy/README.md](deploy/README.md).
+
+The installer is idempotent: it creates the `marketmind` system user, clones
+the repo to `/srv/marketmind`, installs `uv`, runs `uv sync --frozen`,
+installs `.env`, initialises the DuckDB schema, installs hardened systemd
+units, and enables the timers.
+
+### Secrets
+
+Prepare a `.env` and pass it to the installer:
+
+```bash
+sudo ENV_FILE=/root/marketmind.env \
+     REPO_URL=git@github.com:<you>/marketmind.git \
+     bash /srv/marketmind/deploy/install.sh
+```
+
+Required keys: `AI_API_KEY` (chat API), `FRED_API_KEY`. The installed
+`/srv/marketmind/.env` is mode `0600` and is **never touched** by installs or
+updates.
+
+### Schedules (systemd timers)
+
+| Timer | Schedule | Job |
+|---|---|---|
+| `marketmind-daily.timer` | daily 06:10 | price/macro fetch + news ingest |
+| `marketmind-universe.timer` | Mondays 06:00 | universe refresh + symbol resolution |
+| `marketmind-profiles.timer` | annually, 5 Jan | company profile refresh (`--backfill --profiles-only`) |
+| `marketmind-backup.timer` | nightly 02:30 | `data/` tarball, 14-day retention |
+| `marketmind-update.timer` | Mondays 05:30 (opt-in) | self-update |
+
+Override a schedule with `sudo systemctl edit <timer>` — overrides survive
+updates.
+
+### Updating
+
+```bash
+sudo bash /srv/marketmind/deploy/update.sh
+```
+
+Pulls the configured branch/tag (read from `/srv/marketmind/deploy.conf`),
+re-syncs dependencies, migrates the schema, reinstalls units, and re-arms
+timers. Opt into weekly unattended updates with `ENABLE_AUTO_UPDATE=1` in
+`deploy.conf`.
+
+### MCP wiring for the harness
+
+The harness spawns the server as the `marketmind` user:
+
+```bash
+sudo -u marketmind env HOME=/srv/marketmind UV_CACHE_DIR=/srv/marketmind/.cache \
+  bash -c 'cd /srv/marketmind && exec /usr/local/bin/uv run python -m server.mcp'
+```
+
+### Health checks
+
+```bash
+systemctl list-timers | grep marketmind
+journalctl -u marketmind-daily.service -e
+```
+
+Every job also writes an audit row to `agent_runs` (counts + `error` column).
+
+### Backups
+
+The nightly timer tarballs `data/` to `/srv/marketmind-backups/`. Move it
+off-box (rclone/restic) — a same-machine copy is a local safety net, not
+disaster recovery.
+
+Full operational detail lives in [deploy/README.md](deploy/README.md).
 
 ## MCP tools
 
