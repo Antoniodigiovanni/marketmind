@@ -61,16 +61,22 @@ ENV_FILE=/path/to/secrets.env sudo -E bash deploy/install.sh
 |---|---|---|
 | `marketmind-daily.timer` | daily 06:10 (local) | `data/fetch.py` + `agent.ingestion` |
 | `marketmind-universe.timer` | Mondays 06:00 | `data.universe.update` |
+| `marketmind-profiles.timer` | annually on 5 Jan, 06:30 | `agent.ingestion --backfill --profiles-only` |
 | `marketmind-backup.timer` | nightly 02:30 | `deploy/backup.sh` → `/srv/marketmind-backups/` (14-day retention) |
 
 Adjust with `systemctl edit marketmind-daily.timer` (override `OnCalendar`).
 
-The annual company-profile refresh is manual on purpose:
+The annual company-profile refresh runs on 5 January and rewrites a new profile
+version for every company without touching news processing. It can also be
+triggered manually:
 
 ```bash
 sudo -u marketmind env HOME=/srv/marketmind UV_CACHE_DIR=/srv/marketmind/.cache \
-  bash -c 'cd /srv/marketmind && /usr/local/bin/uv run python -m agent.ingestion "$(date +%F)" --backfill'
+  bash -c 'cd /srv/marketmind && /usr/local/bin/uv run python -m agent.ingestion "$(date +%F)" --backfill --profiles-only'
 ```
+
+Note: the profile refresh requires the versioned company-profiles feature
+(the `--profiles-only` flag) to be deployed.
 
 ## Harness MCP wiring
 

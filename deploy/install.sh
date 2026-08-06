@@ -110,7 +110,8 @@ systemctl daemon-reload
 systemctl enable --now \
   marketmind-daily.timer \
   marketmind-universe.timer \
-  marketmind-backup.timer
+  marketmind-backup.timer \
+  marketmind-profiles.timer
 
 # 8. Verification
 log "verifying"
