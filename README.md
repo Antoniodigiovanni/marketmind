@@ -19,8 +19,6 @@ server in `server/mcp.py`.
 - **Phase 1 — market memory (current).** Price/macro storage, universe
   maintenance, the MCP server, fact store, and market views are in place.
   Several daily jobs are still being built (see [ROADMAP.md](ROADMAP.md)).
-- **Phase 2 — backtesting & strategy (parked).** `factors/`, `research/`, and
-  `portfolio/` are reserved for later; nothing there is production code yet.
 
 ## Architecture
 
@@ -62,7 +60,7 @@ marketmind/
 │   │   ├── schema.sql  DuckDB schema — the single source of truth
 │   │   ├── init.py     creates research.duckdb from schema.sql
 │   │   └── vectors/    ChromaDB embeddings (not committed)
-│   └── sources/        yfinance.py, fred.py, ecb.py + supplements (openbb, newsapi)
+│   └── sources/        yfinance.py, fred.py, ecb.py, sec.py, rss.py
 ├── agent/
 │   ├── ingestion.py    daily news → fact pipeline
 │   ├── views.py        market view write + structured extraction job
@@ -70,9 +68,6 @@ marketmind/
 │   └── prompts/        all prompt templates as .md files
 ├── server/
 │   └── mcp.py          the only harness-facing interface
-├── factors/            Phase 2 (parked)
-├── research/           Phase 2 (parked)
-├── portfolio/          Phase 2 (parked)
 ├── journal/            Obsidian-compatible daily notes
 └── docs/               design specs and implementation plans
 ```
@@ -118,14 +113,13 @@ uv run python data/fetch.py                   # daily price + macro refresh
 uv run python -m agent.ingestion {YYYY-MM-DD} # daily news + fact ingest
 uv run python -m agent.views {YYYY-MM-DD}     # structure free-text market views
 uv run python -m server.mcp                   # run the MCP server (stdio)
-uv run python -m research.run {slug}          # Phase 2: backtest by slug
 uv run ruff check . && uv run ruff format .   # lint + format
 ```
 
-Some entry points are still stubs (`data/fetch.py`, `agent/ingestion.py`,
-`research.run`) — they raise `NotImplementedError` until the corresponding
-roadmap items land. The universe refresh, symbol resolution, views job, and MCP
-server are functional.
+Some entry points are still stubs (`agent/ingestion.py` and the view-structuring
+extractor) — they raise `NotImplementedError` until the corresponding roadmap
+items land. The daily price/macro fetch, universe refresh, symbol resolution,
+market views write/read, filings pipeline, and MCP server are functional.
 
 ## MCP tools
 
@@ -204,10 +198,6 @@ Conventions (full detail in [AGENTS.md](AGENTS.md)):
   schemas are asserted explicitly on load.
 - Tests run in <60 s with **no network access**: in-memory DuckDB and mocked
   API responses. `agent/tools.py` and `server/mcp.py` target 100% coverage.
-- Backtest code (Phase 2) must satisfy the six integrity rules — no
-  look-ahead bias, point-in-time universe, walk-forward validation, transaction
-  costs, multiple-testing correction, and IC/IC-decay reporting — and a research
-  folder is only complete with `hypothesis.md`, `report.md`, and passing checks.
 
 ## Further reading
 
