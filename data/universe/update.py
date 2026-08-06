@@ -101,21 +101,34 @@ def _apply_universe(
                 schema={
                     "ticker": pl.String,
                     "name": pl.String,
+                    "country": pl.String,
+                    "sector": pl.String,
+                    "added_date": pl.String,
+                    "removed_date": pl.String,
+                    "universe": pl.String,
                     "delisted_date": pl.String,
                     "reason": pl.String,
+                    "yahoo_symbol": pl.String,
                 }
             )
         )
         delisted_new = []
         for removal in removals:
-            name_rows = existing.filter(pl.col("ticker") == removal["ticker"])
-            name = name_rows["name"][0] if len(name_rows) else removal["ticker"]
+            rows = existing.filter(pl.col("ticker") == removal["ticker"])
             delisted_new.append(
                 {
                     "ticker": removal["ticker"],
-                    "name": name,
+                    "name": rows["name"][0] if len(rows) else removal["ticker"],
+                    "country": rows["country"][0] if len(rows) and "country" in rows.columns else "",
+                    "sector": rows["sector"][0] if len(rows) and "sector" in rows.columns else "",
+                    "added_date": rows["added_date"][0]
+                    if len(rows) and "added_date" in rows.columns
+                    else "",
+                    "removed_date": as_of_date.isoformat(),
+                    "universe": filename.removesuffix(".csv"),
                     "delisted_date": as_of_date.isoformat(),
                     "reason": f"removed from {filename.removesuffix('.csv')}",
+                    "yahoo_symbol": None,
                 }
             )
         pl.concat(
