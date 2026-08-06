@@ -26,6 +26,34 @@ curl -fsSL https://raw.githubusercontent.com/Antoniodigiovanni/marketmind/main/d
 The installer is idempotent — rerun it to update the checkout, re-sync
 dependencies, and refresh the systemd units.
 
+## Updating
+
+For an existing install, one command:
+
+```bash
+sudo bash /srv/marketmind/deploy/update.sh
+```
+
+It pulls the configured branch/tag, re-syncs dependencies, applies schema
+changes, reinstalls any changed units, re-arms the timers, and verifies.
+
+The persistent config lives at `/srv/marketmind/deploy.conf` (written on first
+install, read by both scripts, survives reruns):
+
+```bash
+BRANCH=main
+REPO_URL=git@github.com:Antoniodigiovanni/marketmind.git
+ENABLE_AUTO_UPDATE=0
+```
+
+- **Pin a stable release**: set `BRANCH=v0.1.0` (any git tag) and run
+  `update.sh`; install and update both accept branch or tag.
+- **One-off override**: `sudo BRANCH=main bash /srv/marketmind/deploy/update.sh`.
+- **Auto-update (opt-in)**: set `ENABLE_AUTO_UPDATE=1` in `deploy.conf` and run
+  `update.sh` once; a weekly Monday 05:30 timer then applies updates
+  unattended. It runs as root by design (it reinstalls units), so leave it
+  off unless you want unattended code changes.
+
 ### Private repo
 
 The raw-URL one-liner only works for a public repo. For a private repo, clone
@@ -63,6 +91,7 @@ ENV_FILE=/path/to/secrets.env sudo -E bash deploy/install.sh
 | `marketmind-universe.timer` | Mondays 06:00 | `data.universe.update` |
 | `marketmind-profiles.timer` | annually on 5 Jan, 06:30 | `agent.ingestion --backfill --profiles-only` |
 | `marketmind-backup.timer` | nightly 02:30 | `deploy/backup.sh` → `/srv/marketmind-backups/` (14-day retention) |
+| `marketmind-update.timer` | Mondays 05:30 (opt-in) | `deploy/update.sh` self-update |
 
 Adjust with `systemctl edit marketmind-daily.timer` (override `OnCalendar`).
 
