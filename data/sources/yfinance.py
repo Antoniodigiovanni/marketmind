@@ -85,3 +85,58 @@ def fetch_ohlcv(
 
     frame = pl.from_pandas(long[COLUMNS]).drop_nulls(subset=["close"])
     return frame.with_columns(pl.col("date").dt.convert_time_zone("UTC"))
+
+
+DIVIDEND_COLUMNS = ["ex_date", "amount"]
+
+
+def fetch_dividends(
+    symbol: str,
+    start: str,
+    end: str,
+    *,
+    history_fn: Callable[..., pd.DataFrame] | None = None,
+) -> pl.DataFrame:
+    """Fetch dividend history (ex-date, amount) for one symbol.
+
+    Uses yfinance history with actions=True and keeps rows where the
+    Dividends column is non-zero.
+
+    Args:
+        symbol: Yahoo symbol (e.g. 'AAPL', 'ASML.AS').
+        start: Start date string (YYYY-MM-DD).
+        end: End date string (YYYY-MM-DD).
+        history_fn: Injectable history callable for tests.
+
+    Returns:
+        DataFrame with columns [ex_date DATE, amount DOUBLE] sorted by ex_date.
+
+    Raises:
+        ValueError: If the history frame lacks required columns.
+    """
+    if history_fn is None:
+
+        def history_fn(**kwargs: object) -> pd.DataFrame:
+            return yf.Ticker(symbol).history(**kwargs)
+
+    history = history_fn(start=start, end=end, actions=True)
+
+    empty = pl.DataFrame(schema={"ex_date": pl.Date, "amount": pl.Float64})
+    if history is None or history.empty:
+        return empty
+    missing = [c for c in ("Dividends",) if c not in history.columns]
+    if missing:
+        raise ValueError(f"history missing required columns: {missing}")
+
+    rows = history.loc[history["Dividends"].fillna(0.0) != 0.0]
+    if rows.empty:
+        return empty
+
+    frame = pl.from_pandas(
+        rows.reset_index()[["Date", "Dividends"]].rename(
+            columns={"Date": "ex_date", "Dividends": "amount"}
+        )
+    )
+    return frame.with_columns(pl.col("ex_date").dt.convert_time_zone("UTC").dt.date()).sort(
+        "ex_date"
+    )
