@@ -24,9 +24,7 @@ class _FakeSession:
             response._content = json.dumps(
                 {
                     "claims": {
-                        "P856": [
-                            {"mainsnak": {"datavalue": {"value": "https://www.apple.com"}}}
-                        ]
+                        "P856": [{"mainsnak": {"datavalue": {"value": "https://www.apple.com"}}}]
                     }
                 }
             ).encode("utf-8")
@@ -40,14 +38,16 @@ class _FakeSession:
 
 
 HOMEPAGE = (
-    '<html><body><h1>Apple</h1>'
+    "<html><body><h1>Apple</h1>"
     '<a href="/about">About</a>'
     '<a href="/private/secret">Secret</a>'
     '<a href="https://evil.example.com/">Evil</a>'
     "<p>We design consumer electronics.</p></body></html>"
 )
-ABOUT = '<html><body><h1>About</h1><a href="/products">Products</a><p>We make phones.</p></body></html>'
-PRODUCTS = '<html><body><h1>Products</h1><p>Phones and laptops.</p></body></html>'
+ABOUT = (
+    '<html><body><h1>About</h1><a href="/products">Products</a><p>We make phones.</p></body></html>'
+)
+PRODUCTS = "<html><body><h1>Products</h1><p>Phones and laptops.</p></body></html>"
 
 
 def test_fetch_official_website_url_returns_first_claim() -> None:

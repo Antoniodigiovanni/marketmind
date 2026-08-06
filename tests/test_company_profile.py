@@ -55,9 +55,7 @@ def test_generate_profile_raises_on_missing_keys() -> None:
 
 
 def test_generate_profile_bounds_wikipedia_input() -> None:
-    llm, captured = _fake_llm(
-        {"description": "x", "products_services": ["category"]}
-    )
+    llm, captured = _fake_llm({"description": "x", "products_services": ["category"]})
 
     generate_profile("Apple Inc.", "w" * 10_000, "site", llm)
 

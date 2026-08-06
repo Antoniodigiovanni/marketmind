@@ -44,9 +44,7 @@ def generate_profile(
     Raises:
         ValueError: If the response is not valid or misses required keys.
     """
-    template = string.Template(
-        (PROMPTS_DIR / "company_profile.md").read_text(encoding="utf-8")
-    )
+    template = string.Template((PROMPTS_DIR / "company_profile.md").read_text(encoding="utf-8"))
     prompt = template.substitute(
         company_name=company_name,
         wikipedia_text=(wikipedia_text or "")[:WIKIPEDIA_CHAR_CAP] or "(no content available)",
