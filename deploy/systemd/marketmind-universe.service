@@ -12,6 +12,7 @@ EnvironmentFile=/srv/marketmind/.env
 Environment=HOME=/srv/marketmind
 Environment=UV_CACHE_DIR=/srv/marketmind/.cache
 ExecStart=/usr/local/bin/uv run python -m data.universe.update
+ExecStart=/usr/local/bin/uv run python -m data.universe.resolve
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
