@@ -60,7 +60,7 @@ def _published_iso(entry: feedparser.FeedParserDict) -> str | None:
     parsed = getattr(entry, "published_parsed", None)
     if parsed is None:
         return None
-    return dt.datetime(*parsed[:6], tzinfo=dt.timezone.utc).isoformat()
+    return dt.datetime(*parsed[:6], tzinfo=dt.UTC).isoformat()
 
 
 def parse_feed(
@@ -88,7 +88,7 @@ def parse_feed(
         if not url or not title:
             continue
         summary = getattr(entry, "summary", "") or getattr(entry, "description", "")
-        published_at = _published_iso(entry) or dt.datetime.now(dt.timezone.utc).isoformat()
+        published_at = _published_iso(entry) or dt.datetime.now(dt.UTC).isoformat()
         articles.append(
             Article(
                 ticker=ticker,

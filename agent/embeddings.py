@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from pathlib import Path
 from typing import Any
 
@@ -129,6 +128,7 @@ class ChromaVectorStore:
             result.get("documents", []),
             result.get("distances", []),
             result.get("metadatas", []),
+            strict=False,
         ):
             grouped.append(
                 [
@@ -139,7 +139,7 @@ class ChromaVectorStore:
                         "metadata": metadata,
                     }
                     for doc_id, document, distance, metadata in zip(
-                        ids, documents, distances, metadatas
+                        ids, documents, distances, metadatas, strict=False
                     )
                 ]
             )
