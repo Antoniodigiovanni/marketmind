@@ -1,0 +1,17 @@
+[Unit]
+Description=marketmind nightly data backup
+
+[Service]
+Type=oneshot
+User=marketmind
+Group=marketmind
+ExecStart=/bin/bash /srv/marketmind/deploy/backup.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+ReadWritePaths=/srv/marketmind/data /srv/marketmind-backups

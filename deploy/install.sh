@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# marketmind — one-command installer for a hardened Linux/systemd host.
+#
+# Usage (on the host, as root):
+#   sudo bash deploy/install.sh
+#
+# One-liner (repo must be public or mirrored; see README for private repos):
+#   curl -fsSL https://raw.githubusercontent.com/Antoniodigiovanni/marketmind/main/deploy/install.sh | sudo bash
+#
+# Idempotent: rerunning updates the checkout, re-syncs dependencies, refreshes
+# the systemd units, and re-runs the DB initialisation.
+#
+# Overridable env vars:
+#   APP_USER     OS user owning the install      (default: marketmind)
+#   INSTALL_DIR  install path                    (default: /srv/marketmind)
+#   DATA_DIR     data directory                  (default: $INSTALL_DIR/data)
+#   BRANCH       git branch/tag to deploy        (default: main)
+#   REPO_URL     clone URL                       (default: public GitHub URL)
+#   ENV_FILE     path to a secrets .env file     (optional)
+set -euo pipefail
+
+APP_USER="${APP_USER:-marketmind}"
+INSTALL_DIR="${INSTALL_DIR:-/srv/marketmind}"
+DATA_DIR="${DATA_DIR:-$INSTALL_DIR/data}"
+BACKUP_DIR="${BACKUP_DIR:-/srv/marketmind-backups}"
+BRANCH="${BRANCH:-main}"
+REPO_URL="${REPO_URL:-https://github.com/Antoniodigiovanni/marketmind.git}"
+ENV_FILE="${ENV_FILE:-}"
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "error: run as root (sudo bash deploy/install.sh)" >&2
+  exit 1
+fi
+if ! command -v systemctl >/dev/null 2>&1; then
+  echo "error: systemd is required" >&2
+  exit 1
+fi
+
+log() { printf '\033[1;34m[marketmind]\033[0m %s\n' "$*"; }
+
+# 1. App user (system account, no interactive shell)
+if ! id "$APP_USER" >/dev/null 2>&1; then
+  log "creating system user $APP_USER"
+  useradd --system --home-dir "$INSTALL_DIR" --shell /usr/sbin/nologin "$APP_USER"
+fi
+
+# 2. Repo checkout / update
+if [[ -d "$INSTALL_DIR/.git" ]]; then
+  log "updating checkout ($BRANCH)"
+  git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH"
+  git -C "$INSTALL_DIR" checkout --force "$BRANCH"
+  git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH"
+else
+  log "cloning $REPO_URL ($BRANCH)"
+  mkdir -p "$INSTALL_DIR"
+  git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR"
+fi
+mkdir -p "$DATA_DIR" "$INSTALL_DIR/.cache" "$BACKUP_DIR"
+chown -R "$APP_USER":"$APP_USER" "$INSTALL_DIR" "$BACKUP_DIR"
+
+# 3. uv binary (static release, architecture-aware)
+if ! command -v uv >/dev/null 2>&1 && [[ ! -x /usr/local/bin/uv ]]; then
+  log "installing uv"
+  case "$(uname -m)" in
+    x86_64)  UV_ARCH="x86_64-unknown-linux-gnu" ;;
+    aarch64) UV_ARCH="aarch64-unknown-linux-gnu" ;;
+    *) echo "error: unsupported architecture $(uname -m)" >&2; exit 1 ;;
+  esac
+  tmpdir="$(mktemp -d)"
+  curl -fsSL "https://github.com/astral-sh/uv/releases/latest/download/uv-${UV_ARCH}.tar.gz" \
+    | tar -xz -C "$tmpdir"
+  install -m 0755 "$tmpdir/uv-${UV_ARCH}/uv" /usr/local/bin/uv
+  rm -rf "$tmpdir"
+fi
+export PATH="/usr/local/bin:$PATH"
+
+run_as_app() { # run_as_app <command...>
+  sudo -u "$APP_USER" env \
+    PATH="$PATH" HOME="$INSTALL_DIR" UV_CACHE_DIR="$INSTALL_DIR/.cache" \
+    bash -c 'cd "$1" && shift && exec "$@"' _ "$INSTALL_DIR" "$@"
+}
+
+# 4. Dependencies
+log "syncing dependencies"
+run_as_app uv sync --frozen
+
+# 5. Secrets
+if [[ -n "$ENV_FILE" ]]; then
+  install -o "$APP_USER" -g "$APP_USER" -m 0600 "$ENV_FILE" "$INSTALL_DIR/.env"
+  log "installed .env from $ENV_FILE"
+elif [[ ! -f "$INSTALL_DIR/.env" ]]; then
+  install -o "$APP_USER" -g "$APP_USER" -m 0600 "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
+  log "WARNING: created .env from the example — set real secrets (DEEPSEEK_API_KEY, "
+  log "         FRED_API_KEY) and rerun this installer"
+else
+  log "keeping existing .env"
+fi
+
+# 6. Database initialisation
+log "initialising database"
+run_as_app uv run python -m data.db.init
+
+# 7. systemd units
+log "installing systemd units"
+install -o root -g root -m 0644 \
+  "$INSTALL_DIR"/deploy/systemd/*.service \
+  "$INSTALL_DIR"/deploy/systemd/*.timer \
+  /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now \
+  marketmind-daily.timer \
+  marketmind-universe.timer \
+  marketmind-backup.timer \
+  marketmind-profiles.timer
+
+# 8. Verification
+log "verifying"
+systemctl is-active --quiet marketmind-daily.timer \
+  || { echo "error: marketmind-daily.timer is not active" >&2; exit 1; }
+run_as_app uv run python -m data.db.init >/dev/null
+log "done. install dir: $INSTALL_DIR | user: $APP_USER | data: $DATA_DIR"
+log "harness MCP command: cd $INSTALL_DIR && sudo -u $APP_USER env HOME=$INSTALL_DIR uv run python -m server.mcp"

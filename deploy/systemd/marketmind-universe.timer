@@ -1,0 +1,10 @@
+[Unit]
+Description=Run marketmind weekly universe refresh
+
+[Timer]
+OnCalendar=Mon *-*-* 06:00:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

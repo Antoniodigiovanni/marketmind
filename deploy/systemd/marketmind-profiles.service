@@ -1,0 +1,23 @@
+[Unit]
+Description=marketmind annual company profile refresh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=marketmind
+Group=marketmind
+WorkingDirectory=/srv/marketmind
+EnvironmentFile=/srv/marketmind/.env
+Environment=HOME=/srv/marketmind
+Environment=UV_CACHE_DIR=/srv/marketmind/.cache
+ExecStart=/bin/sh -c '/usr/local/bin/uv run python -m agent.ingestion "$(date +%F)" --backfill --profiles-only'
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+ReadWritePaths=/srv/marketmind/data /srv/marketmind/.cache
