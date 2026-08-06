@@ -37,6 +37,12 @@ ENABLE_AUTO_UPDATE="${ENABLE_AUTO_UPDATE_ENV:-$ENABLE_AUTO_UPDATE}"
 
 log() { printf '\033[1;34m[marketmind]\033[0m %s\n' "$*"; }
 
+# git runs as root against a repo owned by $APP_USER — declare it safe so the
+# ownership guard does not block update runs.
+if ! git config --global --get safe.directory "$INSTALL_DIR" >/dev/null 2>&1; then
+  git config --global --add safe.directory "$INSTALL_DIR"
+fi
+
 log "updating to $BRANCH"
 git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH"
 git -C "$INSTALL_DIR" checkout --force "$BRANCH"

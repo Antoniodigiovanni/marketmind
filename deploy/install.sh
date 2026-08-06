@@ -55,6 +55,12 @@ fi
 
 log() { printf '\033[1;34m[marketmind]\033[0m %s\n' "$*"; }
 
+# git runs as root against a repo owned by $APP_USER — declare it safe so the
+# ownership guard does not block install/update runs.
+if ! git config --global --get safe.directory "$INSTALL_DIR" >/dev/null 2>&1; then
+  git config --global --add safe.directory "$INSTALL_DIR"
+fi
+
 # 1. App user (system account, no interactive shell)
 if ! id "$APP_USER" >/dev/null 2>&1; then
   log "creating system user $APP_USER"
