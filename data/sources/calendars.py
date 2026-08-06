@@ -51,3 +51,19 @@ def is_trading_day(exchange: str, day: dt.date) -> bool:
         True when the exchange has a session on that day.
     """
     return bool(xcals.get_calendar(exchange).is_session(pd.Timestamp(day)))
+
+
+def last_trading_day(exchange: str, day: dt.date) -> dt.date:
+    """Return the last trading session on or before a date.
+
+    Args:
+        exchange: exchange-calendars code (e.g. 'XNYS', 'XETR').
+        day: Date to check.
+
+    Returns:
+        The most recent trading day on or before day.
+    """
+    session = xcals.get_calendar(exchange).date_to_session(
+        pd.Timestamp(day), direction="previous"
+    )
+    return session.date()
