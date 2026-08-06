@@ -12,7 +12,7 @@ import polars as pl
 from loguru import logger
 
 from data.db.init import DEFAULT_DB_PATH, init_db
-from data.sources.xbrlorg import EsefFiling, XbrlorgClient
+from data.sources.xbrlorg import XbrlorgClient
 from data.universe.loader import UNIVERSE_DIR
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
@@ -94,9 +94,7 @@ def insert_esef_filing(
     return filing_id
 
 
-def _universe_lei_map(
-    universe_dir: Path, countries: tuple[str, ...]
-) -> dict[str, dict[str, str]]:
+def _universe_lei_map(universe_dir: Path, countries: tuple[str, ...]) -> dict[str, dict[str, str]]:
     """Map LEI -> {ticker, country} for active members in the given countries."""
     path = universe_dir / "eurostoxx600.csv"
     if not path.exists():
@@ -199,9 +197,7 @@ def main() -> None:
     args = parser.parse_args()
     conn = init_db(args.db)
     try:
-        counts = backfill_esef(
-            conn, XbrlorgClient(), ROOT_DIR, countries=tuple(args.countries)
-        )
+        counts = backfill_esef(conn, XbrlorgClient(), ROOT_DIR, countries=tuple(args.countries))
         print(counts)
     finally:
         conn.close()

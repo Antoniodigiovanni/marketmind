@@ -35,9 +35,7 @@ def _seed_filing(
     )
 
 
-def _seed_esef(
-    conn, *, fxo_id: str, lei: str, ticker: str, country: str, filed_at: str
-) -> str:
+def _seed_esef(conn, *, fxo_id: str, lei: str, ticker: str, country: str, filed_at: str) -> str:
     return insert_esef_filing(
         conn,
         fxo_id=fxo_id,
@@ -146,8 +144,22 @@ def test_get_insider_transactions_and_holdings(monkeypatch, db_file) -> None:
 
 def test_get_european_filings_filters_and_orders(monkeypatch, db_file) -> None:
     conn = duckdb.connect(db_file)
-    _seed_esef(conn, fxo_id="ESEF/IT/1", lei="815600AB", ticker="BAMI.MI", country="IT", filed_at="2022-01-10")
-    _seed_esef(conn, fxo_id="ESEF/FR/1", lei="969500Y", ticker="SOPR.PA", country="FR", filed_at="2023-02-01")
+    _seed_esef(
+        conn,
+        fxo_id="ESEF/IT/1",
+        lei="815600AB",
+        ticker="BAMI.MI",
+        country="IT",
+        filed_at="2022-01-10",
+    )
+    _seed_esef(
+        conn,
+        fxo_id="ESEF/FR/1",
+        lei="969500Y",
+        ticker="SOPR.PA",
+        country="FR",
+        filed_at="2023-02-01",
+    )
     conn.close()
     monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
 

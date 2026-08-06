@@ -27,7 +27,9 @@ def _filing(fxo_id: str, lei: str, name: str, country: str, url: str) -> EsefFil
 
 
 class FakeXbrlorg:
-    def __init__(self, by_country: dict[str, list[EsefFiling]], fail_url: str | None = None) -> None:
+    def __init__(
+        self, by_country: dict[str, list[EsefFiling]], fail_url: str | None = None
+    ) -> None:
         self.by_country = by_country
         self.fail_url = fail_url
         self.downloaded: list[str] = []
@@ -59,10 +61,18 @@ def test_backfill_inserts_matches_and_ignores_others(tmp_path) -> None:
         client = FakeXbrlorg(
             {
                 "IT": [
-                    _filing("ESEF/IT/1", "815600AB12CD34EF5678", "Banco BPM S.p.A.", "IT", "https://x/1.zip"),
+                    _filing(
+                        "ESEF/IT/1",
+                        "815600AB12CD34EF5678",
+                        "Banco BPM S.p.A.",
+                        "IT",
+                        "https://x/1.zip",
+                    ),
                     _filing("ESEF/IT/2", "OTHERLEI", "Someone Else", "IT", "https://x/2.zip"),
                 ],
-                "FR": [_filing("ESEF/FR/3", "969500Y", "Sopra Steria Group", "FR", "https://x/3.zip")],
+                "FR": [
+                    _filing("ESEF/FR/3", "969500Y", "Sopra Steria Group", "FR", "https://x/3.zip")
+                ],
             }
         )
 
@@ -74,7 +84,14 @@ def test_backfill_inserts_matches_and_ignores_others(tmp_path) -> None:
             universe_dir=tmp_path / "universe",
         )
 
-        assert counts == {"fetched": 3, "inserted": 2, "skipped": 0, "ignored": 1, "failed": 0, "unresolved": 0}
+        assert counts == {
+            "fetched": 3,
+            "inserted": 2,
+            "skipped": 0,
+            "ignored": 1,
+            "failed": 0,
+            "unresolved": 0,
+        }
         rows = conn.execute(
             "SELECT fxo_id, lei, ticker, country, filed_at, period_end, text_hash, size_bytes "
             "FROM esef_filings ORDER BY fxo_id"
@@ -95,7 +112,17 @@ def test_backfill_is_resumable(tmp_path) -> None:
     conn = init_db(":memory:")
     try:
         client = FakeXbrlorg(
-            {"IT": [_filing("ESEF/IT/1", "815600AB12CD34EF5678", "Banco BPM S.p.A.", "IT", "https://x/1.zip")]}
+            {
+                "IT": [
+                    _filing(
+                        "ESEF/IT/1",
+                        "815600AB12CD34EF5678",
+                        "Banco BPM S.p.A.",
+                        "IT",
+                        "https://x/1.zip",
+                    )
+                ]
+            }
         )
         first = backfill_esef(
             conn, client, tmp_path, countries=("IT",), universe_dir=tmp_path / "universe"
@@ -104,7 +131,14 @@ def test_backfill_is_resumable(tmp_path) -> None:
             conn, client, tmp_path, countries=("IT",), universe_dir=tmp_path / "universe"
         )
         assert first["inserted"] == 1
-        assert second == {"fetched": 1, "inserted": 0, "skipped": 1, "ignored": 0, "failed": 0, "unresolved": 0}
+        assert second == {
+            "fetched": 1,
+            "inserted": 0,
+            "skipped": 1,
+            "ignored": 0,
+            "failed": 0,
+            "unresolved": 0,
+        }
     finally:
         conn.close()
 
@@ -116,8 +150,20 @@ def test_backfill_failure_does_not_abort_sweep(tmp_path) -> None:
         client = FakeXbrlorg(
             {
                 "IT": [
-                    _filing("ESEF/IT/1", "815600AB12CD34EF5678", "Banco BPM S.p.A.", "IT", "https://x/1.zip"),
-                    _filing("ESEF/IT/9", "815600AB12CD34EF5678", "Banco BPM S.p.A.", "IT", "https://x/bad.zip"),
+                    _filing(
+                        "ESEF/IT/1",
+                        "815600AB12CD34EF5678",
+                        "Banco BPM S.p.A.",
+                        "IT",
+                        "https://x/1.zip",
+                    ),
+                    _filing(
+                        "ESEF/IT/9",
+                        "815600AB12CD34EF5678",
+                        "Banco BPM S.p.A.",
+                        "IT",
+                        "https://x/bad.zip",
+                    ),
                 ]
             },
             fail_url="https://x/bad.zip",
@@ -125,7 +171,14 @@ def test_backfill_failure_does_not_abort_sweep(tmp_path) -> None:
         counts = backfill_esef(
             conn, client, tmp_path, countries=("IT",), universe_dir=tmp_path / "universe"
         )
-        assert counts == {"fetched": 2, "inserted": 1, "skipped": 0, "ignored": 0, "failed": 1, "unresolved": 0}
+        assert counts == {
+            "fetched": 2,
+            "inserted": 1,
+            "skipped": 0,
+            "ignored": 0,
+            "failed": 1,
+            "unresolved": 0,
+        }
         assert conn.execute("SELECT COUNT(*) FROM esef_filings").fetchone()[0] == 1
     finally:
         conn.close()

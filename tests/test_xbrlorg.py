@@ -37,7 +37,9 @@ class FakeSession:
         return FakeResponse(self.routes[url])
 
 
-def _page(fxo_id: str, lei: str, name: str, country: str, next_url: str | None) -> dict[str, object]:
+def _page(
+    fxo_id: str, lei: str, name: str, country: str, next_url: str | None
+) -> dict[str, object]:
     return {
         "data": [
             {
