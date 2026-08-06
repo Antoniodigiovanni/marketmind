@@ -76,8 +76,9 @@ marketmind/
 
 ## Naming and communication conventions
 
-- Never use the words "AI", "artificial intelligence", or "harness" in branch
-  names, commit messages, pull request titles, or pull request descriptions.
+- Never use the words "AI", "artificial intelligence", "harness", or "codex"
+  (any casing) in branch names, commit messages, pull request titles, or pull
+  request descriptions.
 - Avoid them anywhere else we write about the project (docs, code comments,
   changelogs, release notes, journal entries). Use neutral, concrete language
   instead — e.g. "ingest job", "fact store", "market-memory service".
