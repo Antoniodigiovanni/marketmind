@@ -12,7 +12,7 @@ EnvironmentFile=/srv/marketmind/.env
 Environment=HOME=/srv/marketmind
 Environment=UV_CACHE_DIR=/srv/marketmind/.cache
 ExecStart=/usr/local/bin/uv run python data/fetch.py
-ExecStart=/bin/sh -c '/usr/local/bin/uv run python -m agent.ingestion "$(date +%F)"'
+ExecStart=/bin/sh -c '/usr/local/bin/uv run python -m agent.ingestion "$(date -I)"'
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
