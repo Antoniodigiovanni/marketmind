@@ -77,6 +77,14 @@ marketmind/
 - All DataFrames must have a timezone-aware UTC `DatetimeIndex`. Column names: `snake_case`.
 - Assert schema explicitly on load — never silently accept unexpected columns.
 
+## Naming and communication conventions
+
+- Never use the words "AI", "artificial intelligence", or "harness" in branch
+  names, commit messages, pull request titles, or pull request descriptions.
+- Avoid them anywhere else we write about the project (docs, code comments,
+  changelogs, release notes, journal entries). Use neutral, concrete language
+  instead — e.g. "ingest job", "fact store", "market-memory service".
+
 ## Data sources — free only
 
 | Source | Library / mechanism | What it provides |
