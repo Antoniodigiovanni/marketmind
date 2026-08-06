@@ -108,6 +108,16 @@ def _fake_llm(messages: list[dict[str, str]]) -> str:
     return "REDUNDANT"
 
 
+def _fake_profile_builder(name: str) -> dict:
+    return {
+        "description": f"{name} designs things.",
+        "products_services": ["category-a", "category-b"],
+        "website_url": None,
+        "sources": {"wikipedia": None, "crawled": []},
+        "generated_by": "deepseek-chat",
+    }
+
+
 def _seed_article(conn, article_id: str = "art-0") -> None:
     conn.execute(
         """
@@ -139,6 +149,7 @@ def test_run_daily_ingest_end_to_end(tmp_path) -> None:
             universe=UNIVERSE,
             news_fetcher=_fake_news_fetcher,
             description_fetcher=description_fetcher,
+            profile_builder=_fake_profile_builder,
             llm=_fake_llm,
             raw_news_dir=tmp_path / "news",
         )
@@ -148,6 +159,8 @@ def test_run_daily_ingest_end_to_end(tmp_path) -> None:
         assert summary["articles_redundant"] == 1
         assert summary["facts_written"] == 1
         assert summary["aggregate_written"] == 2
+        assert summary["profiles_built"] == 2
+        assert summary["profiles_failed"] == 0
 
         facts = get_current_facts("AAPL", DATE, conn)
         assert len(facts) == 1
@@ -180,6 +193,8 @@ def test_run_daily_ingest_end_to_end(tmp_path) -> None:
             ("MSFT", "Microsoft sells software."),
         ]
         assert description_fetcher.calls == 2
+        profile_count = conn.execute("SELECT COUNT(*) FROM company_profiles").fetchone()[0]
+        assert profile_count == 2
     finally:
         conn.close()
 
@@ -195,6 +210,7 @@ def test_description_is_cached_across_runs(tmp_path) -> None:
             universe=UNIVERSE,
             news_fetcher=_fake_news_fetcher,
             description_fetcher=description_fetcher,
+            profile_builder=_fake_profile_builder,
             llm=_fake_llm,
             raw_news_dir=tmp_path / "news",
         )
@@ -204,6 +220,7 @@ def test_description_is_cached_across_runs(tmp_path) -> None:
             universe=UNIVERSE,
             news_fetcher=_fake_news_fetcher,
             description_fetcher=description_fetcher,
+            profile_builder=_fake_profile_builder,
             llm=_fake_llm,
             raw_news_dir=tmp_path / "news",
         )
@@ -211,6 +228,8 @@ def test_description_is_cached_across_runs(tmp_path) -> None:
         assert description_fetcher.calls == 2
         counts = conn.execute("SELECT SUM(articles_skipped) FROM agent_runs").fetchone()[0]
         assert counts == 4  # 1 in-run duplicate + 3 already-seen on the rerun
+        profiles_built = conn.execute("SELECT SUM(profiles_built) FROM agent_runs").fetchone()[0]
+        assert profiles_built == 2  # built once, reused on the rerun
     finally:
         conn.close()
 
@@ -261,6 +280,7 @@ def test_supersedes_prior_fact(tmp_path) -> None:
             universe=UNIVERSE,
             news_fetcher=news,
             description_fetcher=lambda name: "x",
+            profile_builder=_fake_profile_builder,
             llm=llm,
             raw_news_dir=tmp_path / "news",
         )
@@ -285,7 +305,96 @@ def test_run_requires_llm() -> None:
                 universe=UNIVERSE,
                 news_fetcher=_fake_news_fetcher,
                 description_fetcher=_CountingDescriptionFetcher(),
+                profile_builder=_fake_profile_builder,
                 llm=None,
             )
+    finally:
+        conn.close()
+
+
+def test_backfill_creates_new_profile_version(tmp_path) -> None:
+    conn = init_db(":memory:")
+    try:
+        run_daily_ingest(
+            DATE,
+            conn=conn,
+            universe=UNIVERSE,
+            news_fetcher=_fake_news_fetcher,
+            description_fetcher=_CountingDescriptionFetcher(),
+            profile_builder=_fake_profile_builder,
+            llm=_fake_llm,
+            raw_news_dir=tmp_path / "news",
+        )
+        summary = run_daily_ingest(
+            DATE,
+            conn=conn,
+            universe=UNIVERSE,
+            news_fetcher=_fake_news_fetcher,
+            description_fetcher=_CountingDescriptionFetcher(),
+            profile_builder=_fake_profile_builder,
+            backfill=True,
+            llm=_fake_llm,
+            raw_news_dir=tmp_path / "news",
+        )
+
+        assert summary["profiles_built"] == 2
+        rows = conn.execute(
+            """
+            SELECT valid_until FROM company_profiles
+            WHERE ticker = 'AAPL' ORDER BY created_at
+            """
+        ).fetchall()
+        assert len(rows) == 2
+        assert rows[0][0].isoformat() == DATE
+        assert rows[1][0] is None
+    finally:
+        conn.close()
+
+
+def test_extraction_prompt_includes_bounded_categories(tmp_path) -> None:
+    captured: list[str] = []
+
+    def llm(messages: list[dict[str, str]]) -> str:
+        captured.append(messages[-1]["content"])
+        return _fake_llm(messages)
+
+    conn = init_db(":memory:")
+    try:
+        run_daily_ingest(
+            DATE,
+            conn=conn,
+            universe=UNIVERSE,
+            news_fetcher=_fake_news_fetcher,
+            description_fetcher=_CountingDescriptionFetcher(),
+            profile_builder=_fake_profile_builder,
+            llm=llm,
+            raw_news_dir=tmp_path / "news",
+        )
+    finally:
+        conn.close()
+
+    assert captured
+    assert "Products/services: category-a, category-b" in captured[0]
+
+
+def test_profile_failure_does_not_stop_run(tmp_path) -> None:
+    def broken_builder(name: str) -> dict:
+        raise RuntimeError("profile service down")
+
+    conn = init_db(":memory:")
+    try:
+        summary = run_daily_ingest(
+            DATE,
+            conn=conn,
+            universe=UNIVERSE,
+            news_fetcher=_fake_news_fetcher,
+            description_fetcher=_CountingDescriptionFetcher(),
+            profile_builder=broken_builder,
+            llm=_fake_llm,
+            raw_news_dir=tmp_path / "news",
+        )
+
+        assert summary["profiles_failed"] == 2
+        assert summary["facts_written"] == 1  # news still processed
     finally:
         conn.close()

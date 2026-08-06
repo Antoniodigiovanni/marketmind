@@ -16,6 +16,7 @@ article, and a pre-score (source credibility × recency decay).
 - Sector: {sector}
 - Country: {country}
 - Company description: {company_description}
+- Products/services: {products_services}
 - Current known facts:
 {current_facts}
 - Similar past facts:
