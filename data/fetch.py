@@ -12,6 +12,7 @@ from loguru import logger
 
 from data.db.init import DEFAULT_DB_PATH
 from data.macro.fetch import run_daily_macro_sync
+from data.processed.volatility import build_volatility_file
 from data.sources.calendars import exchange_for_suffix, last_trading_day
 from data.sources.yfinance import fetch_ohlcv
 from data.universe.loader import UNIVERSE_DIR, get_universe
@@ -19,6 +20,7 @@ from data.universe.loader import UNIVERSE_DIR, get_universe
 ROOT_DIR = Path(__file__).resolve().parent.parent
 PRICES_DIR = ROOT_DIR / "data" / "raw" / "prices"
 MACRO_DIR = ROOT_DIR / "data" / "raw" / "macro"
+PROCESSED_VOL_PATH = ROOT_DIR / "data" / "processed" / "volatility.parquet"
 HISTORY_START = "2015-01-01"
 
 VOL_INDICES = ["^VIX", "^VSTOXX"]
@@ -167,6 +169,7 @@ def main() -> None:
 
     as_of_date = dt.date.fromisoformat(args.as_of)
     summary = fetch_daily_prices(as_of=args.as_of)
+    build_volatility_file(PRICES_DIR, PROCESSED_VOL_PATH)
     fetch_volatility_indices(as_of_date)
     run_daily_macro_sync(today=args.as_of)
     logger.info(
