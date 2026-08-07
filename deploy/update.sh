@@ -2,7 +2,12 @@
 # marketmind — one-command update for an existing install.
 #
 # Usage (on the host, as root):
-#   sudo bash /srv/marketmind/deploy/update.sh
+#   sudo /usr/local/sbin/marketmind-update
+#
+# install.sh copies this file to /usr/local/sbin/marketmind-update (root-owned)
+# and the systemd unit runs that copy — never the one under $INSTALL_DIR, which
+# is writable by the unprivileged service user. This script keeps that copy in
+# sync after each pull.
 #
 # Reads /srv/marketmind/deploy.conf (BRANCH, REPO_URL, ENABLE_AUTO_UPDATE);
 # env vars override the config for a one-off update.
@@ -69,6 +74,16 @@ install -o root -g root -m 0644 \
   "$INSTALL_DIR"/deploy/systemd/*.service \
   "$INSTALL_DIR"/deploy/systemd/*.timer \
   /etc/systemd/system/
+
+# Refresh the root-owned copy of this script from the freshly pulled tree.
+# Staged in the target directory and renamed, never written in place: bash
+# reads a running script incrementally, so overwriting it mid-run corrupts
+# the remainder of this very execution.
+log "refreshing /usr/local/sbin/marketmind-update"
+install -o root -g root -m 0755 \
+  "$INSTALL_DIR/deploy/update.sh" /usr/local/sbin/.marketmind-update.new
+mv -f /usr/local/sbin/.marketmind-update.new /usr/local/sbin/marketmind-update
+
 systemctl daemon-reload
 systemctl enable --now \
   marketmind-daily.timer \

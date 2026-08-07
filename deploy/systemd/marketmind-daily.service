@@ -11,8 +11,10 @@ WorkingDirectory=/srv/marketmind
 EnvironmentFile=/srv/marketmind/.env
 Environment=HOME=/srv/marketmind
 Environment=UV_CACHE_DIR=/srv/marketmind/.cache
-ExecStart=/usr/local/bin/uv run python data/fetch.py
-ExecStart=/bin/sh -c '/usr/local/bin/uv run python -m agent.ingestion "$(date -I)"'
+# --frozen --no-sync: ProtectSystem=strict leaves .venv read-only, so uv must
+# never try to re-lock or re-sync the environment at run time.
+ExecStart=/usr/local/bin/uv run --frozen --no-sync python data/fetch.py
+ExecStart=/bin/sh -c '/usr/local/bin/uv run --frozen --no-sync python -m agent.ingestion "$(date -I)"'
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

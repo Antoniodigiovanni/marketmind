@@ -120,16 +120,34 @@ run_as_app() { # run_as_app <command...>
 log "syncing dependencies"
 run_as_app uv sync --frozen
 
-# 5. Secrets
+# 5. Secrets — never install placeholder values. Enabling the timers with the
+# example .env produces a daily job that fails every morning with no signal.
 if [[ -n "$ENV_FILE" ]]; then
   install -o "$APP_USER" -g "$APP_USER" -m 0600 "$ENV_FILE" "$INSTALL_DIR/.env"
   log "installed .env from $ENV_FILE"
 elif [[ ! -f "$INSTALL_DIR/.env" ]]; then
-  install -o "$APP_USER" -g "$APP_USER" -m 0600 "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
-  log "WARNING: created .env from the example — set real secrets (AI_API_KEY, "
-  log "         FRED_API_KEY) and rerun this installer"
+  cat >&2 <<EOF
+error: no secrets file at $INSTALL_DIR/.env
+
+  Create it from the template, set real values, then rerun this installer:
+
+    sudo install -o $APP_USER -g $APP_USER -m 0600 \\
+      $INSTALL_DIR/.env.example $INSTALL_DIR/.env
+    sudoedit $INSTALL_DIR/.env
+
+  Or point the installer at an existing file:
+
+    sudo ENV_FILE=/path/to/.env bash deploy/install.sh
+EOF
+  exit 1
 else
   log "keeping existing .env"
+fi
+
+if grep -qE '^(AI_API_KEY=sk-\.\.\.|FRED_API_KEY=\.\.\.)[[:space:]]*$' "$INSTALL_DIR/.env"; then
+  echo "error: $INSTALL_DIR/.env still contains example placeholder values." >&2
+  echo "       Set real secrets (AI_API_KEY, FRED_API_KEY) and rerun." >&2
+  exit 1
 fi
 
 # 6. Database initialisation
@@ -142,6 +160,12 @@ install -o root -g root -m 0644 \
   "$INSTALL_DIR"/deploy/systemd/*.service \
   "$INSTALL_DIR"/deploy/systemd/*.timer \
   /etc/systemd/system/
+
+# The update script runs as root, so it must not live in a directory the
+# service user can write to — that user processes untrusted network input and
+# would otherwise be one file write away from root at the next timer firing.
+install -o root -g root -m 0755 "$INSTALL_DIR/deploy/update.sh" /usr/local/sbin/marketmind-update
+
 systemctl daemon-reload
 systemctl enable --now \
   marketmind-daily.timer \
@@ -161,4 +185,5 @@ systemctl is-active --quiet marketmind-daily.timer \
   || { echo "error: marketmind-daily.timer is not active" >&2; exit 1; }
 run_as_app uv run python -m data.db.init >/dev/null
 log "done. install dir: $INSTALL_DIR | user: $APP_USER | data: $DATA_DIR"
-log "harness MCP command: cd $INSTALL_DIR && sudo -u $APP_USER env HOME=$INSTALL_DIR uv run python -m server.mcp"
+log "MCP command: cd $INSTALL_DIR && sudo -u $APP_USER env HOME=$INSTALL_DIR \\"
+log "             uv run --frozen --no-sync python -m server.mcp"
