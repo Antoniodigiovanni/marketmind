@@ -12,6 +12,7 @@ from mcp.server.fastmcp import FastMCP
 from agent.knowledge import get_current_company_profile, get_current_facts, write_fact
 from agent.views import get_market_views as get_views
 from agent.views import save_market_view as save_view
+from data.sources.rss import NEWS_RECORD_FIELDS
 
 mcp = FastMCP("marketmind")
 
@@ -24,6 +25,12 @@ SHORT_INTEREST_GLOB = str(ROOT_DIR / "data" / "raw" / "short_interest" / "*.parq
 NEWS_GLOB = str(ROOT_DIR / "data" / "raw" / "news" / "*.ndjson")
 PROCESSED_VOL_PATH = ROOT_DIR / "data" / "processed" / "volatility.parquet"
 FILINGS_13F_GLOB = str(ROOT_DIR / "data" / "raw" / "13f" / "**" / "*.parquet")
+
+# Columns returned by the news tools. Every entry must exist in the on-disk
+# record written by data.sources.rss.article_to_record — asserted in tests, so
+# a producer/consumer drift fails the suite instead of the live tool.
+NEWS_COLUMNS = ["url", "source", "ticker", "published_at", "title", "summary"]
+assert set(NEWS_COLUMNS) <= set(NEWS_RECORD_FIELDS)
 
 
 def _13f_partitions_exist() -> bool:
@@ -136,7 +143,7 @@ def get_news(ticker: str, since: str | None = None, limit: int = 50) -> list[dic
         limit: Maximum articles to return.
 
     Returns:
-        List of {url, source, ticker, published_at, title, description}.
+        List of {url, source, ticker, published_at, title, summary}.
     """
     import glob
 
@@ -146,8 +153,8 @@ def get_news(ticker: str, since: str | None = None, limit: int = 50) -> list[dic
 
     conn = duckdb.connect()
     try:
-        query = """
-            SELECT url, source, ticker, published_at, title, description
+        query = f"""
+            SELECT {", ".join(NEWS_COLUMNS)}
             FROM read_ndjson(?, union_by_name = true)
             WHERE ticker = ?
         """
@@ -160,7 +167,7 @@ def get_news(ticker: str, since: str | None = None, limit: int = 50) -> list[dic
         rows = conn.execute(query, params).fetchall()
     finally:
         conn.close()
-    return _rows_to_dicts(rows, ["url", "source", "ticker", "published_at", "title", "description"])
+    return _rows_to_dicts(rows, NEWS_COLUMNS)
 
 
 @mcp.tool()
@@ -172,8 +179,9 @@ def search_news(query: str, limit: int = 50) -> list[dict[str, object]]:
         limit: Maximum articles to return.
 
     Returns:
-        List of {url, source, ticker, published_at, title, description} ranked
-        by recency.
+        List of {url, source, ticker, published_at, title, summary} ranked
+        by recency. Only the stored title and summary are searched — RSS
+        never gives us the article body.
     """
     import glob
 
@@ -184,17 +192,17 @@ def search_news(query: str, limit: int = 50) -> list[dict[str, object]]:
     conn = duckdb.connect()
     try:
         rows = conn.execute(
-            """
-            SELECT url, source, ticker, published_at, title, description
+            f"""
+            SELECT {", ".join(NEWS_COLUMNS)}
             FROM read_ndjson(?, union_by_name = true)
-            WHERE title ILIKE ? OR description ILIKE ? OR content ILIKE ?
+            WHERE title ILIKE ? OR summary ILIKE ?
             ORDER BY published_at DESC LIMIT ?
             """,
-            [files, f"%{query}%", f"%{query}%", f"%{query}%", limit],
+            [files, f"%{query}%", f"%{query}%", limit],
         ).fetchall()
     finally:
         conn.close()
-    return _rows_to_dicts(rows, ["url", "source", "ticker", "published_at", "title", "description"])
+    return _rows_to_dicts(rows, NEWS_COLUMNS)
 
 
 @mcp.tool()

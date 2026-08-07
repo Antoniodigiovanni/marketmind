@@ -44,6 +44,43 @@ class Article:
         return _sha256(body)
 
 
+NEWS_RECORD_FIELDS: tuple[str, ...] = (
+    "ticker",
+    "url",
+    "url_hash",
+    "title",
+    "summary",
+    "source",
+    "published_at",
+    "content_hash",
+)
+
+
+def article_to_record(article: Article) -> dict[str, str]:
+    """Serialise an article into the raw NDJSON record stored under data/raw/news.
+
+    Single source of truth for the on-disk news schema: the ingest job writes
+    these fields and the MCP read tools query them. Any change here must be
+    reflected in NEWS_RECORD_FIELDS, which server.mcp asserts against.
+
+    Args:
+        article: Fetched article.
+
+    Returns:
+        Dict keyed by NEWS_RECORD_FIELDS.
+    """
+    return {
+        "ticker": article.ticker,
+        "url": article.url,
+        "url_hash": article.url_hash,
+        "title": article.title,
+        "summary": article.summary,
+        "source": article.source,
+        "published_at": article.published_at,
+        "content_hash": article.content_hash,
+    }
+
+
 def google_news_url(ticker: str, name: str) -> str:
     """Build the Google News RSS URL for a ticker + company name query."""
     query = quote(f'"{ticker}" OR "{name}"')
