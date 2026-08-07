@@ -166,7 +166,9 @@ sudo ENV_FILE=/root/marketmind.env \
 
 Required keys: `AI_API_KEY` (chat API), `FRED_API_KEY`. The installed
 `/srv/marketmind/.env` is mode `0600` and is **never touched** by installs or
-updates.
+updates. The installer **aborts** if no `.env` exists or if it still holds the
+example placeholders — enabling the timers with an unusable key would give you
+a job that fails silently every morning.
 
 ### Schedules (systemd timers)
 
@@ -184,7 +186,7 @@ updates.
 ### Updating
 
 ```bash
-sudo bash /srv/marketmind/deploy/update.sh
+sudo /usr/local/sbin/marketmind-update
 ```
 
 Pulls the configured branch/tag (read from `/srv/marketmind/deploy.conf`),
@@ -198,7 +200,7 @@ The harness spawns the server as the `marketmind` user:
 
 ```bash
 sudo -u marketmind env HOME=/srv/marketmind UV_CACHE_DIR=/srv/marketmind/.cache \
-  bash -c 'cd /srv/marketmind && exec /usr/local/bin/uv run python -m server.mcp'
+  bash -c 'cd /srv/marketmind && exec /usr/local/bin/uv run --frozen --no-sync python -m server.mcp'
 ```
 
 ### Health checks
