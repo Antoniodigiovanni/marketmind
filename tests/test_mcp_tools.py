@@ -9,7 +9,23 @@ import polars as pl
 import pytest
 
 import server.mcp as mcp_mod
+from agent.ingestion import _write_raw_news
 from data.db.init import init_db
+from data.sources.rss import NEWS_RECORD_FIELDS, Article, article_to_record
+
+
+def _article(**overrides: str) -> Article:
+    """Build an Article with sensible defaults for the news round-trip tests."""
+    fields: dict[str, str] = {
+        "ticker": "AAPL",
+        "url": "https://a.com/1",
+        "title": "Apple unveils new chip",
+        "summary": "Apple announced a new M-series chip.",
+        "source": "google-news",
+        "published_at": "2026-08-04T08:00:00+00:00",
+    }
+    fields.update(overrides)
+    return Article(**fields)
 
 
 @pytest.fixture()
@@ -91,37 +107,46 @@ def test_get_volatility_index_uses_prices(tmp_path, monkeypatch) -> None:
     assert rows[0]["close"] == 14.2
 
 
+def test_news_read_columns_exist_in_the_written_record() -> None:
+    """Guard against producer/consumer drift on the raw news schema.
+
+    The columns the MCP tools select must exist in the record the ingest job
+    actually writes. Asserted against emitted keys, not just the constant.
+    """
+    record = article_to_record(_article())
+    assert set(record) == set(NEWS_RECORD_FIELDS)
+    assert set(mcp_mod.NEWS_COLUMNS) <= set(record)
+
+
 def test_get_news_and_search(tmp_path, monkeypatch) -> None:
-    news_file = tmp_path / "news.ndjson"
-    news_file.write_text(
-        '{"url": "https://a.com/1", "source": "google", "ticker": "AAPL", '
-        '"published_at": "2026-08-04 08:00:00+00", "title": "Apple unveils new chip", '
-        '"description": "Apple announced a new M-series chip.", "content": "..."}\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(mcp_mod, "NEWS_GLOB", str(news_file))
+    """Round-trip: write via the ingest producer, read via the MCP tools."""
+    _write_raw_news([_article()], "2026-08-04", tmp_path)
+    monkeypatch.setattr(mcp_mod, "NEWS_GLOB", str(tmp_path / "*.ndjson"))
 
     news = mcp_mod.get_news("AAPL")
     assert len(news) == 1
     assert news[0]["title"] == "Apple unveils new chip"
+    assert news[0]["summary"] == "Apple announced a new M-series chip."
+    assert news[0]["source"] == "google-news"
 
     hits = mcp_mod.search_news("chip")
     assert len(hits) == 1
+    assert mcp_mod.search_news("M-series") == hits  # matches on summary, not title
     assert mcp_mod.search_news("bonds") == []
 
 
 def test_get_news_since_filter_and_empty_search(tmp_path, monkeypatch) -> None:
-    news_file = tmp_path / "news.ndjson"
-    news_file.write_text(
-        '{"url": "https://a.com/1", "source": "google", "ticker": "AAPL", '
-        '"published_at": "2026-08-04 08:00:00+00", "title": "Newer", '
-        '"description": "desc", "content": "..."}\n'
-        '{"url": "https://a.com/2", "source": "google", "ticker": "AAPL", '
-        '"published_at": "2026-08-01 08:00:00+00", "title": "Older", '
-        '"description": "desc", "content": "..."}\n',
-        encoding="utf-8",
+    _write_raw_news(
+        [
+            _article(title="Newer", url="https://a.com/1"),
+            _article(
+                title="Older", url="https://a.com/2", published_at="2026-08-01T08:00:00+00:00"
+            ),
+        ],
+        "2026-08-04",
+        tmp_path,
     )
-    monkeypatch.setattr(mcp_mod, "NEWS_GLOB", str(news_file))
+    monkeypatch.setattr(mcp_mod, "NEWS_GLOB", str(tmp_path / "*.ndjson"))
 
     rows = mcp_mod.get_news("AAPL", since="2026-08-02")
     assert [r["title"] for r in rows] == ["Newer"]

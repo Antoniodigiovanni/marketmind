@@ -30,7 +30,7 @@ from agent.knowledge import (
 )
 from agent.llm import ChatClient, parse_json_response
 from data.db.init import DEFAULT_DB_PATH, init_db
-from data.sources.rss import Article, fetch_company_news
+from data.sources.rss import Article, article_to_record, fetch_company_news
 from data.sources.wikipedia import fetch_company_description
 from data.universe.loader import get_universe
 
@@ -284,21 +284,7 @@ def _write_raw_news(
         return path
     with path.open("w", encoding="utf-8") as handle:
         for article in articles:
-            handle.write(
-                json.dumps(
-                    {
-                        "ticker": article.ticker,
-                        "url": article.url,
-                        "url_hash": article.url_hash,
-                        "title": article.title,
-                        "summary": article.summary,
-                        "source": article.source,
-                        "published_at": article.published_at,
-                        "content_hash": article.content_hash,
-                    }
-                )
-                + "\n"
-            )
+            handle.write(json.dumps(article_to_record(article)) + "\n")
     return path
 
 
