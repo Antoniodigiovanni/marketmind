@@ -7,5 +7,8 @@ Wants=network-online.target
 Type=oneshot
 User=root
 Group=root
-ExecStart=/bin/bash /srv/marketmind/deploy/update.sh
+# Runs the root-owned copy under /usr/local/sbin, never the one inside the
+# install tree: that tree is writable by the marketmind service user, which
+# processes untrusted network input. install.sh/update.sh keep the copy fresh.
+ExecStart=/usr/local/sbin/marketmind-update
 UMask=0022
