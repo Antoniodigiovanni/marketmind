@@ -7,6 +7,8 @@ import datetime as dt
 import hashlib
 import json
 import math
+import os
+import sys
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -40,6 +42,10 @@ SOURCE_CREDIBILITY: dict[str, float] = {
 }
 RECENCY_LAMBDA = 0.05
 
+# Consecutive extraction failures tolerated before the run gives up. A provider
+# outage otherwise burns the whole universe to 'error' over hours of dead calls.
+MAX_CONSECUTIVE_FAILURES = int(os.getenv("INGEST_MAX_CONSECUTIVE_FAILURES", "20"))
+
 RAW_NEWS_DIR = Path(__file__).resolve().parent.parent / "data" / "raw" / "news"
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
@@ -47,6 +53,10 @@ NewsFetcher = Callable[[str, str], list[Article]]
 DescriptionFetcher = Callable[[str], str]
 LLMCallable = Callable[[list[dict[str, str]]], str]
 ProfileBuilder = Callable[[str], dict[str, Any] | None]
+
+
+class IngestAborted(RuntimeError):
+    """Raised when consecutive extraction failures trip the circuit breaker."""
 
 
 def _sha256(text: str) -> str:
@@ -386,6 +396,8 @@ def run_daily_ingest(
 
     Raises:
         ValueError: On an invalid date or a missing llm callable.
+        IngestAborted: After MAX_CONSECUTIVE_FAILURES consecutive extraction
+            failures.
     """
     dt.date.fromisoformat(date)
     if llm is None:
@@ -413,6 +425,7 @@ def run_daily_ingest(
         "profiles_failed": 0,
     }
     todays_facts: list[dict[str, str | None]] = []
+    consecutive_failures = 0
 
     try:
         for row in universe.iter_rows(named=True):
@@ -515,7 +528,15 @@ def run_daily_ingest(
                         logger.error(f"extraction failed for article {article_id}: {exc}")
                         _set_article_status(conn, article_id, "error")
                         summary["articles_errored"] += 1
+                        consecutive_failures += 1
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                            raise IngestAborted(
+                                f"{consecutive_failures} consecutive extraction failures; "
+                                f"aborting run for {date}"
+                            ) from exc
                         continue
+
+                    consecutive_failures = 0
 
                     if parsed is None:
                         _set_article_status(conn, article_id, "redundant")
@@ -636,14 +657,18 @@ def main() -> None:
 
     client = ChatClient()
     vector_store = ChromaVectorStore(embedding_function=HashEmbeddingFunction())
-    summary = run_daily_ingest(
-        args.date,
-        llm=client.complete,
-        profile_builder=_default_profile_builder(client.complete),
-        backfill=args.backfill,
-        profiles_only=args.profiles_only,
-        vector_store=vector_store,
-    )
+    try:
+        summary = run_daily_ingest(
+            args.date,
+            llm=client.complete,
+            profile_builder=_default_profile_builder(client.complete),
+            backfill=args.backfill,
+            profiles_only=args.profiles_only,
+            vector_store=vector_store,
+        )
+    except IngestAborted as exc:
+        logger.error(f"ingest aborted for {args.date}: {exc}")
+        sys.exit(1)
     logger.info(f"ingest summary for {args.date}: {summary}")
 
 

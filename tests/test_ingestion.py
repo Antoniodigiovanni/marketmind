@@ -8,7 +8,7 @@ import json
 import polars as pl
 import pytest
 
-from agent.ingestion import RawNewsArchive, run_daily_ingest
+from agent.ingestion import IngestAborted, RawNewsArchive, main, run_daily_ingest
 from agent.knowledge import get_current_aggregate_facts, get_current_facts, write_fact
 from data.db.init import init_db
 from data.sources.rss import Article
@@ -494,3 +494,71 @@ def test_ingest_writes_news_before_it_finishes(tmp_path) -> None:
 
     assert seen, "no extraction calls were made"
     assert seen[0] > 0, "archive was still empty during the first extraction"
+
+
+def _always_failing_llm(messages: list[dict[str, str]]) -> str:
+    return "not json at all"
+
+
+def test_run_aborts_after_consecutive_failures(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("agent.ingestion.MAX_CONSECUTIVE_FAILURES", 2)
+    conn = init_db(":memory:")
+
+    with pytest.raises(IngestAborted, match="2 consecutive"):
+        run_daily_ingest(
+            DATE,
+            conn=conn,
+            universe=UNIVERSE,
+            news_fetcher=_fake_news_fetcher,
+            description_fetcher=lambda name: "desc",
+            profile_builder=lambda name: None,
+            llm=_always_failing_llm,
+            raw_news_dir=tmp_path / "news",
+        )
+
+
+def test_a_success_resets_the_failure_counter(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("agent.ingestion.MAX_CONSECUTIVE_FAILURES", 2)
+    conn = init_db(":memory:")
+    calls = {"n": 0}
+
+    def _alternating_llm(messages: list[dict[str, str]]) -> str:
+        calls["n"] += 1
+        return "not json" if calls["n"] % 2 else "REDUNDANT"
+
+    summary = run_daily_ingest(
+        DATE,
+        conn=conn,
+        universe=UNIVERSE,
+        news_fetcher=_fake_news_fetcher,
+        description_fetcher=lambda name: "desc",
+        profile_builder=lambda name: None,
+        llm=_alternating_llm,
+        raw_news_dir=tmp_path / "news",
+    )
+
+    assert summary["articles_errored"] > 0
+    assert summary["articles_redundant"] > 0
+
+
+class _StubChatClient:
+    """Stands in for ChatClient so main() needs no API key."""
+
+    def complete(self, messages: list[dict[str, str]]) -> str:
+        return "REDUNDANT"
+
+
+def test_main_exits_non_zero_when_aborted(monkeypatch) -> None:
+    monkeypatch.setattr("sys.argv", ["ingestion", DATE])
+    monkeypatch.setattr("agent.ingestion.ChatClient", _StubChatClient)
+    monkeypatch.setattr("agent.ingestion.ChromaVectorStore", lambda **kwargs: None)
+
+    def _raise(*args, **kwargs):
+        raise IngestAborted("3 consecutive extraction failures")
+
+    monkeypatch.setattr("agent.ingestion.run_daily_ingest", _raise)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert excinfo.value.code == 1
