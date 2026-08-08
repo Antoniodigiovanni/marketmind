@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import string
 from collections.abc import Callable
 from pathlib import Path
@@ -15,10 +16,41 @@ PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 MAX_CATEGORIES = 12
 WIKIPEDIA_CHAR_CAP = 2000
 
+_CATEGORY_SPLIT = re.compile(r"[\n;,]|(?:^|\s)[-*•]\s")
+
 WikipediaFetcher = Callable[[str], dict[str, str | None]]
 WebsiteUrlFetcher = Callable[[str], str | None]
 Crawler = Callable[[str], list[str]]
 LLMCallable = Callable[[list[dict[str, str]]], str]
+
+
+def _coerce_categories(value: object) -> list[str]:
+    """Normalise a model-supplied products/services value into a list of strings.
+
+    The model is asked for a JSON list but intermittently returns a
+    comma-separated string, a bulleted block, or a mapping. Rejecting the whole
+    profile over the shape of one field loses the description too, so coerce
+    instead.
+
+    Args:
+        value: Whatever the model put in products_services.
+
+    Returns:
+        Up to MAX_CATEGORIES non-empty, stripped category strings.
+    """
+    if value is None:
+        items: list[object] = []
+    elif isinstance(value, str):
+        items = list(_CATEGORY_SPLIT.split(value))
+    elif isinstance(value, dict):
+        items = list(value.values())
+    elif isinstance(value, (list, tuple, set)):
+        items = list(value)
+    else:
+        items = [value]
+
+    cleaned = [str(item).strip().lstrip("-*• ").strip() for item in items if item is not None]
+    return [item for item in cleaned if item][:MAX_CATEGORIES]
 
 
 def generate_profile(
@@ -42,7 +74,7 @@ def generate_profile(
         Dict with description, products_services (≤12 categories), generated_by.
 
     Raises:
-        ValueError: If the response is not valid or misses required keys.
+        ValueError: If the response is not a JSON object or has no description.
     """
     template = string.Template((PROMPTS_DIR / "company_profile.md").read_text(encoding="utf-8"))
     prompt = template.substitute(
@@ -57,12 +89,9 @@ def generate_profile(
     parsed = parse_json_response(llm(messages))
     if not isinstance(parsed, dict):
         raise ValueError("profile response must be a JSON object")
-    if "description" not in parsed or "products_services" not in parsed:
-        raise ValueError("profile response must include description and products_services")
-    categories = parsed["products_services"]
-    if not isinstance(categories, list):
-        raise ValueError("products_services must be a list")
-    categories = [str(item).strip() for item in categories if str(item).strip()][:MAX_CATEGORIES]
+    if "description" not in parsed:
+        raise ValueError("profile response must include description")
+    categories = _coerce_categories(parsed.get("products_services"))
     return {
         "description": str(parsed["description"]).strip(),
         "products_services": categories,
