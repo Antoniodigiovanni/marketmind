@@ -15,14 +15,28 @@ DEFAULT_MODEL = "deepseek-chat"
 DEFAULT_TIMEOUT_SECONDS = 60
 DEFAULT_MAX_RETRIES = 3
 
-RETRYABLE = (
-    requests.exceptions.ConnectionError,
-    requests.exceptions.Timeout,
-)
+# Status codes worth retrying: rate limiting and transient server faults.
+# Everything else in the 4xx range is a client error that will fail identically
+# on every attempt (bad key, bad request), so it is raised immediately.
+RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
 
 class LLMError(RuntimeError):
     """Raised when the chat API call fails after retries or returns an error."""
+
+
+class RetryableLLMError(LLMError):
+    """Raised for failures worth retrying: 429/5xx, malformed or empty responses."""
+
+
+RETRYABLE = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    RetryableLLMError,
+)
+
+# Module-level so tests can monkeypatch it to wait_none() and stay fast.
+RETRY_WAIT = wait_exponential(multiplier=0.5, max=8)
 
 
 class ChatClient:
@@ -73,7 +87,8 @@ class ChatClient:
             The assistant message content.
 
         Raises:
-            LLMError: On HTTP errors or exhausted retries.
+            LLMError: On non-retryable HTTP errors.
+            RetryableLLMError: When retries are exhausted on a transient fault.
         """
         body: dict[str, Any] = {
             "model": self.model,
@@ -87,7 +102,7 @@ class ChatClient:
 
         retry = Retrying(
             retry=retry_if_exception_type(RETRYABLE),
-            wait=wait_exponential(multiplier=0.5, max=8),
+            wait=RETRY_WAIT,
             stop=stop_after_attempt(self.max_retries),
             reraise=True,
         )
@@ -102,10 +117,23 @@ class ChatClient:
                     json=body,
                     timeout=self.timeout_seconds,
                 )
+                if response.status_code in RETRYABLE_STATUS:
+                    raise RetryableLLMError(
+                        f"chat API error {response.status_code}: {response.text[:500]}"
+                    )
                 if response.status_code >= 400:
                     raise LLMError(f"chat API error {response.status_code}: {response.text[:500]}")
-                data = response.json()
-                return str(data["choices"][0]["message"]["content"])
+                try:
+                    data = response.json()
+                except json.JSONDecodeError as exc:
+                    raise RetryableLLMError(f"chat API returned a non-JSON body: {exc}") from exc
+                try:
+                    content = str(data["choices"][0]["message"]["content"])
+                except (KeyError, IndexError, TypeError) as exc:
+                    raise RetryableLLMError(f"chat API response missing content: {exc}") from exc
+                if not content.strip():
+                    raise RetryableLLMError("chat API returned empty content")
+                return content
         raise LLMError("chat API request failed")  # pragma: no cover - unreachable
 
 
