@@ -8,7 +8,7 @@ import json
 import polars as pl
 import pytest
 
-from agent.ingestion import run_daily_ingest
+from agent.ingestion import RawNewsArchive, run_daily_ingest
 from agent.knowledge import get_current_aggregate_facts, get_current_facts, write_fact
 from data.db.init import init_db
 from data.sources.rss import Article
@@ -183,7 +183,9 @@ def test_run_daily_ingest_end_to_end(tmp_path) -> None:
 
         raw_path = tmp_path / "news" / f"{DATE}.ndjson"
         assert raw_path.exists()
-        assert len(raw_path.read_text().strip().splitlines()) == 3
+        # Three articles fetched, but two are the same story: the archive
+        # stores distinct records, matching articles_skipped == 1 above.
+        assert len(raw_path.read_text().strip().splitlines()) == 2
 
         companies = conn.execute(
             "SELECT ticker, description FROM companies ORDER BY ticker"
@@ -429,3 +431,66 @@ def test_profiles_only_skips_news_processing(tmp_path) -> None:
         assert not (tmp_path / "news" / f"{DATE}.ndjson").exists()
     finally:
         conn.close()
+
+
+def _read_ndjson(path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def test_archive_appends_across_calls(tmp_path) -> None:
+    archive = RawNewsArchive(tmp_path / f"{DATE}.ndjson")
+
+    assert archive.append([_article("AAPL", "http://a", "A", "sa")]) == 1
+    assert archive.append([_article("MSFT", "http://b", "B", "sb")]) == 1
+
+    records = _read_ndjson(archive.path)
+    assert [r["ticker"] for r in records] == ["AAPL", "MSFT"]
+
+
+def test_archive_is_idempotent_on_reruns(tmp_path) -> None:
+    path = tmp_path / f"{DATE}.ndjson"
+    first = RawNewsArchive(path)
+    first.append([_article("AAPL", "http://a", "A", "sa")])
+
+    # Simulate a fresh process after a crash.
+    second = RawNewsArchive(path)
+    written = second.append(
+        [_article("AAPL", "http://a", "A", "sa"), _article("MSFT", "http://b", "B", "sb")]
+    )
+
+    assert written == 1
+    assert len(_read_ndjson(path)) == 2
+
+
+def test_archive_tolerates_a_torn_final_line(tmp_path) -> None:
+    path = tmp_path / f"{DATE}.ndjson"
+    path.write_text('{"ticker": "AAPL", "url_hash": "h1"}\n{"ticker": "MS', encoding="utf-8")
+
+    archive = RawNewsArchive(path)
+    assert archive.append([_article("MSFT", "http://b", "B", "sb")]) == 1
+
+
+def test_ingest_writes_news_before_it_finishes(tmp_path) -> None:
+    """The archive is populated per company, not deferred to the end."""
+    conn = init_db(":memory:")
+    seen: list[int] = []
+    news_dir = tmp_path / "news"
+
+    def _counting_llm(messages: list[dict[str, str]]) -> str:
+        path = news_dir / f"{DATE}.ndjson"
+        seen.append(len(_read_ndjson(path)) if path.exists() else 0)
+        return "REDUNDANT"
+
+    run_daily_ingest(
+        DATE,
+        conn=conn,
+        universe=UNIVERSE,
+        news_fetcher=_fake_news_fetcher,
+        description_fetcher=lambda name: "desc",
+        profile_builder=lambda name: None,
+        llm=_counting_llm,
+        raw_news_dir=news_dir,
+    )
+
+    assert seen, "no extraction calls were made"
+    assert seen[0] > 0, "archive was still empty during the first extraction"

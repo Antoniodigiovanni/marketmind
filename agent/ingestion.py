@@ -272,20 +272,66 @@ def _set_article_status(
     )
 
 
-def _write_raw_news(
-    articles: list[Article],
-    date: str,
-    raw_news_dir: Path,
-) -> Path:
-    """Write fetched articles to an immutable NDJSON file for the date."""
-    raw_news_dir.mkdir(parents=True, exist_ok=True)
-    path = raw_news_dir / f"{date}.ndjson"
-    if path.exists():
-        return path
-    with path.open("w", encoding="utf-8") as handle:
+class RawNewsArchive:
+    """Append-only NDJSON archive of fetched articles for one date.
+
+    Written incrementally so a run killed partway through keeps the articles it
+    already fetched, and so the MCP news tools return rows during the run
+    rather than only after it. Re-running the same date appends only records
+    whose url_hash is not already on disk, which keeps the file immutable in
+    content while remaining safe to resume.
+    """
+
+    def __init__(self, path: Path) -> None:
+        """Open (or adopt) the archive for a date and index what is already stored."""
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._seen = self._existing_hashes()
+
+    def _existing_hashes(self) -> set[str]:
+        """Read the url_hash of every complete record already in the file."""
+        if not self.path.exists():
+            return set()
+        hashes: set[str] = set()
+        with self.path.open(encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    hashes.add(str(json.loads(line)["url_hash"]))
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    # A torn final line from a killed run — ignore and move on.
+                    continue
+        return hashes
+
+    def append(self, articles: list[Article]) -> int:
+        """Append articles not already archived.
+
+        Dedup is checked incrementally against `_seen` as each article is
+        considered, not pre-filtered in one pass — so two duplicate articles
+        arriving in the same call (e.g. the same story fetched twice in one
+        run) are also caught, not just duplicates across separate calls.
+
+        Args:
+            articles: Fetched articles, possibly overlapping what is stored.
+
+        Returns:
+            Number of records actually written.
+        """
+        new: list[Article] = []
         for article in articles:
-            handle.write(json.dumps(article_to_record(article)) + "\n")
-    return path
+            if article.url_hash in self._seen:
+                continue
+            self._seen.add(article.url_hash)
+            new.append(article)
+        if not new:
+            return 0
+        with self.path.open("a", encoding="utf-8") as handle:
+            for article in new:
+                handle.write(json.dumps(article_to_record(article)) + "\n")
+            handle.flush()
+        return len(new)
 
 
 def run_daily_ingest(
@@ -307,14 +353,15 @@ def run_daily_ingest(
     Steps:
     1. Load the point-in-time universe for the date.
     2. Per company: cache metadata, ensure a generated profile (lazy unless
-       backfill), fetch news (RSS, keyless).
+       backfill), fetch news (RSS, keyless), and append it to the raw news
+       archive for the date (deduped on url_hash, so a rerun is safe).
     3. Level-1 dedup against the articles table (url/content hash).
     4. Pre-score each article.
     5. Per new article: retrieve current + similar past facts, call the model,
        and write (or retire) facts.
     6. Aggregate the day's new facts by sector and country into
        aggregate_facts.
-    7. Write raw news NDJSON and an agent_runs audit row.
+    7. Write an agent_runs audit row.
 
     Args:
         date: Date string (YYYY-MM-DD).
@@ -350,6 +397,7 @@ def run_daily_ingest(
         conn = init_db(DEFAULT_DB_PATH)
     universe = universe if universe is not None else get_universe(date)
     raw_news_dir = raw_news_dir or RAW_NEWS_DIR
+    archive = RawNewsArchive(raw_news_dir / f"{date}.ndjson")
 
     started_at = dt.datetime.now(dt.UTC).isoformat()
     run_id = uuid.uuid4().hex
@@ -364,7 +412,6 @@ def run_daily_ingest(
         "profiles_built": 0,
         "profiles_failed": 0,
     }
-    all_articles: list[Article] = []
     todays_facts: list[dict[str, str | None]] = []
 
     try:
@@ -432,7 +479,7 @@ def run_daily_ingest(
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(f"news fetch failed for {ticker}: {exc}")
                     articles = []
-                all_articles.extend(articles)
+                archive.append(articles)
                 summary["articles_fetched"] += len(articles)
 
                 for article in articles:
@@ -498,9 +545,6 @@ def run_daily_ingest(
                                 "country": str(country) if country else None,
                             }
                         )
-
-        if all_articles:
-            _write_raw_news(all_articles, date, raw_news_dir)
 
         for dimension, key_field in (("sector", "sector"), ("geography", "country")):
             groups: dict[str, list[dict[str, str | None]]] = {}
