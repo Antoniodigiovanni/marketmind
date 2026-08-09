@@ -25,28 +25,55 @@ def dsn_from_env() -> str:
     return os.getenv("MARKETMIND_TEST_DSN") or DEFAULT_DSN
 
 
+async def _ensure_vector_extension(dsn: str) -> None:
+    """Create the `vector` extension once, before any pool connection opens.
+
+    `CREATE EXTENSION IF NOT EXISTS` is not safe under concurrent execution:
+    a losing session can hit a duplicate-object error even though the
+    extension ends up present. Running it exactly once, on a single
+    throwaway connection, before the pool starts opening its own (which can
+    happen concurrently once demand exceeds ``min_size``) avoids that race
+    entirely rather than tolerating its fallout after the fact.
+
+    Args:
+        dsn: Connection string to create the extension on.
+
+    Raises:
+        psycopg.OperationalError: If the database cannot be reached at all.
+    """
+    conn = await psycopg.AsyncConnection.connect(dsn, connect_timeout=3)
+    try:
+        try:
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            await conn.commit()
+        except psycopg.errors.InsufficientPrivilege as exc:
+            await conn.rollback()
+            logger.warning(
+                "role lacks privilege to create the vector extension; "
+                f"proceeding on the assumption it already exists: {exc}"
+            )
+    finally:
+        await conn.close()
+
+
 async def _configure(conn: psycopg.AsyncConnection) -> None:
     """Register the pgvector type on a freshly opened pool connection.
 
     `register_vector_async` needs the `vector` extension's type already
-    present in the database, and raises `psycopg.ProgrammingError` if it is
-    not. Rather than require callers to sequence pool creation after a
-    separate schema step, this ensures the extension exists on each new
-    connection before registering the type. If the connecting role lacks
-    the privilege to create extensions, the failure is tolerated and vector
-    adaptation is skipped for that connection -- open_pool() must still
-    succeed either way. A statement run outside autocommit leaves the
-    connection mid-transaction, which the pool discards and retries
-    forever, so both the success and failure paths finish with an explicit
-    commit or rollback.
+    present, and raises `psycopg.ProgrammingError` (a plain instance, not a
+    Postgres-side error code -- pgvector raises it directly) if it is not.
+    `open_pool` already attempts to create the extension once up front, but
+    that attempt may itself have been skipped on privilege grounds, so this
+    still tolerates the type being absent rather than failing the whole
+    pool. Only that specific, narrow condition is swallowed: a connection
+    that dies mid-configure (`psycopg.OperationalError`, a subclass of
+    `psycopg.Error`) or any other unexpected failure is left to propagate.
     """
     try:
-        await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        await conn.commit()
         await register_vector_async(conn)
-    except psycopg.Error as exc:
+    except psycopg.ProgrammingError as exc:
         await conn.rollback()
-        logger.debug(f"vector type registration skipped: {exc}")
+        logger.warning(f"vector type not registered on this connection: {exc}")
 
 
 async def open_pool(
@@ -66,16 +93,33 @@ async def open_pool(
         An opened AsyncConnectionPool.
 
     Raises:
-        psycopg.OperationalError: If the database cannot be reached.
+        psycopg.OperationalError: If the database cannot be reached while
+            creating the vector extension, before any pool connection opens.
+        psycopg_pool.PoolTimeout: If the pool cannot establish its minimum
+            connections within its internal open timeout (10 seconds) --
+            for example because the DSN is unreachable. `psycopg_pool`
+            catches and retries connection errors internally rather than
+            raising them directly, so this is what a dead DSN actually
+            surfaces as, not `psycopg.OperationalError`.
     """
+    resolved_dsn = dsn or dsn_from_env()
+    await _ensure_vector_extension(resolved_dsn)
+
     pool = AsyncConnectionPool(
-        dsn or dsn_from_env(),
+        resolved_dsn,
         min_size=min_size,
         max_size=max_size,
         configure=_configure,
         open=False,
     )
-    await pool.open(wait=True, timeout=10.0)
+    try:
+        await pool.open(wait=True, timeout=10.0)
+    except Exception:
+        # pool.open() has already started background worker tasks by the
+        # time it can raise (e.g. PoolTimeout); close() stops them so a
+        # failed open_pool() doesn't leak tasks that retry indefinitely.
+        await pool.close()
+        raise
     return pool
 
 

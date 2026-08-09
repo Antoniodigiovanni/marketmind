@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+
+import psycopg
 import pytest
+from psycopg_pool import AsyncConnectionPool
 
 from data.db.postgres import close_pool, database_available, dsn_from_env, open_pool
 
@@ -56,3 +60,89 @@ async def test_pool_registers_the_vector_type() -> None:
         assert row[0].to_list() == [1.0, 2.0, 3.0]
     finally:
         await close_pool(pool)
+
+
+async def test_pool_registers_the_vector_type_for_concurrently_opened_connections() -> None:
+    """Every connection opened concurrently must get the vector type registered.
+
+    Regression coverage for the fix to Finding 2, not a reproduction of the
+    original bug: before the fix, `CREATE EXTENSION IF NOT EXISTS` ran
+    inside `_configure` on every physical connection. That statement is not
+    race-free under concurrent execution, so a losing connection could hit
+    a duplicate-object error and silently end up without vector support.
+    That race is inherently timing-dependent -- it cannot be forced
+    deterministically without mocking psycopg internals, which would test
+    the mock rather than real behaviour, so this does not attempt to
+    reproduce it. It instead exercises the fixed design (the extension is
+    created exactly once, before the pool opens any connection) by forcing
+    several connections open at once and checking that all of them --  not
+    just the first -- got a working vector type back, not a bare string.
+    Verified manually against a genuinely fresh database (extension
+    dropped, then this same pattern run directly) as part of the fix; see
+    the task report.
+    """
+    await _skip_if_unavailable()
+    pool = await open_pool(min_size=1, max_size=5)
+    try:
+
+        async def query() -> object:
+            async with pool.connection() as conn:
+                row = await (await conn.execute("SELECT '[1,2,3]'::vector")).fetchone()
+                return row[0]
+
+        results = await asyncio.gather(*(query() for _ in range(8)))
+        for value in results:
+            assert not isinstance(value, str)
+            assert value.to_list() == [1.0, 2.0, 3.0]
+    finally:
+        await close_pool(pool)
+
+
+async def test_open_pool_leaves_no_running_tasks_for_an_unreachable_dsn() -> None:
+    """A failed open_pool() against a dead DSN must not leak background tasks.
+
+    The dead DSN here fails in open_pool's one-time extension check, before
+    any AsyncConnectionPool is even constructed -- so this proves the
+    end-to-end contract (nothing is left running) but does not by itself
+    exercise the `except Exception: await pool.close(); raise` branch added
+    around `pool.open()`, since that branch is only reached once a pool
+    object exists. See the deterministic test below for that.
+    """
+    current = asyncio.current_task()
+    tasks_before = {t for t in asyncio.all_tasks() if t is not current}
+
+    with pytest.raises(psycopg.OperationalError):
+        await open_pool("postgresql://nobody@127.0.0.1:1/nothing")
+
+    tasks_after = {t for t in asyncio.all_tasks() if t is not current}
+    assert tasks_after - tasks_before == set(), "open_pool leaked background tasks"
+
+
+async def test_open_pool_closes_the_pool_when_pool_open_itself_fails(monkeypatch) -> None:
+    """open_pool() must close the pool before re-raising a pool.open() failure.
+
+    Forces the failure inside `AsyncConnectionPool.open` directly -- after
+    a real pool object exists -- to deterministically exercise the specific
+    branch this finding is about, rather than relying on a DSN that happens
+    to fail early (see the test above, which fails before a pool object is
+    ever created).
+    """
+    await _skip_if_unavailable()
+
+    closed_pools = []
+    original_close = AsyncConnectionPool.close
+
+    async def failing_open(self, *args, **kwargs):
+        raise RuntimeError("simulated pool.open() failure")
+
+    async def tracking_close(self, *args, **kwargs):
+        closed_pools.append(self)
+        return await original_close(self, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncConnectionPool, "open", failing_open)
+    monkeypatch.setattr(AsyncConnectionPool, "close", tracking_close)
+
+    with pytest.raises(RuntimeError, match="simulated pool.open"):
+        await open_pool()
+
+    assert len(closed_pools) == 1
