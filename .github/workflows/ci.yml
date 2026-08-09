@@ -12,6 +12,20 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: marketmind
+          POSTGRES_PASSWORD: marketmind
+          POSTGRES_DB: marketmind_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U marketmind -d marketmind_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
     steps:
       - uses: actions/checkout@v4
 
