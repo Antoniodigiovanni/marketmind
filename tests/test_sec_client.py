@@ -47,7 +47,7 @@ class FakeSession:
 
 def test_rate_limiter_wait_does_not_block_first_call(monkeypatch) -> None:
     sleeps: list[float] = []
-    monkeypatch.setattr("data.sources.sec.time.sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr("data.universe.sources.http.time.sleep", lambda s: sleeps.append(s))
     limiter = RateLimiter(max_per_second=100.0)
     limiter.wait()
     assert sleeps == []

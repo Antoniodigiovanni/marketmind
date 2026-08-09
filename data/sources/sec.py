@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import threading
-import time
 from dataclasses import dataclass
 from typing import Any
 
 import requests
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
-from data.universe.sources.http import get_with_ca_fallback
+from data.universe.sources.http import RateLimiter, get_with_ca_fallback
 
 USER_AGENT = "marketmind/0.1 (market-data ingest; contact: hermes@example.com)"
 COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -20,24 +18,6 @@ INDEX_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/index.jso
 SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
-
-
-class RateLimiter:
-    """Enforce SEC's ~10 requests/second guidance across the client."""
-
-    def __init__(self, max_per_second: float = 9.0) -> None:
-        self._min_interval = 1.0 / max_per_second
-        self._lock = threading.Lock()
-        self._last = 0.0
-
-    def wait(self) -> None:
-        """Block until the next request is allowed by the rate budget."""
-        with self._lock:
-            now = time.monotonic()
-            delay = self._min_interval - (now - self._last)
-            if delay > 0:
-                time.sleep(delay)
-            self._last = time.monotonic()
 
 
 def _retryable(exc: BaseException) -> bool:

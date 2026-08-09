@@ -265,6 +265,77 @@ def get_filings(
 
 
 @mcp.tool()
+def get_european_filings(
+    ticker: str | None = None,
+    lei: str | None = None,
+    country: str | None = None,
+    filing_system: str | None = None,
+    as_of: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, object]]:
+    """Return ESEF filing metadata for European universe members.
+
+    Args:
+        ticker: Optional ticker symbol.
+        lei: Optional issuer LEI.
+        country: Optional ISO country code (e.g. 'IT', 'FR', 'ES').
+        filing_system: Optional filing system ('ESEF' or 'UKSEF').
+        as_of: Optional cutoff date (YYYY-MM-DD); returns filings with
+            filed_at <= as_of.
+        limit: Maximum rows.
+
+    Returns:
+        List of {id, fxo_id, lei, ticker, entity_name, country, filing_system,
+        filed_at, period_end, package_url, xhtml_url, json_url, status} ordered
+        by filed_at desc.
+    """
+    with _connect() as conn:
+        query = """
+            SELECT id, fxo_id, lei, ticker, entity_name, country, filing_system,
+                   filed_at, period_end, package_url, xhtml_url, json_url, status
+            FROM esef_filings
+            WHERE 1 = 1
+        """
+        params: list[object] = []
+        if ticker:
+            query += " AND ticker = ?"
+            params.append(ticker)
+        if lei:
+            query += " AND lei = ?"
+            params.append(lei)
+        if country:
+            query += " AND country = ?"
+            params.append(country)
+        if filing_system:
+            query += " AND filing_system = ?"
+            params.append(filing_system)
+        if as_of:
+            query += " AND filed_at <= ?"
+            params.append(as_of)
+        query += " ORDER BY filed_at DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+    return _rows_to_dicts(
+        rows,
+        [
+            "id",
+            "fxo_id",
+            "lei",
+            "ticker",
+            "entity_name",
+            "country",
+            "filing_system",
+            "filed_at",
+            "period_end",
+            "package_url",
+            "xhtml_url",
+            "json_url",
+            "status",
+        ],
+    )
+
+
+@mcp.tool()
 def search_filings(
     query: str,
     ticker: str | None = None,

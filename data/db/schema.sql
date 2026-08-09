@@ -54,6 +54,43 @@ CREATE INDEX IF NOT EXISTS idx_filings_form_type   ON filings (form_type);
 CREATE INDEX IF NOT EXISTS idx_filings_status      ON filings (status);
 
 
+-- ── ESEF filings (EU annual reports) ────────────────────────────────────────
+-- One row per ESEF annual financial report from filings.xbrl.org for
+-- universe members. filed_at is the index date (point-in-time anchor; the
+-- OAM publication date is not exposed by the API); period_end is the
+-- reporting period end tagged in the report.
+
+CREATE TABLE IF NOT EXISTS esef_filings (
+    id               VARCHAR PRIMARY KEY,   -- uuid4 hex
+    fxo_id           VARCHAR NOT NULL,      -- filings.xbrl.org index id
+    lei              VARCHAR NOT NULL,      -- 20-char issuer LEI
+    ticker           VARCHAR,               -- universe ticker attributed via LEI
+    entity_name      VARCHAR,               -- issuer name from the API
+    country          VARCHAR NOT NULL,      -- ISO country of the filing
+    filing_system    VARCHAR NOT NULL DEFAULT 'ESEF',  -- 'ESEF' | 'UKSEF'
+    provider         VARCHAR NOT NULL DEFAULT 'filings.xbrl.org',
+    filed_at         DATE NOT NULL,         -- index date (market-visibility proxy)
+    period_end       DATE,                  -- reporting period end
+    primary_document VARCHAR,               -- package filename
+    package_url      VARCHAR NOT NULL,
+    xhtml_url        VARCHAR,
+    json_url         VARCHAR,
+    text_path        VARCHAR,               -- path under data/raw/filings-eu/
+    text_hash        VARCHAR,               -- sha256(package)
+    size_bytes       INTEGER,
+    status           VARCHAR NOT NULL DEFAULT 'fetched',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (fxo_id, lei)
+);
+
+CREATE INDEX IF NOT EXISTS idx_esef_filings_lei_date
+    ON esef_filings (lei, filed_at);
+CREATE INDEX IF NOT EXISTS idx_esef_filings_ticker_date
+    ON esef_filings (ticker, filed_at);
+CREATE INDEX IF NOT EXISTS idx_esef_filings_country_date
+    ON esef_filings (country, filed_at);
+
+
 -- ── Filing full text (DuckDB FTS input) ──────────────────────────────────────
 CREATE TABLE IF NOT EXISTS filing_text (
     filing_id  VARCHAR PRIMARY KEY REFERENCES filings(id),

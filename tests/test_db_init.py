@@ -10,6 +10,7 @@ EXPECTED_TABLES = {
     "articles",
     "companies",
     "company_profiles",
+    "esef_filings",
     "fetch_checkpoints",
     "filing_text",
     "filings",
@@ -46,6 +47,32 @@ def test_filings_schema_columns_exist() -> None:
             "period_of_report",
             "article_id",
         } <= filing_cols
+    finally:
+        conn.close()
+
+
+def test_esef_filings_schema_columns_exist() -> None:
+    conn = init_db(":memory:")
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info('esef_filings')").fetchall()}
+        assert {
+            "fxo_id",
+            "lei",
+            "ticker",
+            "entity_name",
+            "country",
+            "filing_system",
+            "provider",
+            "filed_at",
+            "period_end",
+            "package_url",
+            "xhtml_url",
+            "json_url",
+            "text_path",
+            "text_hash",
+            "size_bytes",
+            "status",
+        } <= cols
     finally:
         conn.close()
 
