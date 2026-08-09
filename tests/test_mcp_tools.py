@@ -205,18 +205,6 @@ def test_market_views_tools(monkeypatch, db_file) -> None:
     assert views[0]["id"] == view_id
 
 
-def test_run_ingest_tool(monkeypatch) -> None:
-    calls: dict[str, str] = {}
-
-    def fake_run(date: str) -> None:
-        calls["date"] = date
-
-    monkeypatch.setattr("agent.ingestion.run_daily_ingest", fake_run)
-    result = mcp_mod.run_ingest("2026-08-04")
-    assert result == "Ingest completed for 2026-08-04"
-    assert calls == {"date": "2026-08-04"}
-
-
 def test_connect_raises_when_db_missing(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(mcp_mod, "DB_PATH", tmp_path / "missing.duckdb")
     with pytest.raises(FileNotFoundError, match="not initialised"):

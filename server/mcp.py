@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import duckdb
+import polars as pl
 from mcp.server.fastmcp import FastMCP
 
+import server.jobs as jobs
 from agent.knowledge import get_current_company_profile, get_current_facts, write_fact
 from agent.views import get_market_views as get_views
 from agent.views import save_market_view as save_view
+from data.db.init import init_db
 from data.sources.rss import NEWS_RECORD_FIELDS
+from data.universe.loader import get_universe
 
 mcp = FastMCP("marketmind")
 
@@ -31,6 +36,28 @@ FILINGS_13F_GLOB = str(ROOT_DIR / "data" / "raw" / "13f" / "**" / "*.parquet")
 # a producer/consumer drift fails the suite instead of the live tool.
 NEWS_COLUMNS = ["url", "source", "ticker", "published_at", "title", "summary"]
 assert set(NEWS_COLUMNS) <= set(NEWS_RECORD_FIELDS)
+
+# Columns of agent_runs surfaced by get_ingest_status, in report order.
+AGENT_RUN_COLUMNS = [
+    "id",
+    "run_date",
+    "job_type",
+    "started_at",
+    "finished_at",
+    "articles_fetched",
+    "articles_skipped",
+    "articles_redundant",
+    "facts_written",
+    "facts_superseded",
+    "profiles_built",
+    "profiles_failed",
+    "filings_fetched",
+    "filings_parsed",
+    "filings_skipped",
+    "insider_rows",
+    "form13f_rows",
+    "error",
+]
 
 
 def _13f_partitions_exist() -> bool:
@@ -775,23 +802,216 @@ def save_fact(
         )
 
 
+def _build_llm() -> Callable[[list[dict[str, str]]], str]:
+    """Return the chat callable used for extraction, from the environment.
+
+    Raises:
+        LLMError: When no API key is configured.
+    """
+    from agent.llm import ChatClient
+
+    return ChatClient().complete
+
+
+def _build_vector_store() -> object:
+    """Return the fact-embedding store used to retrieve similar past facts."""
+    from agent.embeddings import ChromaVectorStore, HashEmbeddingFunction
+
+    return ChromaVectorStore(embedding_function=HashEmbeddingFunction())
+
+
+def _build_edgar_client() -> object:
+    """Return the EDGAR client used by the filings refresh."""
+    from data.sources.sec import EdgardClient
+
+    return EdgardClient()
+
+
+def _valid_date(value: str) -> bool:
+    """Return True when `value` parses as an ISO date."""
+    try:
+        dt.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _universe_for(date: str, tickers: list[str] | None) -> tuple[pl.DataFrame, list[str]]:
+    """Return the point-in-time universe, optionally narrowed to `tickers`.
+
+    Args:
+        date: Point-in-time date (YYYY-MM-DD).
+        tickers: Optional ticker subset; matched case-insensitively.
+
+    Returns:
+        (filtered universe, requested tickers absent from the universe).
+    """
+    universe = get_universe(date)
+    if not tickers:
+        return universe, []
+    wanted = [t.strip().upper() for t in tickers if t.strip()]
+    filtered = universe.filter(pl.col("ticker").str.to_uppercase().is_in(wanted))
+    known = {str(t).upper() for t in filtered["ticker"].to_list()}
+    return filtered, [t for t in wanted if t not in known]
+
+
 @mcp.tool()
-def run_ingest(date: str) -> str:
-    """Trigger the daily news + fact ingest pipeline for a date.
+def run_ingest(
+    date: str,
+    profiles_only: bool = False,
+    backfill: bool = False,
+    tickers: list[str] | None = None,
+) -> str:
+    """Start the daily news → facts ingest for a date, in the background.
+
+    The pipeline takes hours over the full universe, so this returns as soon
+    as the run is accepted. Poll get_ingest_status() for progress. Only one
+    run may be in flight at a time.
 
     Args:
         date: Date string (YYYY-MM-DD) to ingest.
+        profiles_only: Only ensure/refresh company profiles; skip news fetch,
+            fact extraction, and aggregates.
+        backfill: Build a new profile version for every company (annual
+            refresh) instead of only filling in missing ones.
+        tickers: Optional subset of the universe to ingest; the whole
+            universe for that date when omitted.
 
     Returns:
-        Confirmation message once the pipeline completes.
-
-    Raises:
-        NotImplementedError: Until the pipeline lands (roadmap 1.4–1.5).
+        A message with the new run id, or a diagnostic explaining why no run
+        was started (bad date, unknown tickers, missing API key, or another
+        run already in flight).
     """
-    from agent.ingestion import run_daily_ingest
+    from agent.ingestion import _default_profile_builder, run_daily_ingest
 
-    run_daily_ingest(date)
-    return f"Ingest completed for {date}"
+    if not _valid_date(date):
+        return f"Invalid date '{date}': expected YYYY-MM-DD."
+
+    universe, unknown = _universe_for(date, tickers)
+    if universe.height == 0:
+        return f"No universe entries on {date} for: {', '.join(unknown or tickers or [])}."
+
+    try:
+        llm = _build_llm()
+        vector_store = _build_vector_store()
+    except Exception as exc:  # noqa: BLE001 - reported to the caller, not raised
+        return f"Cannot start ingest: {exc}"
+
+    def work(progress: jobs.ProgressCallback) -> dict[str, int]:
+        conn = init_db(DB_PATH)
+        try:
+            return run_daily_ingest(
+                date,
+                conn=conn,
+                universe=universe,
+                llm=llm,
+                profile_builder=_default_profile_builder(llm),
+                backfill=backfill,
+                profiles_only=profiles_only,
+                vector_store=vector_store,
+                progress=progress,
+            )
+        finally:
+            conn.close()
+
+    try:
+        run_id = jobs.start_run("news", work)
+    except jobs.RunInProgress as exc:
+        return f"{exc}; refusing to start a second."
+
+    message = (
+        f"Ingest started for {date} "
+        f"(run_id={run_id}, {universe.height} tickers). Poll get_ingest_status()."
+    )
+    if unknown:
+        message += f" Unknown tickers ignored: {', '.join(unknown)}."
+    return message
+
+
+@mcp.tool()
+def run_filings_refresh(run_date: str = "") -> str:
+    """Start the daily SEC filings fetch for the universe, in the background.
+
+    Returns as soon as the run is accepted; poll get_ingest_status() for
+    progress. Only one run may be in flight at a time.
+
+    Args:
+        run_date: Date string (YYYY-MM-DD); today when omitted.
+
+    Returns:
+        A message with the new run id, or a diagnostic explaining why no run
+        was started.
+    """
+    from data.filings.fetch import run_daily_fetch
+
+    date = run_date or dt.date.today().isoformat()
+    if not _valid_date(date):
+        return f"Invalid date '{date}': expected YYYY-MM-DD."
+
+    universe, _ = _universe_for(date, None)
+    if universe.height == 0:
+        return f"No universe entries on {date}."
+
+    try:
+        client = _build_edgar_client()
+    except Exception as exc:  # noqa: BLE001 - reported to the caller, not raised
+        return f"Cannot start filings refresh: {exc}"
+
+    def work(progress: jobs.ProgressCallback) -> dict[str, int]:
+        conn = init_db(DB_PATH)
+        try:
+            return run_daily_fetch(
+                conn,
+                client,
+                run_date=date,
+                root=ROOT_DIR,
+                universe=universe,
+                progress=progress,
+            )
+        finally:
+            conn.close()
+
+    try:
+        run_id = jobs.start_run("filings", work)
+    except jobs.RunInProgress as exc:
+        return f"{exc}; refusing to start a second."
+
+    return (
+        f"Filings refresh started for {date} "
+        f"(run_id={run_id}, {universe.height} tickers). Poll get_ingest_status()."
+    )
+
+
+@mcp.tool()
+def get_ingest_status(limit: int = 5) -> dict[str, object]:
+    """Report the in-flight job run, if any, and recent run history.
+
+    Args:
+        limit: Number of past runs to return from the audit log.
+
+    Returns:
+        A dict with two keys. 'run' describes the most recent run started
+        through this server — run_id, job_type, state ('running',
+        'succeeded' or 'failed'), started_at, finished_at, elapsed_seconds,
+        tickers_done, tickers_total, counts, error — or None if this server
+        has started none. 'history' holds the most recent agent_runs rows,
+        newest first, including runs started by the scheduled jobs.
+    """
+    record = jobs.current_run()
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT {", ".join(AGENT_RUN_COLUMNS)}
+            FROM agent_runs
+            ORDER BY started_at DESC
+            LIMIT ?
+            """,
+            [limit],
+        ).fetchall()
+    return {
+        "run": record.snapshot() if record else None,
+        "history": _rows_to_dicts(rows, AGENT_RUN_COLUMNS),
+    }
 
 
 def main() -> None:
