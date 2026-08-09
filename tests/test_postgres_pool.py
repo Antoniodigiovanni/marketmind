@@ -9,13 +9,14 @@ import pytest
 from psycopg_pool import AsyncConnectionPool
 
 from data.db.postgres import close_pool, database_available, dsn_from_env, open_pool
+from tests.conftest import skip_or_fail_no_postgres
 
 pytestmark = pytest.mark.asyncio
 
 
 async def _skip_if_unavailable() -> None:
     if not await database_available():
-        pytest.skip("no PostgreSQL reachable; start it with `docker compose up -d`")
+        skip_or_fail_no_postgres("no PostgreSQL reachable; start it with `docker compose up -d`")
 
 
 async def test_dsn_prefers_the_environment(monkeypatch) -> None:
@@ -54,7 +55,6 @@ async def test_pool_registers_the_vector_type() -> None:
     pool = await open_pool()
     try:
         async with pool.connection() as conn:
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
             row = await (await conn.execute("SELECT '[1,2,3]'::vector")).fetchone()
         assert not isinstance(row[0], str)
         assert row[0].to_list() == [1.0, 2.0, 3.0]

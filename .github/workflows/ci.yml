@@ -48,6 +48,8 @@ jobs:
       # --cov-fail-under lives here rather than in pyproject addopts so that
       # running a single test file locally does not fail on total coverage.
       - name: Tests
+        env:
+          MARKETMIND_REQUIRE_POSTGRES: "1"
         run: >
           uv run --frozen pytest tests/ -q
           --cov=. --cov-report=term-missing --cov-fail-under=85

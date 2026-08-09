@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import pytest
 from pgvector import Vector
+from psycopg.conninfo import conninfo_to_dict
 
 from data.db.init_postgres import apply_schema
-from data.db.postgres import close_pool, database_available, open_pool
+from data.db.postgres import close_pool, database_available, dsn_from_env, open_pool
+from tests.conftest import skip_or_fail_no_postgres
 
 pytestmark = pytest.mark.asyncio
 
@@ -14,7 +16,21 @@ pytestmark = pytest.mark.asyncio
 @pytest.fixture
 async def pool():
     if not await database_available():
-        pytest.skip("no PostgreSQL reachable; start it with `docker compose up -d`")
+        skip_or_fail_no_postgres("no PostgreSQL reachable; start it with `docker compose up -d`")
+
+    # This fixture drops and recreates the `public` schema below. That is
+    # only ever safe against a disposable test database -- today that
+    # safety rests entirely on naming convention, and the design spec
+    # directs a future slice to unify this DSN resolution with production,
+    # at which point running pytest would become capable of dropping a
+    # production schema. Refuse unless the resolved database name still
+    # marks itself as a test database.
+    resolved_dsn = dsn_from_env()
+    dbname = conninfo_to_dict(resolved_dsn).get("dbname") or ""
+    if not dbname.endswith("_test"):
+        skip_or_fail_no_postgres(
+            f"refusing to reset database {dbname!r}: name does not end in '_test'"
+        )
 
     # open_pool() registers the pgvector type once per physical connection, at
     # connect time, binding that connection's dumper/loader to the `vector`
@@ -26,10 +42,12 @@ async def pool():
     # ensures every connection the test sees is configured against the
     # extension's final OID.
     setup_pool = await open_pool()
-    async with setup_pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await apply_schema(setup_pool)
-    await close_pool(setup_pool)
+    try:
+        async with setup_pool.connection() as conn:
+            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        await apply_schema(setup_pool)
+    finally:
+        await close_pool(setup_pool)
 
     pool = await open_pool()
     yield pool

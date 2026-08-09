@@ -33,7 +33,12 @@ async def _ensure_vector_extension(dsn: str) -> None:
     extension ends up present. Running it exactly once, on a single
     throwaway connection, before the pool starts opening its own (which can
     happen concurrently once demand exceeds ``min_size``) avoids that race
-    entirely rather than tolerating its fallout after the fact.
+    *within this process*. A second process racing this same call against
+    the same database is a separate, cross-process window this does not
+    close: only `InsufficientPrivilege` is tolerated below, so a losing
+    session's `DuplicateObject` would still propagate. That window is
+    unreachable today (one service process, one pytest process, no
+    pytest-xdist) and is tracked as follow-up work rather than closed here.
 
     Args:
         dsn: Connection string to create the extension on.
@@ -96,11 +101,15 @@ async def open_pool(
         psycopg.OperationalError: If the database cannot be reached while
             creating the vector extension, before any pool connection opens.
         psycopg_pool.PoolTimeout: If the pool cannot establish its minimum
-            connections within its internal open timeout (10 seconds) --
-            for example because the DSN is unreachable. `psycopg_pool`
-            catches and retries connection errors internally rather than
-            raising them directly, so this is what a dead DSN actually
-            surfaces as, not `psycopg.OperationalError`.
+            connections within its internal open timeout (10 seconds) even
+            though `_ensure_vector_extension` above already reached the
+            server -- for example because the server is at its own
+            connection limit and keeps refusing new ones. A DSN that is
+            simply unreachable is caught earlier, by
+            `_ensure_vector_extension`, and surfaces as
+            `psycopg.OperationalError` instead; this timeout is for the
+            pool's own connection establishment stalling after that check
+            already succeeded.
     """
     resolved_dsn = dsn or dsn_from_env()
     await _ensure_vector_extension(resolved_dsn)
@@ -124,22 +133,33 @@ async def open_pool(
 
 
 async def close_pool(pool: AsyncConnectionPool) -> None:
-    """Close a pool opened by open_pool."""
+    """Close a pool opened by open_pool.
+
+    Args:
+        pool: The pool to close.
+    """
     await pool.close()
 
 
 async def database_available(dsn: str | None = None) -> bool:
     """Report whether a PostgreSQL server is reachable at the DSN.
 
+    Used as a skip guard, so this is intentionally total over connection
+    failures: both a live-but-unreachable server (`OperationalError`) and a
+    DSN that fails to parse at all (`ProgrammingError`) are reported as
+    unavailable rather than raised, so callers can rely on it never raising
+    for a bad or dead DSN.
+
     Args:
         dsn: Connection string; defaults to dsn_from_env().
 
     Returns:
-        True when a connection opens, False on a connection error.
+        True when a connection opens, False on a connection error or a
+        malformed DSN.
     """
     try:
         conn = await psycopg.AsyncConnection.connect(dsn or dsn_from_env(), connect_timeout=3)
-    except psycopg.OperationalError as exc:
+    except (psycopg.OperationalError, psycopg.ProgrammingError) as exc:
         logger.debug(f"PostgreSQL not reachable: {exc}")
         return False
     await conn.close()
