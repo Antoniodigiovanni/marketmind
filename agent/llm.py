@@ -18,7 +18,7 @@ DEFAULT_MAX_RETRIES = 3
 # Status codes worth retrying: rate limiting and transient server faults.
 # Everything else in the 4xx range is a client error that will fail identically
 # on every attempt (bad key, bad request), so it is raised immediately.
-RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 
 
 class LLMError(RuntimeError):

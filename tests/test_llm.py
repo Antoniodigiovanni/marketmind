@@ -122,8 +122,10 @@ class _SequenceSession:
 
 @pytest.fixture(autouse=True)
 def _no_retry_sleep(monkeypatch) -> None:
-    """Keep retry tests instant."""
+    """Keep retry tests instant and isolated from the ambient environment."""
     monkeypatch.setattr("agent.llm.RETRY_WAIT", tenacity.wait_none())
+    monkeypatch.delenv("LLM_MAX_RETRIES", raising=False)
+    monkeypatch.delenv("LLM_TIMEOUT_SECONDS", raising=False)
 
 
 def _ok(content: str = "REDUNDANT") -> _FakeResponse:

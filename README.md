@@ -93,7 +93,9 @@ uv run pytest tests/ -v --cov=. --cov-report=term-missing
 
 ### Environment variables
 
-Loaded from `.env` via `python-dotenv`; never committed.
+`.env` is never committed. In production the systemd units load it via
+`EnvironmentFile=/srv/marketmind/.env` (see `deploy/systemd/*.service`); no
+code in this repo calls `python-dotenv`.
 
 | Variable | Purpose |
 |---|---|
