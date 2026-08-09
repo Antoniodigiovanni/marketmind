@@ -100,7 +100,10 @@ Loaded from `.env` via `python-dotenv`; never committed.
 | `AI_API_KEY` | Chat API key (DeepSeek-compatible endpoint) for extraction / structuring |
 | `LLM_BASE_URL` | Chat endpoint (default `https://api.deepseek.com`) |
 | `LLM_MODEL` | Model identifier (default `deepseek-chat`) |
+| `LLM_MAX_RETRIES` | Retry attempts for transient chat API failures (default 3) |
+| `LLM_TIMEOUT_SECONDS` | Chat API request timeout (default 60) |
 | `FRED_API_KEY` | FRED macro series |
+| `INGEST_MAX_CONSECUTIVE_FAILURES` | Consecutive extraction failures before the ingest run aborts (default 20) |
 
 ## Commands
 
