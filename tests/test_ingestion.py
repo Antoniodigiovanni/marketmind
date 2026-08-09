@@ -183,8 +183,12 @@ def test_run_daily_ingest_end_to_end(tmp_path) -> None:
 
         raw_path = tmp_path / "news" / f"{DATE}.ndjson"
         assert raw_path.exists()
-        # Three articles fetched, but two are the same story: the archive
-        # stores distinct records, matching articles_skipped == 1 above.
+        # Three articles fetched, but two share a url_hash: the archive (which
+        # dedups on url_hash only) stores 2 distinct records. That happens to
+        # equal articles_skipped == 1 above only because, in this fixture, the
+        # articles table's OR url_hash/content_hash dedup and the archive's
+        # url_hash-only dedup agree on which article is the duplicate — the
+        # two rules are not equivalent in general.
         assert len(raw_path.read_text().strip().splitlines()) == 2
 
         companies = conn.execute(
@@ -576,6 +580,50 @@ def test_a_success_resets_the_failure_counter(monkeypatch, tmp_path) -> None:
     assert calls["n"] == 3
     assert summary["articles_errored"] == 2
     assert summary["articles_redundant"] == 1
+
+
+def test_aborted_run_still_writes_an_agent_runs_row(monkeypatch, tmp_path) -> None:
+    """An aborted run must leave an audit row an operator can diagnose from.
+
+    Before this fix the INSERT lived after the aggregate loop inside the same
+    try block that raises IngestAborted, so an abort skipped it entirely —
+    the one case where an operator most needs the row. This asserts the row
+    exists, carries the partial counts accumulated before the abort, and has
+    a non-null error.
+    """
+    monkeypatch.setattr("agent.ingestion.MAX_CONSECUTIVE_FAILURES", 2)
+    conn = init_db(":memory:")
+
+    with pytest.raises(IngestAborted, match="2 consecutive"):
+        run_daily_ingest(
+            DATE,
+            conn=conn,
+            universe=UNIVERSE,
+            news_fetcher=_fake_news_fetcher,
+            description_fetcher=lambda name: "desc",
+            profile_builder=lambda name: None,
+            llm=_always_failing_llm,
+            raw_news_dir=tmp_path / "news",
+        )
+
+    run_row = conn.execute(
+        """
+        SELECT articles_fetched, articles_skipped, profiles_failed, error
+        FROM agent_runs
+        """
+    ).fetchone()
+
+    assert run_row is not None, "aborted run left no agent_runs row"
+    articles_fetched, articles_skipped, profiles_failed, error = run_row
+    # Partial counts accumulated before the abort: AAPL contributes 2 fetched
+    # (one a same-url duplicate, so 1 skipped) and a failed profile build;
+    # MSFT contributes 1 fetched and a failed profile build before its
+    # extraction call trips the breaker.
+    assert articles_fetched == 3
+    assert articles_skipped == 1
+    assert profiles_failed == 2
+    assert error is not None
+    assert "2 consecutive" in error
 
 
 class _StubChatClient:

@@ -282,6 +282,52 @@ def _set_article_status(
     )
 
 
+def _write_agent_run(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    run_id: str,
+    date: str,
+    started_at: str,
+    summary: dict[str, int],
+    error: str | None = None,
+) -> None:
+    """Insert the audit row for one ingest run.
+
+    Args:
+        conn: DuckDB connection.
+        run_id: UUID identifying this run.
+        date: Run date (YYYY-MM-DD).
+        started_at: ISO timestamp captured at the start of the run.
+        summary: Summary counts dict, as returned by `run_daily_ingest`.
+        error: Error message when the run failed or aborted; None on success.
+
+    Returns:
+        None.
+    """
+    conn.execute(
+        """
+        INSERT INTO agent_runs
+            (id, run_date, job_type, started_at, finished_at,
+             articles_fetched, articles_skipped, articles_redundant,
+             facts_written, facts_superseded, profiles_built, profiles_failed, error)
+        VALUES (?, ?, 'news', ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            run_id,
+            dt.date.fromisoformat(date),
+            started_at,
+            summary["articles_fetched"],
+            summary["articles_skipped"],
+            summary["articles_redundant"],
+            summary["facts_written"],
+            summary["facts_superseded"],
+            summary["profiles_built"],
+            summary["profiles_failed"],
+            error,
+        ],
+    )
+
+
 class RawNewsArchive:
     """Append-only NDJSON archive of fetched articles for one date.
 
@@ -290,6 +336,11 @@ class RawNewsArchive:
     rather than only after it. Re-running the same date appends only records
     whose url_hash is not already on disk, which keeps the file immutable in
     content while remaining safe to resume.
+
+    Single-writer: `append` does an unsynchronized read-modify-write on
+    `_seen` plus a file append, so concurrent callers can race. Safe today
+    because the ingest loop is single-threaded; needs an external lock before
+    any concurrent use.
     """
 
     def __init__(self, path: Path) -> None:
@@ -611,27 +662,23 @@ def run_daily_ingest(
                     )
                     summary["aggregate_written"] += 1
 
-        conn.execute(
-            """
-            INSERT INTO agent_runs
-                (id, run_date, job_type, started_at, finished_at,
-                 articles_fetched, articles_skipped, articles_redundant,
-                 facts_written, facts_superseded, profiles_built, profiles_failed)
-            VALUES (?, ?, 'news', ?, NOW(), ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                run_id,
-                dt.date.fromisoformat(date),
-                started_at,
-                summary["articles_fetched"],
-                summary["articles_skipped"],
-                summary["articles_redundant"],
-                summary["facts_written"],
-                summary["facts_superseded"],
-                summary["profiles_built"],
-                summary["profiles_failed"],
-            ],
+        _write_agent_run(
+            conn,
+            run_id=run_id,
+            date=date,
+            started_at=started_at,
+            summary=summary,
         )
+    except IngestAborted as exc:
+        _write_agent_run(
+            conn,
+            run_id=run_id,
+            date=date,
+            started_at=started_at,
+            summary=summary,
+            error=str(exc),
+        )
+        raise
     finally:
         if owns_conn:
             conn.close()
