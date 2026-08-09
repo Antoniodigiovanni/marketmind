@@ -7,6 +7,8 @@ import datetime as dt
 import hashlib
 import json
 import math
+import os
+import sys
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -40,6 +42,10 @@ SOURCE_CREDIBILITY: dict[str, float] = {
 }
 RECENCY_LAMBDA = 0.05
 
+# Consecutive extraction failures tolerated before the run gives up. A provider
+# outage otherwise burns the whole universe to 'error' over hours of dead calls.
+MAX_CONSECUTIVE_FAILURES = int(os.getenv("INGEST_MAX_CONSECUTIVE_FAILURES", "20"))
+
 RAW_NEWS_DIR = Path(__file__).resolve().parent.parent / "data" / "raw" / "news"
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
@@ -47,6 +53,10 @@ NewsFetcher = Callable[[str, str], list[Article]]
 DescriptionFetcher = Callable[[str], str]
 LLMCallable = Callable[[list[dict[str, str]]], str]
 ProfileBuilder = Callable[[str], dict[str, Any] | None]
+
+
+class IngestAborted(RuntimeError):
+    """Raised when consecutive extraction failures trip the circuit breaker."""
 
 
 def _sha256(text: str) -> str:
@@ -272,20 +282,117 @@ def _set_article_status(
     )
 
 
-def _write_raw_news(
-    articles: list[Article],
+def _write_agent_run(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    run_id: str,
     date: str,
-    raw_news_dir: Path,
-) -> Path:
-    """Write fetched articles to an immutable NDJSON file for the date."""
-    raw_news_dir.mkdir(parents=True, exist_ok=True)
-    path = raw_news_dir / f"{date}.ndjson"
-    if path.exists():
-        return path
-    with path.open("w", encoding="utf-8") as handle:
+    started_at: str,
+    summary: dict[str, int],
+    error: str | None = None,
+) -> None:
+    """Insert the audit row for one ingest run.
+
+    Args:
+        conn: DuckDB connection.
+        run_id: UUID identifying this run.
+        date: Run date (YYYY-MM-DD).
+        started_at: ISO timestamp captured at the start of the run.
+        summary: Summary counts dict, as returned by `run_daily_ingest`.
+        error: Error message when the run failed or aborted; None on success.
+
+    Returns:
+        None.
+    """
+    conn.execute(
+        """
+        INSERT INTO agent_runs
+            (id, run_date, job_type, started_at, finished_at,
+             articles_fetched, articles_skipped, articles_redundant,
+             facts_written, facts_superseded, profiles_built, profiles_failed, error)
+        VALUES (?, ?, 'news', ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            run_id,
+            dt.date.fromisoformat(date),
+            started_at,
+            summary["articles_fetched"],
+            summary["articles_skipped"],
+            summary["articles_redundant"],
+            summary["facts_written"],
+            summary["facts_superseded"],
+            summary["profiles_built"],
+            summary["profiles_failed"],
+            error,
+        ],
+    )
+
+
+class RawNewsArchive:
+    """Append-only NDJSON archive of fetched articles for one date.
+
+    Written incrementally so a run killed partway through keeps the articles it
+    already fetched, and so the MCP news tools return rows during the run
+    rather than only after it. Re-running the same date appends only records
+    whose url_hash is not already on disk, which keeps the file immutable in
+    content while remaining safe to resume.
+
+    Single-writer: `append` does an unsynchronized read-modify-write on
+    `_seen` plus a file append, so concurrent callers can race. Safe today
+    because the ingest loop is single-threaded; needs an external lock before
+    any concurrent use.
+    """
+
+    def __init__(self, path: Path) -> None:
+        """Open (or adopt) the archive for a date and index what is already stored."""
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._seen = self._existing_hashes()
+
+    def _existing_hashes(self) -> set[str]:
+        """Read the url_hash of every complete record already in the file."""
+        if not self.path.exists():
+            return set()
+        hashes: set[str] = set()
+        with self.path.open(encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    hashes.add(str(json.loads(line)["url_hash"]))
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    # A torn final line from a killed run — ignore and move on.
+                    continue
+        return hashes
+
+    def append(self, articles: list[Article]) -> int:
+        """Append articles not already archived.
+
+        Dedup is checked incrementally against `_seen` as each article is
+        considered, not pre-filtered in one pass — so two duplicate articles
+        arriving in the same call (e.g. the same story fetched twice in one
+        run) are also caught, not just duplicates across separate calls.
+
+        Args:
+            articles: Fetched articles, possibly overlapping what is stored.
+
+        Returns:
+            Number of records actually written.
+        """
+        new: list[Article] = []
         for article in articles:
-            handle.write(json.dumps(article_to_record(article)) + "\n")
-    return path
+            if article.url_hash in self._seen:
+                continue
+            self._seen.add(article.url_hash)
+            new.append(article)
+        if not new:
+            return 0
+        with self.path.open("a", encoding="utf-8") as handle:
+            for article in new:
+                handle.write(json.dumps(article_to_record(article)) + "\n")
+            handle.flush()
+        return len(new)
 
 
 def run_daily_ingest(
@@ -307,14 +414,15 @@ def run_daily_ingest(
     Steps:
     1. Load the point-in-time universe for the date.
     2. Per company: cache metadata, ensure a generated profile (lazy unless
-       backfill), fetch news (RSS, keyless).
+       backfill), fetch news (RSS, keyless), and append it to the raw news
+       archive for the date (deduped on url_hash, so a rerun is safe).
     3. Level-1 dedup against the articles table (url/content hash).
     4. Pre-score each article.
     5. Per new article: retrieve current + similar past facts, call the model,
        and write (or retire) facts.
     6. Aggregate the day's new facts by sector and country into
        aggregate_facts.
-    7. Write raw news NDJSON and an agent_runs audit row.
+    7. Write an agent_runs audit row.
 
     Args:
         date: Date string (YYYY-MM-DD).
@@ -339,6 +447,8 @@ def run_daily_ingest(
 
     Raises:
         ValueError: On an invalid date or a missing llm callable.
+        IngestAborted: After MAX_CONSECUTIVE_FAILURES consecutive extraction
+            failures.
     """
     dt.date.fromisoformat(date)
     if llm is None:
@@ -350,6 +460,7 @@ def run_daily_ingest(
         conn = init_db(DEFAULT_DB_PATH)
     universe = universe if universe is not None else get_universe(date)
     raw_news_dir = raw_news_dir or RAW_NEWS_DIR
+    archive = RawNewsArchive(raw_news_dir / f"{date}.ndjson")
 
     started_at = dt.datetime.now(dt.UTC).isoformat()
     run_id = uuid.uuid4().hex
@@ -364,8 +475,8 @@ def run_daily_ingest(
         "profiles_built": 0,
         "profiles_failed": 0,
     }
-    all_articles: list[Article] = []
     todays_facts: list[dict[str, str | None]] = []
+    consecutive_failures = 0
 
     try:
         for row in universe.iter_rows(named=True):
@@ -432,7 +543,7 @@ def run_daily_ingest(
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(f"news fetch failed for {ticker}: {exc}")
                     articles = []
-                all_articles.extend(articles)
+                archive.append(articles)
                 summary["articles_fetched"] += len(articles)
 
                 for article in articles:
@@ -468,7 +579,15 @@ def run_daily_ingest(
                         logger.error(f"extraction failed for article {article_id}: {exc}")
                         _set_article_status(conn, article_id, "error")
                         summary["articles_errored"] += 1
+                        consecutive_failures += 1
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                            raise IngestAborted(
+                                f"{consecutive_failures} consecutive extraction failures; "
+                                f"aborting run for {date}"
+                            ) from exc
                         continue
+
+                    consecutive_failures = 0
 
                     if parsed is None:
                         _set_article_status(conn, article_id, "redundant")
@@ -498,9 +617,6 @@ def run_daily_ingest(
                                 "country": str(country) if country else None,
                             }
                         )
-
-        if all_articles:
-            _write_raw_news(all_articles, date, raw_news_dir)
 
         for dimension, key_field in (("sector", "sector"), ("geography", "country")):
             groups: dict[str, list[dict[str, str | None]]] = {}
@@ -546,27 +662,23 @@ def run_daily_ingest(
                     )
                     summary["aggregate_written"] += 1
 
-        conn.execute(
-            """
-            INSERT INTO agent_runs
-                (id, run_date, job_type, started_at, finished_at,
-                 articles_fetched, articles_skipped, articles_redundant,
-                 facts_written, facts_superseded, profiles_built, profiles_failed)
-            VALUES (?, ?, 'news', ?, NOW(), ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                run_id,
-                dt.date.fromisoformat(date),
-                started_at,
-                summary["articles_fetched"],
-                summary["articles_skipped"],
-                summary["articles_redundant"],
-                summary["facts_written"],
-                summary["facts_superseded"],
-                summary["profiles_built"],
-                summary["profiles_failed"],
-            ],
+        _write_agent_run(
+            conn,
+            run_id=run_id,
+            date=date,
+            started_at=started_at,
+            summary=summary,
         )
+    except IngestAborted as exc:
+        _write_agent_run(
+            conn,
+            run_id=run_id,
+            date=date,
+            started_at=started_at,
+            summary=summary,
+            error=str(exc),
+        )
+        raise
     finally:
         if owns_conn:
             conn.close()
@@ -592,14 +704,18 @@ def main() -> None:
 
     client = ChatClient()
     vector_store = ChromaVectorStore(embedding_function=HashEmbeddingFunction())
-    summary = run_daily_ingest(
-        args.date,
-        llm=client.complete,
-        profile_builder=_default_profile_builder(client.complete),
-        backfill=args.backfill,
-        profiles_only=args.profiles_only,
-        vector_store=vector_store,
-    )
+    try:
+        summary = run_daily_ingest(
+            args.date,
+            llm=client.complete,
+            profile_builder=_default_profile_builder(client.complete),
+            backfill=args.backfill,
+            profiles_only=args.profiles_only,
+            vector_store=vector_store,
+        )
+    except IngestAborted as exc:
+        logger.error(f"ingest aborted for {args.date}: {exc}")
+        sys.exit(1)
     logger.info(f"ingest summary for {args.date}: {summary}")
 
 

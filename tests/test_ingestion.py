@@ -8,7 +8,7 @@ import json
 import polars as pl
 import pytest
 
-from agent.ingestion import run_daily_ingest
+from agent.ingestion import IngestAborted, RawNewsArchive, main, run_daily_ingest
 from agent.knowledge import get_current_aggregate_facts, get_current_facts, write_fact
 from data.db.init import init_db
 from data.sources.rss import Article
@@ -183,7 +183,13 @@ def test_run_daily_ingest_end_to_end(tmp_path) -> None:
 
         raw_path = tmp_path / "news" / f"{DATE}.ndjson"
         assert raw_path.exists()
-        assert len(raw_path.read_text().strip().splitlines()) == 3
+        # Three articles fetched, but two share a url_hash: the archive (which
+        # dedups on url_hash only) stores 2 distinct records. That happens to
+        # equal articles_skipped == 1 above only because, in this fixture, the
+        # articles table's OR url_hash/content_hash dedup and the archive's
+        # url_hash-only dedup agree on which article is the duplicate — the
+        # two rules are not equivalent in general.
+        assert len(raw_path.read_text().strip().splitlines()) == 2
 
         companies = conn.execute(
             "SELECT ticker, description FROM companies ORDER BY ticker"
@@ -429,3 +435,215 @@ def test_profiles_only_skips_news_processing(tmp_path) -> None:
         assert not (tmp_path / "news" / f"{DATE}.ndjson").exists()
     finally:
         conn.close()
+
+
+def _read_ndjson(path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def test_archive_appends_across_calls(tmp_path) -> None:
+    archive = RawNewsArchive(tmp_path / f"{DATE}.ndjson")
+
+    assert archive.append([_article("AAPL", "http://a", "A", "sa")]) == 1
+    assert archive.append([_article("MSFT", "http://b", "B", "sb")]) == 1
+
+    records = _read_ndjson(archive.path)
+    assert [r["ticker"] for r in records] == ["AAPL", "MSFT"]
+
+
+def test_archive_is_idempotent_on_reruns(tmp_path) -> None:
+    path = tmp_path / f"{DATE}.ndjson"
+    first = RawNewsArchive(path)
+    first.append([_article("AAPL", "http://a", "A", "sa")])
+
+    # Simulate a fresh process after a crash.
+    second = RawNewsArchive(path)
+    written = second.append(
+        [_article("AAPL", "http://a", "A", "sa"), _article("MSFT", "http://b", "B", "sb")]
+    )
+
+    assert written == 1
+    assert len(_read_ndjson(path)) == 2
+
+
+def test_archive_tolerates_a_torn_final_line(tmp_path) -> None:
+    path = tmp_path / f"{DATE}.ndjson"
+    path.write_text('{"ticker": "AAPL", "url_hash": "h1"}\n{"ticker": "MS', encoding="utf-8")
+
+    archive = RawNewsArchive(path)
+    assert archive.append([_article("MSFT", "http://b", "B", "sb")]) == 1
+
+
+def test_ingest_writes_news_before_it_finishes(tmp_path) -> None:
+    """The archive is populated per company, not deferred to the end."""
+    conn = init_db(":memory:")
+    seen: list[int] = []
+    news_dir = tmp_path / "news"
+
+    def _counting_llm(messages: list[dict[str, str]]) -> str:
+        path = news_dir / f"{DATE}.ndjson"
+        seen.append(len(_read_ndjson(path)) if path.exists() else 0)
+        return "REDUNDANT"
+
+    run_daily_ingest(
+        DATE,
+        conn=conn,
+        universe=UNIVERSE,
+        news_fetcher=_fake_news_fetcher,
+        description_fetcher=lambda name: "desc",
+        profile_builder=lambda name: None,
+        llm=_counting_llm,
+        raw_news_dir=news_dir,
+    )
+
+    assert seen, "no extraction calls were made"
+    assert seen[0] > 0, "archive was still empty during the first extraction"
+
+
+def _always_failing_llm(messages: list[dict[str, str]]) -> str:
+    return "not json at all"
+
+
+def test_run_aborts_after_consecutive_failures(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("agent.ingestion.MAX_CONSECUTIVE_FAILURES", 2)
+    conn = init_db(":memory:")
+
+    with pytest.raises(IngestAborted, match="2 consecutive"):
+        run_daily_ingest(
+            DATE,
+            conn=conn,
+            universe=UNIVERSE,
+            news_fetcher=_fake_news_fetcher,
+            description_fetcher=lambda name: "desc",
+            profile_builder=lambda name: None,
+            llm=_always_failing_llm,
+            raw_news_dir=tmp_path / "news",
+        )
+
+
+def test_a_success_resets_the_failure_counter(monkeypatch, tmp_path) -> None:
+    """A reset between two failures must keep the streak below the threshold.
+
+    Sequence: fail -> REDUNDANT -> fail, with the threshold monkeypatched to
+    2. With a working reset the counter never exceeds 1, so no abort occurs.
+    With the reset missing/broken, the second failure pushes the counter to
+    2 and `run_daily_ingest` raises `IngestAborted` instead of returning — so
+    this test fails loudly if the reset regresses, unlike a version that only
+    asserts on `summary` counts (which pass regardless of whether the reset
+    runs, given only two extraction calls).
+
+    Uses a test-local three-company universe and fetcher (not the shared
+    module-level `UNIVERSE`/`_fake_news_fetcher`) so there are three distinct,
+    non-deduped articles to drive three separate extraction calls.
+    """
+    monkeypatch.setattr("agent.ingestion.MAX_CONSECUTIVE_FAILURES", 2)
+    conn = init_db(":memory:")
+    calls = {"n": 0}
+
+    three_company_universe = pl.DataFrame(
+        {
+            "ticker": ["AAPL", "MSFT", "GOOGL"],
+            "name": ["Apple Inc", "Microsoft Corp", "Alphabet Inc"],
+            "country": ["US", "US", "US"],
+            "sector": ["Technology", "Technology", "Technology"],
+            "added_date": [dt.date(2026, 1, 1)] * 3,
+            "removed_date": [None, None, None],
+            "universe": ["sp500", "sp500", "sp500"],
+        }
+    )
+
+    def _three_article_news_fetcher(ticker: str, name: str) -> list[Article]:
+        return [
+            _article(
+                ticker,
+                f"https://example.com/{ticker.lower()}-1",
+                f"{name} news",
+                "summary",
+            )
+        ]
+
+    def _fail_redundant_fail_llm(messages: list[dict[str, str]]) -> str:
+        calls["n"] += 1
+        return "REDUNDANT" if calls["n"] == 2 else "not json"
+
+    summary = run_daily_ingest(
+        DATE,
+        conn=conn,
+        universe=three_company_universe,
+        news_fetcher=_three_article_news_fetcher,
+        description_fetcher=lambda name: "desc",
+        profile_builder=lambda name: None,
+        llm=_fail_redundant_fail_llm,
+        raw_news_dir=tmp_path / "news",
+    )
+
+    assert calls["n"] == 3
+    assert summary["articles_errored"] == 2
+    assert summary["articles_redundant"] == 1
+
+
+def test_aborted_run_still_writes_an_agent_runs_row(monkeypatch, tmp_path) -> None:
+    """An aborted run must leave an audit row an operator can diagnose from.
+
+    Before this fix the INSERT lived after the aggregate loop inside the same
+    try block that raises IngestAborted, so an abort skipped it entirely —
+    the one case where an operator most needs the row. This asserts the row
+    exists, carries the partial counts accumulated before the abort, and has
+    a non-null error.
+    """
+    monkeypatch.setattr("agent.ingestion.MAX_CONSECUTIVE_FAILURES", 2)
+    conn = init_db(":memory:")
+
+    with pytest.raises(IngestAborted, match="2 consecutive"):
+        run_daily_ingest(
+            DATE,
+            conn=conn,
+            universe=UNIVERSE,
+            news_fetcher=_fake_news_fetcher,
+            description_fetcher=lambda name: "desc",
+            profile_builder=lambda name: None,
+            llm=_always_failing_llm,
+            raw_news_dir=tmp_path / "news",
+        )
+
+    run_row = conn.execute(
+        """
+        SELECT articles_fetched, articles_skipped, profiles_failed, error
+        FROM agent_runs
+        """
+    ).fetchone()
+
+    assert run_row is not None, "aborted run left no agent_runs row"
+    articles_fetched, articles_skipped, profiles_failed, error = run_row
+    # Partial counts accumulated before the abort: AAPL contributes 2 fetched
+    # (one a same-url duplicate, so 1 skipped) and a failed profile build;
+    # MSFT contributes 1 fetched and a failed profile build before its
+    # extraction call trips the breaker.
+    assert articles_fetched == 3
+    assert articles_skipped == 1
+    assert profiles_failed == 2
+    assert error is not None
+    assert "2 consecutive" in error
+
+
+class _StubChatClient:
+    """Stands in for ChatClient so main() needs no API key."""
+
+    def complete(self, messages: list[dict[str, str]]) -> str:
+        return "REDUNDANT"
+
+
+def test_main_exits_non_zero_when_aborted(monkeypatch) -> None:
+    monkeypatch.setattr("sys.argv", ["ingestion", DATE])
+    monkeypatch.setattr("agent.ingestion.ChatClient", _StubChatClient)
+    monkeypatch.setattr("agent.ingestion.ChromaVectorStore", lambda **kwargs: None)
+
+    def _raise(*args, **kwargs):
+        raise IngestAborted("3 consecutive extraction failures")
+
+    monkeypatch.setattr("agent.ingestion.run_daily_ingest", _raise)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert excinfo.value.code == 1

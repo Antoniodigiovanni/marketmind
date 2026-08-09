@@ -9,7 +9,7 @@ import polars as pl
 import pytest
 
 import server.mcp as mcp_mod
-from agent.ingestion import _write_raw_news
+from agent.ingestion import RawNewsArchive
 from data.db.init import init_db
 from data.sources.rss import NEWS_RECORD_FIELDS, Article, article_to_record
 
@@ -120,7 +120,7 @@ def test_news_read_columns_exist_in_the_written_record() -> None:
 
 def test_get_news_and_search(tmp_path, monkeypatch) -> None:
     """Round-trip: write via the ingest producer, read via the MCP tools."""
-    _write_raw_news([_article()], "2026-08-04", tmp_path)
+    RawNewsArchive(tmp_path / "2026-08-04.ndjson").append([_article()])
     monkeypatch.setattr(mcp_mod, "NEWS_GLOB", str(tmp_path / "*.ndjson"))
 
     news = mcp_mod.get_news("AAPL")
@@ -136,15 +136,13 @@ def test_get_news_and_search(tmp_path, monkeypatch) -> None:
 
 
 def test_get_news_since_filter_and_empty_search(tmp_path, monkeypatch) -> None:
-    _write_raw_news(
+    RawNewsArchive(tmp_path / "2026-08-04.ndjson").append(
         [
             _article(title="Newer", url="https://a.com/1"),
             _article(
                 title="Older", url="https://a.com/2", published_at="2026-08-01T08:00:00+00:00"
             ),
-        ],
-        "2026-08-04",
-        tmp_path,
+        ]
     )
     monkeypatch.setattr(mcp_mod, "NEWS_GLOB", str(tmp_path / "*.ndjson"))
 
