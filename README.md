@@ -239,7 +239,26 @@ The MCP server (`server/mcp.py`) exposes the following tools:
 | `get_market_views` | `as_of`, `ticker?`, `scope?`, `limit?` | Views for `as_of` or earlier, newest first |
 | `save_market_view_tool` | `as_of`, `view_text`, `model`, `scope`, `ticker?`, `theme?`, `data_cutoff?` | New immutable view ID |
 | `save_fact` | `ticker`, `statement`, `fact_type`, `confidence`, `valid_from`, `source_article_id`, `supersedes_id?` | New versioned fact ID |
-| `run_ingest` | `date` | Runs the daily news + fact ingest pipeline |
+| `run_ingest` | `date`, `profiles_only?`, `backfill?`, `tickers?` | Starts the daily news + fact ingest in the background; returns a run id |
+| `run_filings_refresh` | `run_date?` | Starts the daily SEC filings fetch in the background; returns a run id |
+| `get_ingest_status` | `limit?` | The in-flight run (state, processed/total, counts) plus recent `agent_runs` rows |
+
+### Job tools
+
+`run_ingest` and `run_filings_refresh` take hours over the full universe, so
+they return as soon as the run is accepted rather than blocking the call.
+Poll `get_ingest_status()` for progress.
+
+Only one run may be in flight at a time; a second call is refused with the id
+of the running one. Problems that can be detected up front — a malformed date,
+tickers outside the universe, a missing API key — come back as a diagnostic
+string and start nothing. Failures during a run (including the consecutive-
+failure circuit breaker) are reported through `get_ingest_status`, and the run
+is recorded in `agent_runs` either way.
+
+`tickers` narrows the ingest to a subset of the point-in-time universe, which
+is the practical way to trigger a small run on demand; the scheduled timer
+still covers the full universe.
 
 ## Storage model
 

@@ -281,6 +281,41 @@ def test_get_ingest_status_limits_history(wired) -> None:
     assert status["history"][0]["id"] == "r2"
 
 
+def test_status_is_readable_while_a_run_holds_the_database(wired) -> None:
+    """The status tool opens its own connection while a run is mid-write."""
+    writing = threading.Event()
+    release = threading.Event()
+
+    def slow_work(progress: jobs.ProgressCallback) -> dict[str, int]:
+        conn = init_db(mcp_mod.DB_PATH)
+        try:
+            conn.execute(
+                """
+                INSERT INTO agent_runs (id, run_date, job_type, started_at)
+                VALUES ('live', DATE '2026-08-04', 'news', NOW())
+                """
+            )
+            progress(1, 2, {"facts_written": 0})
+            writing.set()
+            release.wait(timeout=5)
+            return {"facts_written": 0}
+        finally:
+            conn.close()
+
+    jobs.start_run("news", slow_work)
+    try:
+        assert writing.wait(timeout=5)
+        status = mcp_mod.get_ingest_status()
+
+        assert status["run"]["state"] == "running"
+        assert status["run"]["tickers_done"] == 1
+        assert status["run"]["finished_at"] is None
+        assert [row["id"] for row in status["history"]] == ["live"]
+    finally:
+        release.set()
+        _join_run()
+
+
 # --- filings ---
 
 
