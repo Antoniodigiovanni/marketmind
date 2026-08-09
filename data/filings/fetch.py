@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Callable
 from pathlib import Path
 
 import duckdb
@@ -33,6 +34,9 @@ from data.universe.loader import get_universe
 DOCUMENT_FORMS = {"10-K", "10-Q", "8-K", "20-F", "6-K"}
 OWNERSHIP_FORMS = {"3", "4", "5"}
 ROOT_DIR = Path(__file__).resolve().parents[2]
+
+# (tickers_done, tickers_total, running counts)
+ProgressCallback = Callable[[int, int, dict[str, int]], None]
 
 
 def _info_table_file(client: EdgardClient, cik: str, accession: str) -> str | None:
@@ -214,6 +218,7 @@ def run_daily_fetch(
     run_date: str,
     root: Path,
     universe: pl.DataFrame,
+    progress: ProgressCallback | None = None,
 ) -> dict[str, int]:
     """Fetch new SEC filings for the universe and store them.
 
@@ -223,6 +228,8 @@ def run_daily_fetch(
         run_date: Run date (YYYY-MM-DD).
         root: Repository root for raw storage.
         universe: DataFrame with a ticker column.
+        progress: Optional callable(tickers_done, tickers_total, counts)
+            invoked after each ticker, so a caller can report live progress.
 
     Returns:
         Counts: filings_fetched, filings_parsed, filings_skipped,
@@ -239,11 +246,13 @@ def run_daily_fetch(
     }
     started = dt.datetime.now(dt.UTC)
 
-    for ticker in tickers:
+    for done, ticker in enumerate(tickers, start=1):
         cik = cik_for_ticker(conn, ticker)
         if cik is None:
             logger.warning(f"no SEC CIK for {ticker}; skipped")
             counts["filings_skipped"] += 1
+            if progress is not None:
+                progress(done, len(tickers), counts)
             continue
         for sub in client.submissions(cik):
             if sub.form_type not in COVERED_FORMS or filing_exists(conn, cik, sub.accession):
@@ -267,6 +276,8 @@ def run_daily_fetch(
                 logger.exception(f"filing {sub.accession} for {ticker} failed; skipped")
                 counts["filings_skipped"] += 1
         mark_checkpoint(conn, f"submissions:{ticker}", run_date)
+        if progress is not None:
+            progress(done, len(tickers), counts)
 
     log_run(conn, job_type="filings", run_date=run_date, started_at=started, **counts)
     return counts

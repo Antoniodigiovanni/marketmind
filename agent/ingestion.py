@@ -53,6 +53,8 @@ NewsFetcher = Callable[[str, str], list[Article]]
 DescriptionFetcher = Callable[[str], str]
 LLMCallable = Callable[[list[dict[str, str]]], str]
 ProfileBuilder = Callable[[str], dict[str, Any] | None]
+# (tickers_done, tickers_total, running summary counts)
+ProgressCallback = Callable[[int, int, dict[str, int]], None]
 
 
 class IngestAborted(RuntimeError):
@@ -408,6 +410,7 @@ def run_daily_ingest(
     llm: LLMCallable | None = None,
     vector_store: object | None = None,
     raw_news_dir: Path | None = None,
+    progress: ProgressCallback | None = None,
 ) -> dict[str, int]:
     """Run the full daily news → facts pipeline.
 
@@ -439,6 +442,9 @@ def run_daily_ingest(
         llm: Callable(messages) -> text; required.
         vector_store: Optional ChromaVectorStore for embedding past facts.
         raw_news_dir: Directory for the immutable per-date NDJSON file.
+        progress: Optional callable(tickers_done, tickers_total, summary)
+            invoked after each universe row, so a caller can report live
+            progress before the agent_runs row is written at the end.
 
     Returns:
         Summary counts keyed by articles_fetched, articles_skipped,
@@ -477,6 +483,8 @@ def run_daily_ingest(
     }
     todays_facts: list[dict[str, str | None]] = []
     consecutive_failures = 0
+    tickers_total = universe.height
+    tickers_done = 0
 
     try:
         for row in universe.iter_rows(named=True):
@@ -617,6 +625,10 @@ def run_daily_ingest(
                                 "country": str(country) if country else None,
                             }
                         )
+
+            tickers_done += 1
+            if progress is not None:
+                progress(tickers_done, tickers_total, summary)
 
         for dimension, key_field in (("sector", "sector"), ("geography", "country")):
             groups: dict[str, list[dict[str, str | None]]] = {}
