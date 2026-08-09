@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pgvector import Vector
 
 from data.db.init_postgres import apply_schema
 from data.db.postgres import close_pool, database_available, open_pool
@@ -14,10 +15,23 @@ pytestmark = pytest.mark.asyncio
 async def pool():
     if not await database_available():
         pytest.skip("no PostgreSQL reachable; start it with `docker compose up -d`")
-    pool = await open_pool()
-    async with pool.connection() as conn:
+
+    # open_pool() registers the pgvector type once per physical connection, at
+    # connect time, binding that connection's dumper/loader to the `vector`
+    # type's current OID. Resetting `public` (which owns the `vector`
+    # extension) and re-applying the schema mints a fresh OID -- so a pool
+    # whose connections predate that reset would carry stale, OID-bound
+    # pgvector adapters. Doing the reset and the schema apply on a short-lived
+    # pool, closing it, and only then opening the pool handed to the test
+    # ensures every connection the test sees is configured against the
+    # extension's final OID.
+    setup_pool = await open_pool()
+    async with setup_pool.connection() as conn:
         await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await apply_schema(pool)
+    await apply_schema(setup_pool)
+    await close_pool(setup_pool)
+
+    pool = await open_pool()
     yield pool
     await close_pool(pool)
 
@@ -92,7 +106,8 @@ async def test_cosine_similarity_orders_by_closeness(pool) -> None:
         ):
             await conn.execute(
                 "INSERT INTO company_facts "
-                "(fact_id, company_id, fact_type, statement, confidence, valid_from, source_article) "
+                "(fact_id, company_id, fact_type, statement, confidence, valid_from, "
+                "source_article) "
                 "VALUES (%s,'11111111-1111-1111-1111-111111111111','risk','s',0.5,'2020-01-01',"
                 "'22222222-2222-2222-2222-222222222222')",
                 (fact_id,),
@@ -115,3 +130,48 @@ async def test_cosine_similarity_orders_by_closeness(pool) -> None:
     assert rows[0][1] == pytest.approx(1.0, abs=1e-6)
     assert 0.0 <= rows[1][1] <= 1.0
     assert rows[0][1] > rows[1][1]
+
+
+async def test_pool_vector_type_registration_survives_the_schema_reset(pool) -> None:
+    """A `pgvector.Vector` bound through the fixture's pool must round-trip.
+
+    `open_pool()` registers the pgvector type once per physical connection,
+    at connect time, baking in the `vector` type's current OID. The fixture
+    drops and recreates `public` -- which owns the `vector` extension -- and
+    then applies the schema, which mints a fresh OID for `vector`. A pool
+    opened before that reset would carry stale, OID-bound dumpers/loaders for
+    `pgvector.Vector` and would fail with a `cache lookup failed for type
+    <oid>`-class error on exactly the kind of parameter this test binds.
+    """
+    async with pool.connection() as conn:
+        await conn.execute(
+            "INSERT INTO companies (company_id, name, first_seen) "
+            "VALUES ('44444444-4444-4444-4444-444444444444', 'VectorRoundTripCo', "
+            "'2020-01-01')"
+        )
+        await conn.execute(
+            "INSERT INTO articles (article_id, url_hash, content_hash, url, source, "
+            "published_at) VALUES ('55555555-5555-5555-5555-555555555555','h2','c2',"
+            "'http://y','test',NOW())"
+        )
+        await conn.execute(
+            "INSERT INTO company_facts "
+            "(fact_id, company_id, fact_type, statement, confidence, valid_from, "
+            "source_article) VALUES ('66666666-6666-6666-6666-666666666666',"
+            "'44444444-4444-4444-4444-444444444444','risk','s',0.5,'2020-01-01',"
+            "'55555555-5555-5555-5555-555555555555')"
+        )
+        vec = Vector([1.0] + [0.0] * 1535)
+        await conn.execute(
+            "INSERT INTO fact_embeddings (fact_id, model, embedding) VALUES (%s, 'test', %s)",
+            ("66666666-6666-6666-6666-666666666666", vec),
+        )
+        row = await (
+            await conn.execute(
+                "SELECT embedding FROM fact_embeddings WHERE fact_id = %s",
+                ("66666666-6666-6666-6666-666666666666",),
+            )
+        ).fetchone()
+
+    assert isinstance(row[0], Vector)
+    assert row[0].to_list() == [1.0] + [0.0] * 1535

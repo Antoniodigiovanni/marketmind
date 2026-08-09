@@ -1,7 +1,7 @@
 -- TRANSITIONAL: this file does not yet replace data/db/schema.sql.
 -- The DuckDB schema remains authoritative until the application code is
 -- ported in B1b. Verified against pgvector/pgvector:pg16 on 2026-08-09:
--- 30 tables, 72 indexes, 20 check constraints, idempotent across two applies.
+-- 30 tables, 72 indexes, 18 check constraints, idempotent across two applies.
 
 -- marketmind — PostgreSQL schema (draft for review)
 -- Target: PostgreSQL 16+ with the `vector` extension (pgvector).
