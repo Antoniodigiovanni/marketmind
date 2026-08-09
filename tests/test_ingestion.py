@@ -518,27 +518,64 @@ def test_run_aborts_after_consecutive_failures(monkeypatch, tmp_path) -> None:
 
 
 def test_a_success_resets_the_failure_counter(monkeypatch, tmp_path) -> None:
+    """A reset between two failures must keep the streak below the threshold.
+
+    Sequence: fail -> REDUNDANT -> fail, with the threshold monkeypatched to
+    2. With a working reset the counter never exceeds 1, so no abort occurs.
+    With the reset missing/broken, the second failure pushes the counter to
+    2 and `run_daily_ingest` raises `IngestAborted` instead of returning — so
+    this test fails loudly if the reset regresses, unlike a version that only
+    asserts on `summary` counts (which pass regardless of whether the reset
+    runs, given only two extraction calls).
+
+    Uses a test-local three-company universe and fetcher (not the shared
+    module-level `UNIVERSE`/`_fake_news_fetcher`) so there are three distinct,
+    non-deduped articles to drive three separate extraction calls.
+    """
     monkeypatch.setattr("agent.ingestion.MAX_CONSECUTIVE_FAILURES", 2)
     conn = init_db(":memory:")
     calls = {"n": 0}
 
-    def _alternating_llm(messages: list[dict[str, str]]) -> str:
+    three_company_universe = pl.DataFrame(
+        {
+            "ticker": ["AAPL", "MSFT", "GOOGL"],
+            "name": ["Apple Inc", "Microsoft Corp", "Alphabet Inc"],
+            "country": ["US", "US", "US"],
+            "sector": ["Technology", "Technology", "Technology"],
+            "added_date": [dt.date(2026, 1, 1)] * 3,
+            "removed_date": [None, None, None],
+            "universe": ["sp500", "sp500", "sp500"],
+        }
+    )
+
+    def _three_article_news_fetcher(ticker: str, name: str) -> list[Article]:
+        return [
+            _article(
+                ticker,
+                f"https://example.com/{ticker.lower()}-1",
+                f"{name} news",
+                "summary",
+            )
+        ]
+
+    def _fail_redundant_fail_llm(messages: list[dict[str, str]]) -> str:
         calls["n"] += 1
-        return "not json" if calls["n"] % 2 else "REDUNDANT"
+        return "REDUNDANT" if calls["n"] == 2 else "not json"
 
     summary = run_daily_ingest(
         DATE,
         conn=conn,
-        universe=UNIVERSE,
-        news_fetcher=_fake_news_fetcher,
+        universe=three_company_universe,
+        news_fetcher=_three_article_news_fetcher,
         description_fetcher=lambda name: "desc",
         profile_builder=lambda name: None,
-        llm=_alternating_llm,
+        llm=_fail_redundant_fail_llm,
         raw_news_dir=tmp_path / "news",
     )
 
-    assert summary["articles_errored"] > 0
-    assert summary["articles_redundant"] > 0
+    assert calls["n"] == 3
+    assert summary["articles_errored"] == 2
+    assert summary["articles_redundant"] == 1
 
 
 class _StubChatClient:
