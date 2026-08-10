@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import os
 
+import psycopg
 import pytest
+from psycopg.conninfo import conninfo_to_dict
+
+from data.db.init_postgres import apply_schema
+from data.db.pool import close_pool, database_available, dsn_from_env, open_pool
 
 
 @pytest.fixture(autouse=True)
@@ -44,3 +49,52 @@ def skip_or_fail_no_postgres(message: str) -> None:
     if os.getenv("MARKETMIND_REQUIRE_POSTGRES") == "1":
         pytest.fail(message)
     pytest.skip(message)
+
+
+@pytest.fixture(scope="session")
+async def postgres_pool():
+    """Session-scoped pool: schema applied once, torn down once at session end.
+
+    Skips (or fails, under MARKETMIND_REQUIRE_POSTGRES=1) when no reachable
+    test database is configured. Refuses to run against a database whose
+    name doesn't end in '_test', since this drops and recreates the
+    `public` schema before applying — safe only against a disposable
+    database.
+    """
+    if not await database_available():
+        skip_or_fail_no_postgres("no PostgreSQL reachable; start it with `docker compose up -d`")
+
+    dsn = dsn_from_env()
+    dbname = conninfo_to_dict(dsn).get("dbname") or ""
+    if not dbname.endswith("_test"):
+        skip_or_fail_no_postgres(
+            f"refusing to reset database {dbname!r}: name does not end in '_test'"
+        )
+
+    reset_conn = await psycopg.AsyncConnection.connect(dsn, connect_timeout=3)
+    try:
+        await reset_conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        await reset_conn.commit()
+    finally:
+        await reset_conn.close()
+
+    await apply_schema(dsn)
+    pool = await open_pool(dsn)
+    yield pool
+    await close_pool(pool)
+
+
+@pytest.fixture
+async def pg_conn(postgres_pool):
+    """One pooled connection per test, in a transaction rolled back at teardown.
+
+    Any repository function called with this connection during a test must
+    scope its own statement groups with `async with conn.transaction():`
+    rather than calling `conn.commit()` directly — psycopg nests an inner
+    `transaction()` opened while one is already active as a SAVEPOINT, so
+    this fixture's rollback undoes everything a repository function wrote,
+    even though the function itself believes it committed its own work.
+    """
+    async with postgres_pool.connection() as conn, conn.transaction() as tx:
+        yield conn
+        raise psycopg.Rollback(tx)
