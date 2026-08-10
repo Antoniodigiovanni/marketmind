@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 
-import psycopg
 import pytest
-from psycopg_pool import AsyncConnectionPool
+from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
-from data.db.postgres import close_pool, database_available, dsn_from_env, open_pool
+from data.db.pool import close_pool, database_available, dsn_from_env, open_pool
 from tests.conftest import skip_or_fail_no_postgres
 
 pytestmark = pytest.mark.asyncio
@@ -101,18 +100,16 @@ async def test_pool_registers_the_vector_type_for_concurrently_opened_connection
 async def test_open_pool_leaves_no_running_tasks_for_an_unreachable_dsn() -> None:
     """A failed open_pool() against a dead DSN must not leak background tasks.
 
-    The dead DSN here fails in open_pool's one-time extension check, before
-    any AsyncConnectionPool is even constructed -- so this proves the
-    end-to-end contract (nothing is left running) but does not by itself
-    exercise the `except Exception: await pool.close(); raise` branch added
-    around `pool.open()`, since that branch is only reached once a pool
-    object exists. See the deterministic test below for that.
+    open_pool is side-effect-free (Task 1): it has no pre-flight reachability
+    check of its own, so a dead DSN surfaces as the pool's own PoolTimeout
+    rather than an immediate OperationalError. open_timeout is set low here
+    so the test doesn't wait out the 10s production default.
     """
     current = asyncio.current_task()
     tasks_before = {t for t in asyncio.all_tasks() if t is not current}
 
-    with pytest.raises(psycopg.OperationalError):
-        await open_pool("postgresql://nobody@127.0.0.1:1/nothing")
+    with pytest.raises(PoolTimeout):
+        await open_pool("postgresql://nobody@127.0.0.1:1/nothing", open_timeout=1.0)
 
     tasks_after = {t for t in asyncio.all_tasks() if t is not current}
     assert tasks_after - tasks_before == set(), "open_pool leaked background tasks"
