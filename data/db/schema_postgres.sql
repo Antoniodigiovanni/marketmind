@@ -2,6 +2,8 @@
 -- The DuckDB schema remains authoritative until the application code is
 -- ported in B1b. Verified against pgvector/pgvector:pg16 on 2026-08-09:
 -- 30 tables, 72 indexes, 18 check constraints, idempotent across two applies.
+-- (listings.status added 2026-08-10 for the identity-port phase: 19 check
+-- constraints as of that change.)
 
 -- marketmind — PostgreSQL schema (draft for review)
 -- Target: PostgreSQL 16+ with the `vector` extension (pgvector).
@@ -88,6 +90,12 @@ CREATE TABLE IF NOT EXISTS listings (
     quote_convention TEXT    NOT NULL DEFAULT 'major'
         CHECK (quote_convention IN ('major', 'minor')),  -- 'minor' = pence/cents
     is_primary   BOOLEAN     NOT NULL DEFAULT TRUE,
+    -- Resolution confidence for the provider symbol, not a trading state:
+    -- 'valid' passed the provider's data-availability check, 'review' resolved
+    -- but failed it, 'unresolved' has no confirmed provider symbol at all
+    -- (symbol falls back to the source identifier in that case).
+    status       TEXT        NOT NULL DEFAULT 'valid'
+        CHECK (status IN ('valid', 'review', 'unresolved')),
     valid_from   DATE        NOT NULL,
     valid_until  DATE,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
