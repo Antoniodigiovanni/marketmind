@@ -105,6 +105,8 @@ code in this repo calls `python-dotenv`.
 | `LLM_MAX_RETRIES` | Retry attempts for transient chat API failures (default 3) |
 | `LLM_TIMEOUT_SECONDS` | Chat API request timeout (default 60) |
 | `FRED_API_KEY` | FRED macro series |
+| `SEC_CONTACT_NAME` | Operator name sent to SEC EDGAR and filings.xbrl.org (required) |
+| `SEC_CONTACT_EMAIL` | Operator email sent with every EDGAR request (required) |
 | `INGEST_MAX_CONSECUTIVE_FAILURES` | Consecutive extraction failures before the ingest run aborts (default 20) |
 
 ## Commands

@@ -144,9 +144,11 @@ else
   log "keeping existing .env"
 fi
 
-if grep -qE '^(AI_API_KEY=sk-\.\.\.|FRED_API_KEY=\.\.\.)[[:space:]]*$' "$INSTALL_DIR/.env"; then
+if grep -qE '^(AI_API_KEY=sk-\.\.\.|FRED_API_KEY=\.\.\.|SEC_CONTACT_NAME=Your Name|SEC_CONTACT_EMAIL=you@example\.com)[[:space:]]*$' "$INSTALL_DIR/.env"; then
   echo "error: $INSTALL_DIR/.env still contains example placeholder values." >&2
-  echo "       Set real secrets (AI_API_KEY, FRED_API_KEY) and rerun." >&2
+  echo "       Set real values (AI_API_KEY, FRED_API_KEY, SEC_CONTACT_NAME," >&2
+  echo "       SEC_CONTACT_EMAIL) and rerun. SEC rate-limits and blocks requests" >&2
+  echo "       that do not carry a genuine contact address." >&2
   exit 1
 fi
 

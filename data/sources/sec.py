@@ -8,9 +8,10 @@ from typing import Any
 import requests
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
+from data.sources.contact import contact_user_agent
 from data.universe.sources.http import RateLimiter, get_with_ca_fallback
 
-USER_AGENT = "marketmind/0.1 (market-data ingest; contact: hermes@example.com)"
+USER_AGENT_PURPOSE = "SEC EDGAR ingest"
 COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 ARCHIVES_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{doc}"
@@ -45,7 +46,7 @@ class EdgardClient:
 
     def __init__(self, session: requests.Session | None = None) -> None:
         self._session = session or requests.Session()
-        self._session.headers["User-Agent"] = USER_AGENT
+        self._session.headers["User-Agent"] = contact_user_agent(USER_AGENT_PURPOSE)
         self._limiter = RateLimiter()
 
     @retry(
