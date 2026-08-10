@@ -14,26 +14,20 @@ REQUIRED_COLUMNS = ["ticker", "name", "country", "sector", "added_date", "remove
 DELISTED_REQUIRED = REQUIRED_COLUMNS + ["universe"]
 
 
-def get_universe(as_of: str, universe_dir: Path = UNIVERSE_DIR) -> pl.DataFrame:
-    """Return point-in-time universe constituents valid on a date.
-
-    Filters on added_date <= as_of AND
-    (removed_date IS NULL OR removed_date > as_of).
+def load_all_members(universe_dir: Path = UNIVERSE_DIR) -> pl.DataFrame:
+    """Load every universe CSV row, unfiltered by date.
 
     Args:
-        as_of: Date string (YYYY-MM-DD).
         universe_dir: Directory containing the universe CSVs.
 
     Returns:
-        Point-in-time constituents with an added `universe` column
-        ('sp500' | 'eurostoxx600').
+        All rows across sp500.csv, eurostoxx600.csv, and delisted.csv (if
+        present), with an added `universe` column.
 
     Raises:
-        ValueError: If as_of is not a valid date or a file has wrong columns.
+        ValueError: If a file has the wrong columns.
         FileNotFoundError: If a universe file is missing.
     """
-    as_of_date = dt.date.fromisoformat(as_of)
-
     frames: list[pl.DataFrame] = []
     for filename in UNIVERSE_FILES:
         path = universe_dir / filename
@@ -64,7 +58,29 @@ def get_universe(as_of: str, universe_dir: Path = UNIVERSE_DIR) -> pl.DataFrame:
         )
         frames.append(delisted)
 
-    universe = pl.concat(frames, how="diagonal_relaxed")
+    return pl.concat(frames, how="diagonal_relaxed")
+
+
+def get_universe(as_of: str, universe_dir: Path = UNIVERSE_DIR) -> pl.DataFrame:
+    """Return point-in-time universe constituents valid on a date.
+
+    Filters on added_date <= as_of AND
+    (removed_date IS NULL OR removed_date > as_of).
+
+    Args:
+        as_of: Date string (YYYY-MM-DD).
+        universe_dir: Directory containing the universe CSVs.
+
+    Returns:
+        Point-in-time constituents with an added `universe` column
+        ('sp500' | 'eurostoxx600').
+
+    Raises:
+        ValueError: If as_of is not a valid date or a file has wrong columns.
+        FileNotFoundError: If a universe file is missing.
+    """
+    as_of_date = dt.date.fromisoformat(as_of)
+    universe = load_all_members(universe_dir)
     return universe.filter(
         (pl.col("added_date") <= as_of_date)
         & (pl.col("removed_date").is_null() | (pl.col("removed_date") > as_of_date))
