@@ -318,6 +318,34 @@ def test_run_requires_llm() -> None:
         conn.close()
 
 
+def test_progress_is_reported_after_every_ticker(tmp_path) -> None:
+    conn = init_db(":memory:")
+    seen: list[tuple[int, int, int]] = []
+
+    def progress(done: int, total: int, counts: dict[str, int]) -> None:
+        seen.append((done, total, counts["articles_fetched"]))
+
+    try:
+        summary = run_daily_ingest(
+            DATE,
+            conn=conn,
+            universe=UNIVERSE,
+            news_fetcher=_fake_news_fetcher,
+            description_fetcher=_CountingDescriptionFetcher(),
+            profile_builder=_fake_profile_builder,
+            llm=_fake_llm,
+            raw_news_dir=tmp_path / "news",
+            progress=progress,
+        )
+    finally:
+        conn.close()
+
+    # One call per universe row, counting up, carrying the running summary.
+    assert [(done, total) for done, total, _ in seen] == [(1, 2), (2, 2)]
+    assert [fetched for _, _, fetched in seen] == [2, 3]
+    assert summary["articles_fetched"] == 3
+
+
 def test_backfill_creates_new_profile_version(tmp_path) -> None:
     conn = init_db(":memory:")
     try:

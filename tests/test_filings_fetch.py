@@ -123,6 +123,22 @@ def test_run_daily_fetch_ingests_new_filings(conn, tmp_path) -> None:
     assert has_checkpoint(conn, "submissions:AAPL", "2026-08-05")
 
 
+def test_run_daily_fetch_reports_progress_per_ticker(conn, tmp_path) -> None:
+    universe = pl.DataFrame({"ticker": ["AAPL", "MSFT"], "universe": ["sp500", "sp500"]})
+    seen: list[tuple[int, int]] = []
+
+    run_daily_fetch(
+        conn,
+        FakeClient(),
+        run_date="2026-08-05",
+        root=tmp_path,
+        universe=universe,
+        progress=lambda done, total, counts: seen.append((done, total)),
+    )
+
+    assert seen == [(1, 2), (2, 2)]
+
+
 def test_run_daily_fetch_is_idempotent(conn, tmp_path) -> None:
     universe = pl.DataFrame({"ticker": ["AAPL"], "universe": ["sp500"]})
     first = run_daily_fetch(
