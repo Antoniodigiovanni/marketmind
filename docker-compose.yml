@@ -1,0 +1,16 @@
+# Local Postgres for the test suite. CI uses an equivalent services: block in
+# .github/workflows/ci.yml — keep the image tag and credentials in sync.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: marketmind
+      POSTGRES_PASSWORD: marketmind
+      POSTGRES_DB: marketmind_test
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketmind -d marketmind_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 15

@@ -21,6 +21,9 @@ dependencies = [
     # Storage
     "duckdb>=0.10",
     "chromadb>=0.5",
+    # PostgreSQL (migration in progress; DuckDB still in use)
+    "psycopg[binary,pool]>=3.2",
+    "pgvector>=0.4",
     # News (RSS-first)
     "feedparser>=6.0",
     # MCP interface
@@ -36,6 +39,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.24",
     "pytest-cov>=5.0",
     "ruff>=0.4",
     "pre-commit>=3.7",
@@ -44,6 +48,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --cov=. --cov-report=term-missing"
+asyncio_mode = "auto"
 markers = [
     "live: live EDGAR download smoke tests (require network; run with RUN_LIVE_TESTS=1)",
 ]

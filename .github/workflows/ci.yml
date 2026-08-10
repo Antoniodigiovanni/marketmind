@@ -12,6 +12,20 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: marketmind
+          POSTGRES_PASSWORD: marketmind
+          POSTGRES_DB: marketmind_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U marketmind -d marketmind_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
     steps:
       - uses: actions/checkout@v4
 
@@ -34,6 +48,8 @@ jobs:
       # --cov-fail-under lives here rather than in pyproject addopts so that
       # running a single test file locally does not fail on total coverage.
       - name: Tests
+        env:
+          MARKETMIND_REQUIRE_POSTGRES: "1"
         run: >
           uv run --frozen pytest tests/ -q
           --cov=. --cov-report=term-missing --cov-fail-under=85
