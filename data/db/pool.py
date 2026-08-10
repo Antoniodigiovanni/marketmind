@@ -1,7 +1,11 @@
 """Async PostgreSQL connection pool with the pgvector type registered.
 
-Transitional: DuckDB remains the store while the migration is in progress.
-Nothing in the application reads this module yet.
+Side-effect-free: opening a pool creates no extension and applies no
+schema. Call `apply_schema(dsn)` (see `data/db/init_postgres.py`) against a
+role with DDL rights before opening a pool against the same database —
+pgvector registers its type per physical connection at connect time, bound
+to the `vector` extension's OID at that moment, so a pool opened first would
+carry a stale registration once the extension is created.
 """
 
 from __future__ import annotations
@@ -25,54 +29,21 @@ def dsn_from_env() -> str:
     return os.getenv("MARKETMIND_TEST_DSN") or DEFAULT_DSN
 
 
-async def _ensure_vector_extension(dsn: str) -> None:
-    """Create the `vector` extension once, before any pool connection opens.
-
-    `CREATE EXTENSION IF NOT EXISTS` is not safe under concurrent execution:
-    a losing session can hit a duplicate-object error even though the
-    extension ends up present. Running it exactly once, on a single
-    throwaway connection, before the pool starts opening its own (which can
-    happen concurrently once demand exceeds ``min_size``) avoids that race
-    *within this process*. A second process racing this same call against
-    the same database is a separate, cross-process window this does not
-    close: only `InsufficientPrivilege` is tolerated below, so a losing
-    session's `DuplicateObject` would still propagate. That window is
-    unreachable today (one service process, one pytest process, no
-    pytest-xdist) and is tracked as follow-up work rather than closed here.
-
-    Args:
-        dsn: Connection string to create the extension on.
-
-    Raises:
-        psycopg.OperationalError: If the database cannot be reached at all.
-    """
-    conn = await psycopg.AsyncConnection.connect(dsn, connect_timeout=3)
-    try:
-        try:
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-            await conn.commit()
-        except psycopg.errors.InsufficientPrivilege as exc:
-            await conn.rollback()
-            logger.warning(
-                "role lacks privilege to create the vector extension; "
-                f"proceeding on the assumption it already exists: {exc}"
-            )
-    finally:
-        await conn.close()
-
-
 async def _configure(conn: psycopg.AsyncConnection) -> None:
     """Register the pgvector type on a freshly opened pool connection.
 
     `register_vector_async` needs the `vector` extension's type already
     present, and raises `psycopg.ProgrammingError` (a plain instance, not a
-    Postgres-side error code -- pgvector raises it directly) if it is not.
-    `open_pool` already attempts to create the extension once up front, but
-    that attempt may itself have been skipped on privilege grounds, so this
-    still tolerates the type being absent rather than failing the whole
-    pool. Only that specific, narrow condition is swallowed: a connection
-    that dies mid-configure (`psycopg.OperationalError`, a subclass of
-    `psycopg.Error`) or any other unexpected failure is left to propagate.
+    Postgres-side error code — pgvector raises it directly) if it is not.
+    That happens when a pool is opened against a database `apply_schema`
+    hasn't run against yet; only that specific, narrow condition is
+    swallowed here, so the pool still opens rather than failing outright. A
+    connection that dies mid-configure (`psycopg.OperationalError`, a
+    subclass of `psycopg.Error`) or any other unexpected failure is left to
+    propagate.
+
+    Args:
+        conn: A freshly opened pool connection.
     """
     try:
         await register_vector_async(conn)
@@ -86,6 +57,7 @@ async def open_pool(
     *,
     min_size: int = 1,
     max_size: int = 10,
+    open_timeout: float = 10.0,
 ) -> AsyncConnectionPool:
     """Open a connection pool with the vector type registered per connection.
 
@@ -93,27 +65,20 @@ async def open_pool(
         dsn: Connection string; defaults to dsn_from_env().
         min_size: Connections kept open.
         max_size: Upper bound on concurrent connections.
+        open_timeout: Seconds to wait for the pool to reach min_size.
 
     Returns:
         An opened AsyncConnectionPool.
 
     Raises:
-        psycopg.OperationalError: If the database cannot be reached while
-            creating the vector extension, before any pool connection opens.
         psycopg_pool.PoolTimeout: If the pool cannot establish its minimum
-            connections within its internal open timeout (10 seconds) even
-            though `_ensure_vector_extension` above already reached the
-            server -- for example because the server is at its own
-            connection limit and keeps refusing new ones. A DSN that is
-            simply unreachable is caught earlier, by
-            `_ensure_vector_extension`, and surfaces as
-            `psycopg.OperationalError` instead; this timeout is for the
-            pool's own connection establishment stalling after that check
-            already succeeded.
+            connections within open_timeout. Side-effect-free means there is
+            no earlier, faster check for an unreachable DSN — a dead DSN
+            surfaces as this same timeout, not as `psycopg.OperationalError`.
+            Callers on the normal path always call `apply_schema(dsn)`
+            first, which does fail fast on an unreachable DSN.
     """
     resolved_dsn = dsn or dsn_from_env()
-    await _ensure_vector_extension(resolved_dsn)
-
     pool = AsyncConnectionPool(
         resolved_dsn,
         min_size=min_size,
@@ -122,7 +87,7 @@ async def open_pool(
         open=False,
     )
     try:
-        await pool.open(wait=True, timeout=10.0)
+        await pool.open(wait=True, timeout=open_timeout)
     except Exception:
         # pool.open() has already started background worker tasks by the
         # time it can raise (e.g. PoolTimeout); close() stops them so a
