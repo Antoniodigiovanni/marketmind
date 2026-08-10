@@ -151,7 +151,8 @@ async def get_universe_members(
 
     Returns:
         One dict per member: company_id, name, country, sector, added_date,
-        removed_date, yahoo_symbol (None if no live Yahoo listing exists).
+        removed_date, yahoo_symbol (None if no Yahoo listing was live as of
+        `as_of`).
     """
     async with conn.cursor(row_factory=dict_row) as cur:
         await cur.execute(
@@ -162,11 +163,11 @@ async def get_universe_members(
             JOIN companies c ON c.company_id = um.company_id
             LEFT JOIN listings l
               ON l.company_id = um.company_id AND l.provider = 'yahoo'
-                 AND l.valid_until IS NULL
+                 AND l.valid_from <= %s AND (l.valid_until IS NULL OR l.valid_until > %s)
             WHERE um.universe = %s
               AND um.added_date <= %s
               AND (um.removed_date IS NULL OR um.removed_date > %s)
             """,
-            (universe, as_of, as_of),
+            (as_of, as_of, universe, as_of, as_of),
         )
         return await cur.fetchall()

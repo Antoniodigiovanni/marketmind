@@ -111,6 +111,34 @@ async def test_get_universe_members_includes_yahoo_symbol(pg_conn, tmp_path) -> 
     ]
 
 
+async def test_sync_universe_resync_with_corrected_symbol_does_not_duplicate_listing(
+    pg_conn, tmp_path
+) -> None:
+    """A member unresolved on one sync (fallback listing = raw ticker) that
+    resolves to a real, different symbol on a later sync must end up with
+    exactly one live listing, not two -- upsert_listing is keyed on the
+    resolved symbol, so a naive port of resolve.py's retry (which is keyed on
+    the stable ticker) would otherwise leave the fallback row live forever
+    and fan out get_universe_members."""
+    _write_universe(tmp_path)
+
+    def never_resolves(id_value: str, *, name_hint: str | None = None) -> dict[str, str] | None:
+        return None
+
+    await sync_universe(
+        pg_conn, universe_dir=tmp_path, searcher=never_resolves, checker=_stub_check
+    )
+    before = await get_universe_members(pg_conn, universe="eurostoxx600", as_of=dt.date(2026, 1, 1))
+    asml_before = next(row for row in before if row["name"] == "ASML Holding")
+    assert asml_before["yahoo_symbol"] == "ASML"  # ticker fallback
+
+    await sync_universe(pg_conn, universe_dir=tmp_path, searcher=_stub_search, checker=_stub_check)
+    after = await get_universe_members(pg_conn, universe="eurostoxx600", as_of=dt.date(2026, 1, 1))
+    asml_rows = [row for row in after if row["name"] == "ASML Holding"]
+    assert len(asml_rows) == 1
+    assert asml_rows[0]["yahoo_symbol"] == "ASML.AS"
+
+
 async def test_get_universe_members_yahoo_symbol_is_none_when_delisted(pg_conn, tmp_path) -> None:
     _write_universe(tmp_path)
     await sync_universe(pg_conn, universe_dir=tmp_path, searcher=_stub_search, checker=_stub_check)
