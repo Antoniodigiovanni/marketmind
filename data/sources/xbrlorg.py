@@ -8,10 +8,11 @@ from typing import Any
 import requests
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
+from data.sources.contact import contact_user_agent
 from data.universe.sources.http import RateLimiter, get_with_ca_fallback
 
 FILINGS_URL = "https://filings.xbrl.org/api/filings"
-USER_AGENT = "marketmind/0.1 (market-data ingest; contact: hermes@example.com)"
+USER_AGENT_PURPOSE = "European filings ingest"
 PAGE_SIZE = 200
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
@@ -48,7 +49,7 @@ class XbrlorgClient:
 
     def __init__(self, session: requests.Session | None = None) -> None:
         self._session = session or requests.Session()
-        self._session.headers["User-Agent"] = USER_AGENT
+        self._session.headers["User-Agent"] = contact_user_agent(USER_AGENT_PURPOSE)
         self._limiter = RateLimiter(max_per_second=2.0)
 
     @retry(

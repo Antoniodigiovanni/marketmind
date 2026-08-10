@@ -1,10 +1,27 @@
-"""Shared helpers for the Postgres-backed test suite."""
+"""Shared fixtures and helpers for the test suite."""
 
 from __future__ import annotations
 
 import os
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _deterministic_operator_contact(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give every test a fixed operator contact for courtesy-access sources.
+
+    Two reasons this is autouse. Tests must never send a developer's real
+    address at a live endpoint, and they must not start failing on a machine
+    where SEC_CONTACT_* happens to be unset. Tests that exercise the missing
+    or malformed cases override this with their own `monkeypatch.delenv` or
+    `setenv`, which runs later and therefore wins.
+
+    `.invalid` is reserved by RFC 2606 and resolves nowhere, so a leaked
+    request is inert.
+    """
+    monkeypatch.setenv("SEC_CONTACT_NAME", "marketmind test suite")
+    monkeypatch.setenv("SEC_CONTACT_EMAIL", "tests@marketmind.invalid")
 
 
 def skip_or_fail_no_postgres(message: str) -> None:
