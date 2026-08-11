@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
+import psycopg
 import pytest
 
 from data.db.companies import create_company
@@ -297,5 +298,40 @@ async def test_create_fact_is_atomic_when_embed_raises(pg_conn) -> None:
         )
     row = await (
         await pg_conn.execute("SELECT 1 FROM company_facts WHERE statement = 'Should not persist'")
+    ).fetchone()
+    assert row is None
+
+
+async def test_create_fact_rolls_back_fact_row_when_embedding_insert_fails(pg_conn) -> None:
+    """Atomicity inside the transaction, not just before it.
+
+    Unlike test_create_fact_is_atomic_when_embed_raises, embed here succeeds
+    but returns the wrong dimension, so the fact_embeddings insert fails
+    after the company_facts insert has already run within the same
+    transaction -- this exercises the actual rollback, not the trivial
+    never-touched-the-database case.
+    """
+    company_id = await _company(pg_conn)
+    article_id = await _article(pg_conn)
+
+    async def wrong_dimension_embed(text: str) -> list[float]:
+        return [0.0, 0.0, 0.0]
+
+    with pytest.raises(psycopg.errors.DataException):
+        await create_fact(
+            pg_conn,
+            company_id=company_id,
+            statement="Should also not persist",
+            fact_type="guidance",
+            confidence=0.9,
+            valid_from=dt.date(2020, 1, 1),
+            source_article_id=article_id,
+            embed=wrong_dimension_embed,
+            model="test",
+        )
+    row = await (
+        await pg_conn.execute(
+            "SELECT 1 FROM company_facts WHERE statement = 'Should also not persist'"
+        )
     ).fetchone()
     assert row is None
