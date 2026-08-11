@@ -14,7 +14,7 @@ async def test_schema_applies_and_creates_the_expected_objects(pg_conn) -> None:
             "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"
         )
     ).fetchone()
-    assert tables[0] == 30
+    assert tables[0] == 31
 
 
 async def test_vector_column_and_hnsw_index_exist(pg_conn) -> None:
