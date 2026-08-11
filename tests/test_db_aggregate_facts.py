@@ -189,6 +189,42 @@ async def test_get_current_aggregate_facts_is_point_in_time(pg_conn) -> None:
     assert before == []
 
 
+async def test_get_current_aggregate_facts_is_scoped_to_dimension_and_key(pg_conn) -> None:
+    """Neither a different dimension_key nor a different dimension sharing
+    the same dimension_key string may leak into a get_current_aggregate_facts
+    call -- both columns of the composite filter must hold.
+    """
+    embed = _stub_embed({"Healthcare trend": ZERO_VECTOR, "Wrong dimension same key": ZERO_VECTOR})
+    await create_aggregate_fact(
+        pg_conn,
+        dimension="sector",
+        dimension_key="Healthcare",
+        statement="Healthcare trend",
+        fact_type="trend",
+        confidence=0.8,
+        valid_from=dt.date(2020, 1, 1),
+        evidence=[],
+        embed=embed,
+        model="test",
+    )
+    await create_aggregate_fact(
+        pg_conn,
+        dimension="geography",
+        dimension_key="Technology",
+        statement="Wrong dimension same key",
+        fact_type="trend",
+        confidence=0.8,
+        valid_from=dt.date(2020, 1, 1),
+        evidence=[],
+        embed=embed,
+        model="test",
+    )
+    facts = await get_current_aggregate_facts(
+        pg_conn, dimension="sector", dimension_key="Technology", as_of=dt.date(2020, 6, 1)
+    )
+    assert facts == []
+
+
 async def test_create_aggregate_fact_with_supersedes_closes_the_old_fact(pg_conn) -> None:
     embed = _stub_embed({"Old trend": ZERO_VECTOR, "New trend": ZERO_VECTOR})
     old_id = await create_aggregate_fact(
@@ -317,6 +353,49 @@ async def test_search_similar_aggregate_facts_excludes_facts_retired_before_as_o
         embed=embed,
     )
     assert [r["statement"] for r in results] == ["New trend"]
+
+
+async def test_search_similar_aggregate_facts_is_scoped_to_dimension_and_key(pg_conn) -> None:
+    """Neither a different dimension_key nor a different dimension sharing
+    the same dimension_key string may surface in search results -- both
+    columns of the composite filter must hold.
+    """
+    embed = _stub_embed({"Shared-sounding statement": NEAR_VECTOR, "query": NEAR_VECTOR})
+
+    await create_aggregate_fact(
+        pg_conn,
+        dimension="sector",
+        dimension_key="Healthcare",
+        statement="Shared-sounding statement",
+        fact_type="trend",
+        confidence=0.9,
+        valid_from=dt.date(2020, 1, 1),
+        evidence=[],
+        embed=embed,
+        model="test",
+    )
+    await create_aggregate_fact(
+        pg_conn,
+        dimension="geography",
+        dimension_key="Technology",
+        statement="Shared-sounding statement",
+        fact_type="trend",
+        confidence=0.9,
+        valid_from=dt.date(2020, 1, 1),
+        evidence=[],
+        embed=embed,
+        model="test",
+    )
+
+    results = await search_similar_aggregate_facts(
+        pg_conn,
+        dimension="sector",
+        dimension_key="Technology",
+        query="query",
+        as_of=dt.date(2020, 6, 1),
+        embed=embed,
+    )
+    assert results == []
 
 
 async def test_create_aggregate_fact_is_atomic_when_embed_raises(pg_conn) -> None:

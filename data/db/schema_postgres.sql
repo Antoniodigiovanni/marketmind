@@ -4,7 +4,9 @@
 -- 30 tables, 72 indexes, 18 check constraints, idempotent across two applies.
 -- (listings.status added 2026-08-10 for the identity-port phase: 19 check
 -- constraints as of that change. aggregate_fact_embeddings added 2026-08-11
--- for the aggregate-facts-repo phase: 31 tables as of that change.)
+-- for the aggregate-facts-repo phase: 31 tables as of that change.
+-- aggregate_facts.dimension gained a CHECK constraint the same day: 20
+-- check constraints as of that change.)
 
 -- marketmind — PostgreSQL schema (draft for review)
 -- Target: PostgreSQL 16+ with the `vector` extension (pgvector).
@@ -326,7 +328,8 @@ CREATE INDEX IF NOT EXISTS idx_fact_embeddings_model ON fact_embeddings (model);
 
 CREATE TABLE IF NOT EXISTS aggregate_facts (
     aggregate_id  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    dimension     TEXT        NOT NULL,   -- 'sector' | 'geography'
+    dimension     TEXT        NOT NULL
+        CHECK (dimension IN ('sector', 'geography')),
     dimension_key TEXT        NOT NULL,
     statement     TEXT        NOT NULL,
     fact_type     TEXT        NOT NULL,

@@ -83,10 +83,13 @@ async def create_aggregate_fact(
             (aggregate_id, model, vector),
         )
 
-        for fact_id in evidence:
+        if evidence:
+            placeholders = ", ".join(["(%s, %s)"] * len(evidence))
+            params = [param for fact_id in evidence for param in (aggregate_id, fact_id)]
             await conn.execute(
-                "INSERT INTO aggregate_fact_evidence (aggregate_id, fact_id) VALUES (%s, %s)",
-                (aggregate_id, fact_id),
+                "INSERT INTO aggregate_fact_evidence (aggregate_id, fact_id) "
+                f"VALUES {placeholders}",
+                params,
             )
 
         if supersedes_id is not None:
