@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import duckdb
 import polars as pl
+import psycopg
 from mcp.server.fastmcp import FastMCP
 
 import server.jobs as jobs
@@ -16,6 +18,7 @@ from agent.knowledge import get_current_company_profile, get_current_facts, writ
 from agent.views import get_market_views as get_views
 from agent.views import save_market_view as save_view
 from data.db.init import init_db
+from data.db.pool import dsn_from_env
 from data.sources.rss import NEWS_RECORD_FIELDS
 from data.universe.loader import get_universe
 
@@ -78,6 +81,23 @@ def _connect() -> duckdb.DuckDBPyConnection:
             f"Database not initialised: {DB_PATH}. Run `uv run python -m data.db.init` first."
         )
     return duckdb.connect(str(DB_PATH))
+
+
+@asynccontextmanager
+async def _connect_pg() -> AsyncIterator[psycopg.AsyncConnection]:
+    """Open a PostgreSQL connection for the views tools, closing it after use.
+
+    One connection per tool call — no pool lifecycle management here; that
+    is separate, later work once more tools are wired onto Postgres.
+
+    Yields:
+        A connection scoped to this call.
+    """
+    conn = await psycopg.AsyncConnection.connect(dsn_from_env())
+    try:
+        yield conn
+    finally:
+        await conn.close()
 
 
 def _rows_to_dicts(rows: list[tuple[object, ...]], columns: list[str]) -> list[dict[str, object]]:
@@ -733,7 +753,7 @@ def get_facts(ticker: str, as_of: str) -> list[dict[str, object]]:
 
 
 @mcp.tool()
-def get_market_views(
+async def get_market_views(
     as_of: str,
     ticker: str | None = None,
     scope: str | None = None,
@@ -743,16 +763,18 @@ def get_market_views(
 
     Args:
         as_of: Date (YYYY-MM-DD); returns views for this date or earlier.
-        ticker: Optional ticker filter.
+        ticker: Optional ticker filter; a ticker with no matching company
+            as of `as_of` yields an empty result rather than an error.
         scope: Optional scope filter ('market' | 'ticker' | 'theme').
         limit: Maximum views to return.
 
     Returns:
-        List of view dicts (id, as_of, scope, ticker, theme, view_text, model,
-        data_cutoff, used_fact_ids, created_at) ordered by as_of descending.
+        List of view dicts (view_id, as_of, scope, company_id, theme,
+        view_text, model, data_cutoff, used_fact_ids, created_at) ordered by
+        as_of descending.
     """
-    with _connect() as conn:
-        return get_views(conn, as_of=as_of, ticker=ticker, scope=scope, limit=limit)
+    async with _connect_pg() as conn:
+        return await get_views(conn, as_of=as_of, ticker=ticker, scope=scope, limit=limit)
 
 
 @mcp.tool()
@@ -797,14 +819,14 @@ def get_company_profile(
 
 
 @mcp.tool()
-def save_market_view_tool(
+async def save_market_view_tool(
     as_of: str,
     view_text: str,
     model: str,
+    data_cutoff: str,
     scope: str = "market",
     ticker: str | None = None,
     theme: str | None = None,
-    data_cutoff: str | None = None,
     used_fact_ids: list[str] | None = None,
 ) -> str:
     """Persist a free-text market view (immutable once written).
@@ -813,25 +835,27 @@ def save_market_view_tool(
         as_of: Market date (YYYY-MM-DD) the view refers to.
         view_text: Free-text view content.
         model: Model identifier that produced the view.
+        data_cutoff: Date (YYYY-MM-DD) of the newest data used to write the
+            view. Required.
         scope: 'market' | 'ticker' | 'theme'.
-        ticker: Required when scope == 'ticker'.
+        ticker: Required when scope == 'ticker'; must resolve to a known
+            company as of `as_of`.
         theme: Required when scope == 'theme'.
-        data_cutoff: ISO timestamp of newest data used, optional.
-        used_fact_ids: ticker_facts ids that informed this view, optional.
+        used_fact_ids: company_facts ids that informed this view, optional.
 
     Returns:
         New view ID.
     """
-    with _connect() as conn:
-        return save_view(
+    async with _connect_pg() as conn:
+        return await save_view(
             conn,
             as_of=as_of,
             view_text=view_text,
             model=model,
+            data_cutoff=data_cutoff,
             scope=scope,
             ticker=ticker,
             theme=theme,
-            data_cutoff=data_cutoff,
             used_fact_ids=used_fact_ids,
         )
 
