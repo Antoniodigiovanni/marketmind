@@ -3,7 +3,10 @@
 -- ported in B1b. Verified against pgvector/pgvector:pg16 on 2026-08-09:
 -- 30 tables, 72 indexes, 18 check constraints, idempotent across two applies.
 -- (listings.status added 2026-08-10 for the identity-port phase: 19 check
--- constraints as of that change.)
+-- constraints as of that change. aggregate_fact_embeddings added 2026-08-11
+-- for the aggregate-facts-repo phase: 31 tables as of that change.
+-- aggregate_facts.dimension gained a CHECK constraint the same day: 20
+-- check constraints as of that change.)
 
 -- marketmind — PostgreSQL schema (draft for review)
 -- Target: PostgreSQL 16+ with the `vector` extension (pgvector).
@@ -325,7 +328,8 @@ CREATE INDEX IF NOT EXISTS idx_fact_embeddings_model ON fact_embeddings (model);
 
 CREATE TABLE IF NOT EXISTS aggregate_facts (
     aggregate_id  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    dimension     TEXT        NOT NULL,   -- 'sector' | 'geography'
+    dimension     TEXT        NOT NULL
+        CHECK (dimension IN ('sector', 'geography')),
     dimension_key TEXT        NOT NULL,
     statement     TEXT        NOT NULL,
     fact_type     TEXT        NOT NULL,
@@ -343,6 +347,17 @@ CREATE TABLE IF NOT EXISTS aggregate_fact_evidence (
     fact_id      UUID NOT NULL REFERENCES company_facts(fact_id) ON DELETE CASCADE,
     PRIMARY KEY (aggregate_id, fact_id)
 );
+
+CREATE TABLE IF NOT EXISTS aggregate_fact_embeddings (
+    aggregate_id UUID PRIMARY KEY REFERENCES aggregate_facts(aggregate_id) ON DELETE CASCADE,
+    model      TEXT NOT NULL,
+    embedding  vector(1536) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_aggregate_fact_embeddings_hnsw
+    ON aggregate_fact_embeddings USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_aggregate_fact_embeddings_model ON aggregate_fact_embeddings (model);
 
 
 -- ══ Company profiles ═══════════════════════════════════════════════════════
