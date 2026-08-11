@@ -1,47 +1,60 @@
-"""Market view write + structured extraction job."""
+"""Market view write + read — thin orchestration over data/db/views.py.
+
+Resolves human-facing ticker strings to company_id before calling the
+repository layer, and keeps the cross-field scope/ticker/theme validation
+that lived here in the DuckDB version. All SQL lives in data/db/views.py;
+this module contains none. `structure_views` is not wrapped here — callers
+use `data.db.views.structure_views` directly, since it takes no ticker and
+needs no resolution (see
+docs/superpowers/specs/2026-08-11-postgres-views-cutover-design.md).
+"""
 
 from __future__ import annotations
 
 import datetime as dt
-import json
 import uuid
-from collections.abc import Callable
 
-import duckdb
+import psycopg
+
+from data.db import views as views_repo
+from data.db.identifiers import resolve_identifier
 
 VALID_SCOPES = ("market", "ticker", "theme")
 
 
-def save_market_view(
-    conn: duckdb.DuckDBPyConnection,
+async def save_market_view(
+    conn: psycopg.AsyncConnection,
     *,
     as_of: str,
     view_text: str,
     model: str,
+    data_cutoff: str,
     scope: str = "market",
     ticker: str | None = None,
     theme: str | None = None,
-    data_cutoff: str | None = None,
     used_fact_ids: list[str] | None = None,
 ) -> str:
-    """Insert a free-text market view into market_views (immutable).
+    """Insert a free-text market view (immutable), resolving ticker -> company_id.
 
     Args:
-        conn: DuckDB connection.
+        conn: An open connection.
         as_of: Market date (YYYY-MM-DD) the view refers to.
         view_text: Free-text view content, never edited in place.
         model: Model identifier that produced the view.
+        data_cutoff: Date (YYYY-MM-DD) of the newest data used to write the view.
         scope: 'market' | 'ticker' | 'theme'.
-        ticker: Ticker symbol when scope == 'ticker'.
+        ticker: Ticker symbol when scope == 'ticker'; resolved to a
+            company_id as of `as_of`.
         theme: Theme label when scope == 'theme'.
-        data_cutoff: ISO timestamp of the newest data used, if known.
-        used_fact_ids: ticker_facts ids that informed this view (provenance).
+        used_fact_ids: company_facts ids that informed this view (provenance).
 
     Returns:
-        New view ID.
+        New view ID, as a string.
 
     Raises:
-        ValueError: On invalid scope, missing scope argument, or bad date.
+        ValueError: On invalid scope, missing/extra scope argument, bad
+            date, or a ticker that does not resolve to a company as of
+            `as_of`.
     """
     if scope not in VALID_SCOPES:
         raise ValueError(f"scope must be one of {VALID_SCOPES}, got {scope!r}")
@@ -55,21 +68,34 @@ def save_market_view(
         raise ValueError("theme is only allowed when scope == 'theme'")
 
     as_of_date = dt.date.fromisoformat(as_of)
-    view_id = uuid.uuid4().hex
+    data_cutoff_date = dt.date.fromisoformat(data_cutoff)
 
-    conn.execute(
-        """
-        INSERT INTO market_views
-            (id, as_of, scope, ticker, theme, view_text, model, data_cutoff, used_fact_ids)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        [view_id, as_of_date, scope, ticker, theme, view_text, model, data_cutoff, used_fact_ids],
+    company_id: uuid.UUID | None = None
+    if scope == "ticker":
+        company_id = await resolve_identifier(
+            conn, id_type="ticker", id_value=ticker, as_of=as_of_date
+        )
+        if company_id is None:
+            raise ValueError(f"no company found for ticker {ticker!r} as of {as_of}")
+
+    used_fact_uuids = [uuid.UUID(fid) for fid in used_fact_ids] if used_fact_ids else None
+
+    view_id = await views_repo.save_market_view(
+        conn,
+        as_of=as_of_date,
+        scope=scope,
+        company_id=company_id,
+        theme=theme,
+        view_text=view_text,
+        model=model,
+        data_cutoff=data_cutoff_date,
+        used_fact_ids=used_fact_uuids,
     )
-    return view_id
+    return str(view_id)
 
 
-def get_market_views(
-    conn: duckdb.DuckDBPyConnection,
+async def get_market_views(
+    conn: psycopg.AsyncConnection,
     *,
     as_of: str,
     ticker: str | None = None,
@@ -79,9 +105,12 @@ def get_market_views(
     """Return market views as of a date (as_of <= :as_of), newest first.
 
     Args:
-        conn: DuckDB connection.
+        conn: An open connection.
         as_of: Date string (YYYY-MM-DD). Views referring to this date or earlier.
-        ticker: Optional ticker filter (scope == 'ticker' rows only).
+        ticker: Optional ticker filter. Resolved to a company_id as of
+            `as_of`; a ticker that does not resolve returns an empty list
+            rather than raising — a read is a filter, not an assertion that
+            the ticker must exist.
         scope: Optional scope filter ('market' | 'ticker' | 'theme').
         limit: Maximum number of views to return.
 
@@ -93,101 +122,14 @@ def get_market_views(
     """
     as_of_date = dt.date.fromisoformat(as_of)
 
-    clauses = ["as_of <= ?"]
-    params: list[object] = [as_of_date]
+    company_id: uuid.UUID | None = None
     if ticker:
-        clauses.append("ticker = ?")
-        params.append(ticker)
-    if scope:
-        clauses.append("scope = ?")
-        params.append(scope)
-    params.append(limit)
-
-    rows = conn.execute(
-        f"""
-        SELECT id, as_of, scope, ticker, theme, view_text, model, data_cutoff,
-               used_fact_ids, created_at
-        FROM market_views
-        WHERE {" AND ".join(clauses)}
-        ORDER BY as_of DESC, created_at DESC
-        LIMIT ?
-        """,
-        params,
-    ).fetchall()
-
-    return [
-        {
-            "id": row[0],
-            "as_of": row[1].isoformat(),
-            "scope": row[2],
-            "ticker": row[3],
-            "theme": row[4],
-            "view_text": row[5],
-            "model": row[6],
-            "data_cutoff": row[7].isoformat() if row[7] else None,
-            "used_fact_ids": row[8],
-            "created_at": row[9].isoformat() if row[9] else None,
-        }
-        for row in rows
-    ]
-
-
-Extractor = Callable[[str, str, str], dict[str, object]]  # (view_id, view_text, model) -> payload
-
-
-def _default_extractor(view_id: str, view_text: str, model: str) -> dict[str, object]:
-    """Placeholder extractor — LLM wiring lands with roadmap 1.7."""
-    raise NotImplementedError(
-        f"LLM extractor not wired yet (view {view_id}); see agent/prompts/view_structuring.md"
-    )
-
-
-def structure_views(
-    conn: duckdb.DuckDBPyConnection,
-    *,
-    extractor: Extractor | None = None,
-    schema_version: str = "v1",
-    extraction_model: str = "claude-sonnet-4-5",
-) -> int:
-    """Structure free-text views that have no structured row yet.
-
-    Idempotent: views that already have a market_view_structures row are skipped.
-
-    Args:
-        conn: DuckDB connection.
-        extractor: Callable(view_id, view_text, model) -> JSON-serialisable dict.
-            Defaults to a stub that raises NotImplementedError.
-        schema_version: Schema version label stored with each extraction.
-        extraction_model: Model identifier recorded for provenance.
-
-    Returns:
-        Number of views structured in this run.
-
-    Raises:
-        NotImplementedError: If no extractor is supplied and the default is used.
-    """
-    extract = extractor or _default_extractor
-
-    pending = conn.execute(
-        """
-        SELECT mv.id, mv.view_text, mv.model
-        FROM market_views mv
-        LEFT JOIN market_view_structures mvs ON mvs.view_id = mv.id
-        WHERE mvs.view_id IS NULL
-        ORDER BY mv.created_at
-        """
-    ).fetchall()
-
-    structured = 0
-    for view_id, view_text, model in pending:
-        payload = extract(view_id, view_text, model)
-        conn.execute(
-            """
-            INSERT INTO market_view_structures (view_id, payload, schema_version, extracted_by)
-            VALUES (?, ?, ?, ?)
-            """,
-            [view_id, json.dumps(payload), schema_version, extraction_model],
+        company_id = await resolve_identifier(
+            conn, id_type="ticker", id_value=ticker, as_of=as_of_date
         )
-        structured += 1
+        if company_id is None:
+            return []
 
-    return structured
+    return await views_repo.get_market_views(
+        conn, as_of=as_of_date, company_id=company_id, scope=scope, limit=limit
+    )
