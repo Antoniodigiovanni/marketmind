@@ -1,4 +1,9 @@
-"""Tests for filings MCP tools (file-backed DuckDB, no live calls)."""
+"""Tests for filings MCP tools still backed by DuckDB (no live calls).
+
+get_filings, get_european_filings, and search_filings moved to Postgres --
+see tests/test_filings_mcp_pg.py. Insider transactions/holdings and 13F
+holdings stay on DuckDB until a follow-up cutover.
+"""
 
 from __future__ import annotations
 
@@ -7,8 +12,7 @@ import pytest
 
 import server.mcp as mcp_mod
 from data.db.init import init_db
-from data.filings.esef import insert_esef_filing
-from data.filings.store import insert_filing, insert_filing_text
+from data.filings.store import insert_filing
 
 
 @pytest.fixture()
@@ -33,78 +37,6 @@ def _seed_filing(
         url=f"https://www.sec.gov/Archives/edgar/data/0000320193/{accession}/{accession}.htm",
         ticker=ticker,
     )
-
-
-def _seed_esef(conn, *, fxo_id: str, lei: str, ticker: str, country: str, filed_at: str) -> str:
-    return insert_esef_filing(
-        conn,
-        fxo_id=fxo_id,
-        lei=lei,
-        ticker=ticker,
-        entity_name="Issuer",
-        country=country,
-        filing_system="ESEF",
-        filed_at=filed_at,
-        period_end="2026-06-30",
-        primary_document=f"{fxo_id}.zip",
-        package_url=f"https://x/{fxo_id}.zip",
-        xhtml_url=None,
-        json_url=None,
-        text_path=f"filings-eu/{lei}/{fxo_id}.zip",
-        text_hash="deadbeef",
-        size_bytes=10,
-    )
-
-
-def test_get_filings_filters_and_orders(monkeypatch, db_file) -> None:
-    conn = duckdb.connect(db_file)
-    _seed_filing(conn, accession="a1", form_type="8-K", filed_at="2026-08-03")
-    _seed_filing(conn, accession="a2", form_type="10-Q", filed_at="2026-07-30")
-    conn.close()
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-
-    rows = mcp_mod.get_filings("AAPL", form_types=["8-K"])
-    assert len(rows) == 1
-    assert rows[0]["form_type"] == "8-K"
-    assert rows[0]["filed_at"] == "2026-08-03"
-
-    window = mcp_mod.get_filings("AAPL", filed_from="2026-08-01", filed_to="2026-08-03")
-    assert [r["accession_number"] for r in window] == ["a1"]
-
-    all_rows = mcp_mod.get_filings("AAPL")
-    assert [r["accession_number"] for r in all_rows] == ["a1", "a2"]
-
-
-def test_get_filings_empty(monkeypatch, db_file) -> None:
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-    assert mcp_mod.get_filings("NOPE") == []
-
-
-def test_search_filings_returns_snippets(monkeypatch, db_file) -> None:
-    conn = duckdb.connect(db_file)
-    filing_id = _seed_filing(conn, accession="a1", form_type="10-K", filed_at="2026-01-15")
-    insert_filing_text(conn, filing_id, "Apple faces intense competition in phones.")
-    conn.close()
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-
-    hits = mcp_mod.search_filings(
-        "competition", ticker="AAPL", form_types=["10-K"], filed_from="2026-01-01"
-    )
-
-    assert len(hits) == 1
-    assert hits[0]["ticker"] == "AAPL"
-    assert hits[0]["form_type"] == "10-K"
-    assert "competition" in hits[0]["snippet"].lower()
-
-    multi = mcp_mod.search_filings("competition phones")
-    assert len(multi) == 1
-    assert mcp_mod.search_filings("competition bonds") == []
-
-
-def test_search_filings_empty_db_and_blank_query(monkeypatch, db_file) -> None:
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-    assert mcp_mod.search_filings("anything") == []
-    assert mcp_mod.search_filings("   ") == []
 
 
 def test_get_insider_transactions_and_holdings(monkeypatch, db_file) -> None:
@@ -140,46 +72,6 @@ def test_get_insider_transactions_and_holdings(monkeypatch, db_file) -> None:
     holdings = mcp_mod.get_insider_holdings("AAPL", as_of="2026-05-02")
     assert holdings[0]["shares_held_after"] == 9500.0
     assert mcp_mod.get_insider_holdings("AAPL", as_of="2026-05-01") == []
-
-
-def test_get_european_filings_filters_and_orders(monkeypatch, db_file) -> None:
-    conn = duckdb.connect(db_file)
-    _seed_esef(
-        conn,
-        fxo_id="ESEF/IT/1",
-        lei="815600AB",
-        ticker="BAMI.MI",
-        country="IT",
-        filed_at="2022-01-10",
-    )
-    _seed_esef(
-        conn,
-        fxo_id="ESEF/FR/1",
-        lei="969500Y",
-        ticker="SOPR.PA",
-        country="FR",
-        filed_at="2023-02-01",
-    )
-    conn.close()
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-
-    by_country = mcp_mod.get_european_filings(country="IT")
-    assert [r["fxo_id"] for r in by_country] == ["ESEF/IT/1"]
-
-    by_ticker = mcp_mod.get_european_filings(ticker="SOPR.PA")
-    assert by_ticker[0]["country"] == "FR"
-
-    by_lei = mcp_mod.get_european_filings(lei="815600AB")
-    assert by_lei[0]["ticker"] == "BAMI.MI"
-
-    window = mcp_mod.get_european_filings(as_of="2022-12-31")
-    assert [r["fxo_id"] for r in window] == ["ESEF/IT/1"]
-
-
-def test_get_european_filings_empty(monkeypatch, db_file) -> None:
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-    assert mcp_mod.get_european_filings() == []
-    assert mcp_mod.get_european_filings(ticker="NOPE") == []
 
 
 def test_get_13f_holdings_reads_partitions(monkeypatch, tmp_path, db_file) -> None:
@@ -220,4 +112,4 @@ def test_real_connect_path(monkeypatch, tmp_path) -> None:
     init_db(db_path)
     monkeypatch.setattr(mcp_mod, "DB_PATH", db_path)
 
-    assert mcp_mod.get_filings("NOPE") == []
+    assert mcp_mod.get_insider_transactions("NOPE") == []

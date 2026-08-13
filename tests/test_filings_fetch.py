@@ -1,12 +1,25 @@
-"""Tests for the daily SEC filings fetch job (mocked client, tmp files)."""
+"""Tests for the daily SEC filings fetch job (mocked client, tmp files).
+
+Document/metadata filings are dual-written to DuckDB (asserted here as
+before) and PostgreSQL (asserted via pg_conn) -- see data.filings.fetch's
+module docstring. Ownership stays DuckDB-only.
+"""
 
 from __future__ import annotations
+
+import datetime as dt
 
 import polars as pl
 import pytest
 
+from data.db.identifiers import get_or_create_identifier
 from data.db.init import init_db
 from data.filings.fetch import _ownership_xml_document, run_daily_fetch
+
+# Not using `pytestmark = pytest.mark.asyncio` here (unlike the db repo test
+# modules): this file mixes async fetch tests with two sync
+# _ownership_xml_document tests, and pytest-asyncio's `asyncio_mode = "auto"`
+# (pyproject.toml) already collects `async def` tests without it.
 
 
 def _sub(accession, form_type, filed_at, period, doc) -> object:
@@ -90,10 +103,10 @@ def conn():
     connection.close()
 
 
-def test_run_daily_fetch_ingests_new_filings(conn, tmp_path) -> None:
+async def test_run_daily_fetch_ingests_new_filings(conn, pg_conn, tmp_path) -> None:
     universe = pl.DataFrame({"ticker": ["AAPL"], "universe": ["sp500"]})
-    counts = run_daily_fetch(
-        conn, FakeClient(), run_date="2026-08-05", root=tmp_path, universe=universe
+    counts = await run_daily_fetch(
+        conn, pg_conn, FakeClient(), run_date="2026-08-05", root=tmp_path, universe=universe
     )
 
     assert counts == {
@@ -122,13 +135,54 @@ def test_run_daily_fetch_ingests_new_filings(conn, tmp_path) -> None:
 
     assert has_checkpoint(conn, "submissions:AAPL", "2026-08-05")
 
+    # Postgres side: only the two document filings (8-K, 10-Q) dual-write;
+    # the ownership filing (form 4) stays DuckDB-only in this cutover.
+    pg_rows = await (
+        await pg_conn.execute("SELECT accession, form_type FROM filings ORDER BY accession")
+    ).fetchall()
+    assert pg_rows == [
+        ("000032019326000031", "10-Q"),
+        ("000032019326000045", "8-K"),
+    ]
+    text_rows = await (await pg_conn.execute("SELECT COUNT(*) FROM filing_text")).fetchone()
+    assert text_rows[0] == 2
 
-def test_run_daily_fetch_reports_progress_per_ticker(conn, tmp_path) -> None:
+    from data.db.filings import has_checkpoint as pg_has_checkpoint
+
+    assert await pg_has_checkpoint(pg_conn, source="submissions:AAPL", key="2026-08-05")
+
+
+async def test_run_daily_fetch_resolves_company_id(conn, pg_conn, tmp_path) -> None:
+    company_id = await get_or_create_identifier(
+        pg_conn,
+        id_type="ticker",
+        id_value="AAPL",
+        valid_from=dt.date(2000, 1, 1),
+        source="test",
+        name="Apple Inc.",
+        country="US",
+        sector="Technology",
+    )
+    universe = pl.DataFrame({"ticker": ["AAPL"], "universe": ["sp500"]})
+    await run_daily_fetch(
+        conn, pg_conn, FakeClient(), run_date="2026-08-05", root=tmp_path, universe=universe
+    )
+
+    row = await (
+        await pg_conn.execute(
+            "SELECT company_id FROM filings WHERE accession = %s", ("000032019326000045",)
+        )
+    ).fetchone()
+    assert row[0] == company_id
+
+
+async def test_run_daily_fetch_reports_progress_per_ticker(conn, pg_conn, tmp_path) -> None:
     universe = pl.DataFrame({"ticker": ["AAPL", "MSFT"], "universe": ["sp500", "sp500"]})
     seen: list[tuple[int, int]] = []
 
-    run_daily_fetch(
+    await run_daily_fetch(
         conn,
+        pg_conn,
         FakeClient(),
         run_date="2026-08-05",
         root=tmp_path,
@@ -139,21 +193,23 @@ def test_run_daily_fetch_reports_progress_per_ticker(conn, tmp_path) -> None:
     assert seen == [(1, 2), (2, 2)]
 
 
-def test_run_daily_fetch_is_idempotent(conn, tmp_path) -> None:
+async def test_run_daily_fetch_is_idempotent(conn, pg_conn, tmp_path) -> None:
     universe = pl.DataFrame({"ticker": ["AAPL"], "universe": ["sp500"]})
-    first = run_daily_fetch(
-        conn, FakeClient(), run_date="2026-08-05", root=tmp_path, universe=universe
+    first = await run_daily_fetch(
+        conn, pg_conn, FakeClient(), run_date="2026-08-05", root=tmp_path, universe=universe
     )
-    second = run_daily_fetch(
-        conn, FakeClient(), run_date="2026-08-05", root=tmp_path, universe=universe
+    second = await run_daily_fetch(
+        conn, pg_conn, FakeClient(), run_date="2026-08-05", root=tmp_path, universe=universe
     )
 
     assert first["filings_fetched"] == 3
     assert second["filings_fetched"] == 0
     assert conn.execute("SELECT COUNT(*) FROM filings").fetchone()[0] == 3
+    pg_count = await (await pg_conn.execute("SELECT COUNT(*) FROM filings")).fetchone()
+    assert pg_count[0] == 2
 
 
-def test_run_daily_fetch_isolates_failures(conn, tmp_path) -> None:
+async def test_run_daily_fetch_isolates_failures(conn, pg_conn, tmp_path) -> None:
     client = FakeClient()
 
     def broken_download(cik: str, accession: str, doc: str) -> str:
@@ -164,12 +220,16 @@ def test_run_daily_fetch_isolates_failures(conn, tmp_path) -> None:
     client.download = broken_download  # type: ignore[method-assign]
     universe = pl.DataFrame({"ticker": ["AAPL"], "universe": ["sp500"]})
 
-    counts = run_daily_fetch(conn, client, run_date="2026-08-05", root=tmp_path, universe=universe)
+    counts = await run_daily_fetch(
+        conn, pg_conn, client, run_date="2026-08-05", root=tmp_path, universe=universe
+    )
 
     assert counts["filings_fetched"] == 3
     assert counts["filings_parsed"] == 2
     assert counts["filings_skipped"] == 1
     assert conn.execute("SELECT COUNT(*) FROM filings").fetchone()[0] == 2
+    pg_count = await (await pg_conn.execute("SELECT COUNT(*) FROM filings")).fetchone()
+    assert pg_count[0] == 1
 
 
 def test_ownership_xml_document_prefers_root_xml() -> None:

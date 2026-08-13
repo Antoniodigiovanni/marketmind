@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
-import re
+import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,12 +13,17 @@ import duckdb
 import polars as pl
 import psycopg
 from mcp.server.fastmcp import FastMCP
+from psycopg_pool import AsyncConnectionPool
 
 import server.jobs as jobs
 from agent.knowledge import get_current_company_profile, get_current_facts, write_fact
 from agent.views import get_market_views as get_views
 from agent.views import save_market_view as save_view
 from data.db import prices as prices_db
+from data.db.esef import get_european_filings as filings_get_european_filings
+from data.db.filings import get_filings as filings_get_filings
+from data.db.filings import search_filing_text as filings_search_filing_text
+from data.db.identifiers import get_current_company_id
 from data.db.init import init_db
 from data.db.listings import get_current_listing
 from data.db.pool import dsn_from_env, open_pool
@@ -134,6 +139,40 @@ def _rows_to_dicts(rows: list[tuple[object, ...]], columns: list[str]) -> list[d
             else:
                 record[column] = value
         result.append(record)
+    return result
+
+
+# Postgres pool for the filings tools (get_filings, get_european_filings,
+# search_filings). Lazily opened on first use and never explicitly closed --
+# this server is a long-lived stdio process, so process exit reclaims it,
+# same lifecycle _connect()'s DuckDB connections already have per call, just
+# amortised into a pool instead of a fresh connection each time. No prior
+# art existed for this in server/mcp.py before this cutover; every earlier
+# Postgres repository PR was only ever exercised from tests via pg_conn.
+_PG_POOL: AsyncConnectionPool | None = None
+_PG_POOL_LOCK = asyncio.Lock()
+
+
+async def _pg_pool() -> AsyncConnectionPool:
+    """Return the module-level Postgres pool, opening it on first use."""
+    global _PG_POOL
+    if _PG_POOL is None:
+        async with _PG_POOL_LOCK:
+            if _PG_POOL is None:
+                _PG_POOL = await open_pool()
+    return _PG_POOL
+
+
+def _jsonify_pg_row(row: dict[str, object]) -> dict[str, object]:
+    """Convert a psycopg dict_row's date/UUID values into JSON-friendly strings."""
+    result: dict[str, object] = {}
+    for key, value in row.items():
+        if isinstance(value, uuid.UUID):
+            result[key] = str(value)
+        elif isinstance(value, dt.date):
+            result[key] = value.isoformat()
+        else:
+            result[key] = value
     return result
 
 
@@ -301,7 +340,7 @@ def search_news(query: str, limit: int = 50) -> list[dict[str, object]]:
 
 
 @mcp.tool()
-def get_filings(
+async def get_filings(
     ticker: str,
     form_types: list[str] | None = None,
     filed_from: str | None = None,
@@ -310,57 +349,43 @@ def get_filings(
 ) -> list[dict[str, object]]:
     """Return SEC filing metadata for a ticker.
 
+    Cut over to PostgreSQL: filings are now keyed by company_id rather
+    than a raw ticker/CIK column, so ticker is resolved to whichever
+    company currently holds it (data/db/identifiers.py::get_current_company_id).
+    `cik` and `article_id` are no longer available on this row shape --
+    the identity model replaces both (company_id) and fact-extraction
+    queueing moved off this table entirely.
+
     Args:
-        ticker: Ticker symbol.
+        ticker: Ticker symbol, resolved to the company currently holding it.
         form_types: Optional form types to include (e.g. ['10-K', '8-K']).
         filed_from: Optional earliest filing date (YYYY-MM-DD).
         filed_to: Optional latest filing date (YYYY-MM-DD).
         limit: Maximum rows.
 
     Returns:
-        List of {id, accession_number, cik, ticker, form_type, filed_at,
-        period_of_report, url, status, article_id} ordered by filed_at desc.
+        List of {filing_id, company_id, accession, form_type, filed_at,
+        period, url, status} ordered by filed_at desc. Empty list if the
+        ticker doesn't resolve to a tracked company.
     """
-    with _connect() as conn:
-        query = """
-            SELECT id, accession_number, cik, ticker, form_type, filed_at,
-                   period_of_report, url, status, article_id
-            FROM filings
-            WHERE ticker = ?
-        """
-        params: list[object] = [ticker]
-        if form_types:
-            placeholders = ",".join("?" * len(form_types))
-            query += f" AND form_type IN ({placeholders})"
-            params.extend(form_types)
-        if filed_from:
-            query += " AND filed_at >= ?"
-            params.append(filed_from)
-        if filed_to:
-            query += " AND filed_at <= ?"
-            params.append(filed_to)
-        query += " ORDER BY filed_at DESC LIMIT ?"
-        params.append(limit)
-        rows = conn.execute(query, params).fetchall()
-    return _rows_to_dicts(
-        rows,
-        [
-            "id",
-            "accession_number",
-            "cik",
-            "ticker",
-            "form_type",
-            "filed_at",
-            "period_of_report",
-            "url",
-            "status",
-            "article_id",
-        ],
-    )
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        company_id = await get_current_company_id(conn, id_type="ticker", id_value=ticker)
+        if company_id is None:
+            return []
+        rows = await filings_get_filings(
+            conn,
+            company_id=company_id,
+            form_types=form_types,
+            filed_from=dt.date.fromisoformat(filed_from) if filed_from else None,
+            filed_to=dt.date.fromisoformat(filed_to) if filed_to else None,
+            limit=limit,
+        )
+    return [_jsonify_pg_row(row) for row in rows]
 
 
 @mcp.tool()
-def get_european_filings(
+async def get_european_filings(
     ticker: str | None = None,
     lei: str | None = None,
     country: str | None = None,
@@ -370,8 +395,16 @@ def get_european_filings(
 ) -> list[dict[str, object]]:
     """Return ESEF filing metadata for European universe members.
 
+    Cut over to PostgreSQL: esef_filings is now keyed by company_id
+    rather than a raw ticker column, so a ticker filter is resolved to
+    whichever company currently holds it
+    (data/db/identifiers.py::get_current_company_id).
+
     Args:
-        ticker: Optional ticker symbol.
+        ticker: Optional ticker symbol, resolved to the company currently
+            holding it. Returns [] if it doesn't resolve to a tracked
+            company -- a ticker filter that can't be resolved must not
+            silently fall back to "no filter".
         lei: Optional issuer LEI.
         country: Optional ISO country code (e.g. 'IT', 'FR', 'ES').
         filing_system: Optional filing system ('ESEF' or 'UKSEF').
@@ -380,58 +413,31 @@ def get_european_filings(
         limit: Maximum rows.
 
     Returns:
-        List of {id, fxo_id, lei, ticker, entity_name, country, filing_system,
-        filed_at, period_end, package_url, xhtml_url, json_url, status} ordered
-        by filed_at desc.
+        List of {esef_filing_id, fxo_id, lei, company_id, entity_name,
+        country, filing_system, filed_at, period_end, package_url,
+        xhtml_url, json_url, status} ordered by filed_at desc.
     """
-    with _connect() as conn:
-        query = """
-            SELECT id, fxo_id, lei, ticker, entity_name, country, filing_system,
-                   filed_at, period_end, package_url, xhtml_url, json_url, status
-            FROM esef_filings
-            WHERE 1 = 1
-        """
-        params: list[object] = []
-        if ticker:
-            query += " AND ticker = ?"
-            params.append(ticker)
-        if lei:
-            query += " AND lei = ?"
-            params.append(lei)
-        if country:
-            query += " AND country = ?"
-            params.append(country)
-        if filing_system:
-            query += " AND filing_system = ?"
-            params.append(filing_system)
-        if as_of:
-            query += " AND filed_at <= ?"
-            params.append(as_of)
-        query += " ORDER BY filed_at DESC LIMIT ?"
-        params.append(limit)
-        rows = conn.execute(query, params).fetchall()
-    return _rows_to_dicts(
-        rows,
-        [
-            "id",
-            "fxo_id",
-            "lei",
-            "ticker",
-            "entity_name",
-            "country",
-            "filing_system",
-            "filed_at",
-            "period_end",
-            "package_url",
-            "xhtml_url",
-            "json_url",
-            "status",
-        ],
-    )
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        company_id: uuid.UUID | None = None
+        if ticker is not None:
+            company_id = await get_current_company_id(conn, id_type="ticker", id_value=ticker)
+            if company_id is None:
+                return []
+        rows = await filings_get_european_filings(
+            conn,
+            company_id=company_id,
+            lei=lei,
+            country=country,
+            filing_system=filing_system,
+            filed_to=dt.date.fromisoformat(as_of) if as_of else None,
+            limit=limit,
+        )
+    return [_jsonify_pg_row(row) for row in rows]
 
 
 @mcp.tool()
-def search_filings(
+async def search_filings(
     query: str,
     ticker: str | None = None,
     form_types: list[str] | None = None,
@@ -440,47 +446,39 @@ def search_filings(
 ) -> list[dict[str, object]]:
     """Full-text search across stored SEC filing text.
 
+    Cut over to PostgreSQL: filings no longer carry a raw ticker column,
+    so a ticker filter is resolved to whichever company currently holds
+    it (data/db/identifiers.py::get_current_company_id).
+
     Args:
         query: Free-text search terms (all terms must match).
-        ticker: Optional ticker filter.
+        ticker: Optional ticker filter, resolved to the company currently
+            holding it. Returns [] if it doesn't resolve to a tracked
+            company.
         form_types: Optional form types to include.
         filed_from: Optional earliest filing date (YYYY-MM-DD).
         limit: Maximum rows.
 
     Returns:
-        List of {filing_id, ticker, form_type, filed_at, url, snippet} ordered
-        by filed_at desc.
+        List of {filing_id, company_id, form_type, filed_at, url, snippet}
+        ordered by filed_at desc.
     """
-    terms = [t for t in re.split(r"\s+", query.strip().lower()) if t]
-    if not terms:
-        return []
-    first = terms[0]
-    with _connect() as conn:
-        sql = """
-            SELECT f.id, f.ticker, f.form_type, f.filed_at, f.url,
-                   substr(t.text, greatest(strpos(lower(t.text), ?) - 120, 1), 240) AS snippet
-            FROM filing_text t
-            JOIN filings f ON f.id = t.filing_id
-            WHERE t.text ILIKE ?
-        """
-        params: list[object] = [first, f"%{first}%"]
-        for term in terms[1:]:
-            sql += " AND t.text ILIKE ?"
-            params.append(f"%{term}%")
-        if ticker:
-            sql += " AND f.ticker = ?"
-            params.append(ticker)
-        if form_types:
-            placeholders = ",".join("?" * len(form_types))
-            sql += f" AND f.form_type IN ({placeholders})"
-            params.extend(form_types)
-        if filed_from:
-            sql += " AND f.filed_at >= ?"
-            params.append(filed_from)
-        sql += " ORDER BY f.filed_at DESC LIMIT ?"
-        params.append(limit)
-        rows = conn.execute(sql, params).fetchall()
-    return _rows_to_dicts(rows, ["filing_id", "ticker", "form_type", "filed_at", "url", "snippet"])
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        company_id: uuid.UUID | None = None
+        if ticker is not None:
+            company_id = await get_current_company_id(conn, id_type="ticker", id_value=ticker)
+            if company_id is None:
+                return []
+        rows = await filings_search_filing_text(
+            conn,
+            query=query,
+            company_id=company_id,
+            form_types=form_types,
+            filed_from=dt.date.fromisoformat(filed_from) if filed_from else None,
+            limit=limit,
+        )
+    return [_jsonify_pg_row(row) for row in rows]
 
 
 @mcp.tool()
@@ -1085,7 +1083,7 @@ def run_filings_refresh(run_date: str = "") -> str:
         A message with the new run id, or a diagnostic explaining why no run
         was started.
     """
-    from data.filings.fetch import run_daily_fetch
+    from data.filings.fetch import run_daily_fetch_with_pool
 
     date = run_date or dt.date.today().isoformat()
     if not _valid_date(date):
@@ -1101,15 +1099,22 @@ def run_filings_refresh(run_date: str = "") -> str:
         return f"Cannot start filings refresh: {exc}"
 
     def work(progress: jobs.ProgressCallback) -> dict[str, int]:
+        # server/jobs.py runs `work` synchronously on a background thread;
+        # run_daily_fetch_with_pool is async (it awaits the Postgres
+        # document/metadata writes alongside the unchanged DuckDB ones),
+        # so asyncio.run() bridges the two here -- an acceptable bridge for
+        # now, per this cutover's scope (server/jobs.py itself is untouched).
         conn = init_db(DB_PATH)
         try:
-            return run_daily_fetch(
-                conn,
-                client,
-                run_date=date,
-                root=ROOT_DIR,
-                universe=universe,
-                progress=progress,
+            return asyncio.run(
+                run_daily_fetch_with_pool(
+                    conn,
+                    client,
+                    run_date=date,
+                    root=ROOT_DIR,
+                    universe=universe,
+                    progress=progress,
+                )
             )
         finally:
             conn.close()

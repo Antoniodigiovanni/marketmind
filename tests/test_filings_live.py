@@ -66,7 +66,7 @@ def test_download_and_parse_latest_form4() -> None:
     assert transactions or holdings
 
 
-def test_live_daily_fetch_end_to_end(tmp_path) -> None:
+async def test_live_daily_fetch_end_to_end(pg_conn, tmp_path) -> None:
     """Run the daily fetch for AAPL against live EDGAR, newest filings only."""
     client = EdgardClient()
     conn = init_db(":memory:")
@@ -96,8 +96,9 @@ def test_live_daily_fetch_end_to_end(tmp_path) -> None:
                 ticker=AAPL_TICKER,
             )
 
-        counts = run_daily_fetch(
+        counts = await run_daily_fetch(
             conn,
+            pg_conn,
             client,
             run_date="2026-08-05",
             root=tmp_path,

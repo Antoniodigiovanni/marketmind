@@ -1,4 +1,10 @@
-"""Tests for the one-time filings backfill (mocked client, resumable)."""
+"""Tests for the one-time filings backfill (mocked client, resumable).
+
+backfill_issuer's document/metadata path dual-writes to DuckDB (asserted
+here as before) and PostgreSQL (asserted via pg_conn). backfill_13f is
+unchanged (DuckDB + Parquet only, out of this cutover's scope), so it
+stays a sync test.
+"""
 
 from __future__ import annotations
 
@@ -70,9 +76,10 @@ def conn():
     connection.close()
 
 
-def test_backfill_issuer_metadata_and_full_text(conn, tmp_path) -> None:
-    counts = backfill_issuer(
+async def test_backfill_issuer_metadata_and_full_text(conn, pg_conn, tmp_path) -> None:
+    counts = await backfill_issuer(
         conn,
+        pg_conn,
         FakeClient(),
         tmp_path,
         ticker="AAPL",
@@ -94,6 +101,22 @@ def test_backfill_issuer_metadata_and_full_text(conn, tmp_path) -> None:
     assert (tmp_path / recent[0]).exists()
     assert conn.execute("SELECT COUNT(*) FROM insider_transactions").fetchone()[0] == 1
     assert has_checkpoint(conn, "backfill:issuer:AAPL", "2026-08-05")
+
+    # Postgres side: the old (out-of-window) 10-K is metadata-only, the
+    # recent 10-Q gets full text; the ownership filing stays DuckDB-only.
+    pg_rows = await (
+        await pg_conn.execute("SELECT accession, form_type FROM filings ORDER BY accession")
+    ).fetchall()
+    assert pg_rows == [
+        ("000032019320000001", "10-K"),
+        ("000032019326000031", "10-Q"),
+    ]
+    text_count = await (await pg_conn.execute("SELECT COUNT(*) FROM filing_text")).fetchone()
+    assert text_count[0] == 1
+
+    from data.db.filings import has_checkpoint as pg_has_checkpoint
+
+    assert await pg_has_checkpoint(pg_conn, source="backfill:issuer:AAPL", key="2026-08-05")
 
 
 def test_backfill_13f_parses_and_resumes(conn, tmp_path) -> None:
