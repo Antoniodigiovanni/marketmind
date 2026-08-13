@@ -5,13 +5,11 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import uuid
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import Callable
 from pathlib import Path
 
 import duckdb
 import polars as pl
-import psycopg
 from mcp.server.fastmcp import FastMCP
 from psycopg_pool import AsyncConnectionPool
 
@@ -26,30 +24,11 @@ from data.db.filings import search_filing_text as filings_search_filing_text
 from data.db.identifiers import get_current_company_id
 from data.db.init import init_db
 from data.db.listings import get_current_listing
-from data.db.pool import dsn_from_env, open_pool
+from data.db.pool import open_pool
 from data.sources.rss import NEWS_RECORD_FIELDS
 from data.universe.loader import get_universe
 
 mcp = FastMCP("marketmind")
-
-_POOL = None
-_POOL_LOCK = asyncio.Lock()
-
-
-async def _get_pool():
-    """Lazily open (once) the shared async Postgres pool for async tools.
-
-    Only the tools ported to Postgres so far (get_prices, get_volatility)
-    use this. Every other tool stays on the DuckDB `_connect()` path
-    unchanged -- FastMCP supports mixed sync/async tool handlers natively.
-    """
-    global _POOL
-    if _POOL is None:
-        async with _POOL_LOCK:
-            if _POOL is None:
-                _POOL = await open_pool(dsn_from_env())
-    return _POOL
-
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT_DIR / "data" / "db" / "research.duckdb"
@@ -111,23 +90,6 @@ def _connect() -> duckdb.DuckDBPyConnection:
     return duckdb.connect(str(DB_PATH))
 
 
-@asynccontextmanager
-async def _connect_pg() -> AsyncIterator[psycopg.AsyncConnection]:
-    """Open a PostgreSQL connection for the views tools, closing it after use.
-
-    One connection per tool call — no pool lifecycle management here; that
-    is separate, later work once more tools are wired onto Postgres.
-
-    Yields:
-        A connection scoped to this call.
-    """
-    conn = await psycopg.AsyncConnection.connect(dsn_from_env())
-    try:
-        yield conn
-    finally:
-        await conn.close()
-
-
 def _rows_to_dicts(rows: list[tuple[object, ...]], columns: list[str]) -> list[dict[str, object]]:
     """Convert DuckDB rows + column names into JSON-friendly dicts."""
     result: list[dict[str, object]] = []
@@ -142,13 +104,12 @@ def _rows_to_dicts(rows: list[tuple[object, ...]], columns: list[str]) -> list[d
     return result
 
 
-# Postgres pool for the filings tools (get_filings, get_european_filings,
-# search_filings). Lazily opened on first use and never explicitly closed --
-# this server is a long-lived stdio process, so process exit reclaims it,
-# same lifecycle _connect()'s DuckDB connections already have per call, just
-# amortised into a pool instead of a fresh connection each time. No prior
-# art existed for this in server/mcp.py before this cutover; every earlier
-# Postgres repository PR was only ever exercised from tests via pg_conn.
+# Shared Postgres pool for every async MCP tool. Lazily opened on first use
+# and never explicitly closed -- this server is a long-lived stdio process,
+# so process exit reclaims it. Consolidated from three separate per-PR
+# helpers (_get_pool, _pg_pool, _connect_pg) that each independently
+# reinvented this after three parallel cutover PRs merged without
+# reconciling them.
 _PG_POOL: AsyncConnectionPool | None = None
 _PG_POOL_LOCK = asyncio.Lock()
 
@@ -197,7 +158,7 @@ async def get_prices(
     Returns:
         List of {date, open, high, low, close, volume}.
     """
-    pool = await _get_pool()
+    pool = await _pg_pool()
     async with pool.connection() as conn:
         listing = await get_current_listing(conn, provider="yahoo", symbol=ticker)
         if listing is None:
@@ -232,7 +193,7 @@ async def get_volatility(
         (its raw daily bar -- there is no "volatility of a volatility
         index" concept).
     """
-    pool = await _get_pool()
+    pool = await _pg_pool()
     async with pool.connection() as conn:
         listing = await get_current_listing(conn, provider="yahoo", symbol=ticker)
         if listing is None:
@@ -819,7 +780,8 @@ async def get_market_views(
         view_text, model, data_cutoff, used_fact_ids, created_at) ordered by
         as_of descending.
     """
-    async with _connect_pg() as conn:
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
         return await get_views(conn, as_of=as_of, ticker=ticker, scope=scope, limit=limit)
 
 
@@ -892,7 +854,8 @@ async def save_market_view_tool(
     Returns:
         New view ID.
     """
-    async with _connect_pg() as conn:
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
         return await save_view(
             conn,
             as_of=as_of,
