@@ -11,38 +11,12 @@ from loguru import logger
 
 from data.db.init import DEFAULT_DB_PATH
 from data.dividends.store import DIVIDENDS_DIR, append_symbol, last_ex_date
+from data.sources.calendars import infer_currency
 from data.sources.yfinance import fetch_dividends
 from data.universe.loader import UNIVERSE_DIR, get_universe
 
 FULL_HISTORY_START = "1900-01-01"
 OVERLAP_DAYS = 30
-CURRENCY_BY_SUFFIX = {
-    "DE": "EUR",
-    "PA": "EUR",
-    "AS": "EUR",
-    "BR": "EUR",
-    "MI": "EUR",
-    "MC": "EUR",
-    "VI": "EUR",
-    "HE": "EUR",
-    "L": "GBP",
-    "SW": "CHF",
-    "ST": "SEK",
-    "CO": "DKK",
-    "OL": "NOK",
-}
-
-
-def infer_currency(symbol: str) -> str | None:
-    """Infer a dividend currency from the Yahoo symbol suffix.
-
-    US symbols (no suffix) are USD; known EU exchange suffixes map to EUR or
-    the local currency; unknown suffixes return None.
-    """
-    if "." not in symbol:
-        return "USD"
-    suffix = symbol.rsplit(".", 1)[1].upper()
-    return CURRENCY_BY_SUFFIX.get(suffix)
 
 
 def _symbols_for_universe(db_path: str | Path, members: pl.DataFrame) -> dict[str, str]:
