@@ -20,7 +20,10 @@ from data.db.prices import (
     upsert_fx_rates,
     upsert_prices,
 )
+from data.dividends.fetch import sync_dividends
+from data.macro.fetch import run_daily_macro_sync
 from data.processed.volatility import compute_realized_vol
+from data.short_interest.fetch import sync_short_interest
 from data.sources.calendars import (
     CURRENCY_BY_SUFFIX,
     exchange_for_suffix,
@@ -318,11 +321,22 @@ async def _run(as_of: str) -> None:
 
 
 def main() -> None:
-    """Run the daily price/FX/volatility refresh."""
+    """Run the daily price/FX/volatility/macro/dividends/short-interest refresh.
+
+    Prices, FX, and volatility are Postgres-backed and run through the
+    async `_run` bridge. Macro, dividends, and short interest stay on their
+    existing Parquet/DuckDB pipeline for now -- their Postgres cutover is a
+    separate follow-up phase (see the phase-5 design doc §7) -- so they run
+    synchronously, unchanged, after the async block completes.
+    """
     parser = argparse.ArgumentParser(description="Daily price + FX + volatility refresh")
     parser.add_argument("--as-of", default=dt.date.today().isoformat(), help="YYYY-MM-DD")
     args = parser.parse_args()
+
     asyncio.run(_run(args.as_of))
+    run_daily_macro_sync(today=args.as_of)
+    sync_dividends(as_of=args.as_of)
+    sync_short_interest(as_of=args.as_of)
 
 
 if __name__ == "__main__":
