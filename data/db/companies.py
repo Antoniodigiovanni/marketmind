@@ -70,6 +70,33 @@ async def update_company_attributes(
         )
 
 
+async def update_company_description(
+    conn: psycopg.AsyncConnection,
+    *,
+    company_id: uuid.UUID,
+    description: str,
+    description_source: str | None,
+) -> None:
+    """Overwrite a company's cached description, bumping updated_at.
+
+    Unlike update_company_attributes, this always overwrites -- there is no
+    NULL-preservation behavior here, matching the original DuckDB
+    upsert_company's treatment of these two columns specifically.
+
+    Args:
+        conn: An open connection.
+        company_id: The company to update.
+        description: New description text.
+        description_source: Provenance tag, e.g. 'wikipedia', or None.
+    """
+    async with conn.transaction():
+        await conn.execute(
+            "UPDATE companies SET description = %s, description_source = %s, updated_at = NOW() "
+            "WHERE company_id = %s",
+            (description, description_source, company_id),
+        )
+
+
 async def get_company(
     conn: psycopg.AsyncConnection,
     *,
@@ -82,13 +109,14 @@ async def get_company(
         company_id: The company to fetch.
 
     Returns:
-        A dict with keys company_id, name, country, sector, first_seen,
-        last_seen, or None if no such company exists.
+        A dict with keys company_id, name, country, sector, description,
+        description_source, first_seen, last_seen, or None if no such
+        company exists.
     """
     async with conn.cursor(row_factory=dict_row) as cur:
         await cur.execute(
-            "SELECT company_id, name, country, sector, first_seen, last_seen "
-            "FROM companies WHERE company_id = %s",
+            "SELECT company_id, name, country, sector, description, description_source, "
+            "first_seen, last_seen FROM companies WHERE company_id = %s",
             (company_id,),
         )
         return await cur.fetchone()
