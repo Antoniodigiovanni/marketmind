@@ -329,7 +329,15 @@ class _EmptyEdgarClient:
         return []
 
 
-def test_run_filings_refresh_drives_the_real_fetch(wired, monkeypatch, tmp_path) -> None:
+def test_run_filings_refresh_drives_the_real_fetch(
+    wired, postgres_pool, monkeypatch, tmp_path
+) -> None:
+    # run_filings_refresh's work() runs on its own background thread and
+    # opens its own Postgres pool there (asyncio.run() per call, same as
+    # production) -- it can't share this test's pg_conn/event loop across
+    # threads. Depending on postgres_pool here (unused otherwise) just
+    # guarantees the shared test schema is already applied before that
+    # thread opens its own connection against the same DSN.
     monkeypatch.setattr(mcp_mod, "_build_edgar_client", _EmptyEdgarClient)
     monkeypatch.setattr(mcp_mod, "ROOT_DIR", tmp_path)
 
@@ -349,7 +357,7 @@ def test_run_filings_refresh_drives_the_real_fetch(wired, monkeypatch, tmp_path)
         conn.close()
 
 
-def test_run_filings_refresh_defaults_to_today(wired, monkeypatch, tmp_path) -> None:
+def test_run_filings_refresh_defaults_to_today(wired, postgres_pool, monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(mcp_mod, "_build_edgar_client", _EmptyEdgarClient)
     monkeypatch.setattr(mcp_mod, "ROOT_DIR", tmp_path)
 

@@ -1,16 +1,27 @@
-"""One-time SEC filings backfill — deep metadata/tabular, 5-year full text."""
+"""One-time SEC filings backfill — deep metadata/tabular, 5-year full text.
+
+Issuer document/metadata backfill dual-writes to DuckDB and PostgreSQL,
+same as data.filings.fetch (see that module's docstring). 13F backfill
+stays DuckDB (+ Parquet) only -- out of this cutover's scope.
+"""
 
 from __future__ import annotations
 
 import argparse
 import calendar
 import datetime as dt
+import uuid
 from pathlib import Path
 
 import duckdb
+import psycopg
 from loguru import logger
 
+from data.db.filings import create_filing as pg_create_filing
+from data.db.filings import mark_checkpoint as pg_mark_checkpoint
+from data.db.identifiers import get_current_company_id
 from data.db.init import init_db
+from data.db.pool import close_pool, open_pool
 from data.filings.checkpoint import has_checkpoint, mark_checkpoint
 from data.filings.cik import cik_for_ticker, ensure_cik_map
 from data.filings.fetch import (
@@ -60,8 +71,9 @@ def _quarter_end(date_str: str) -> str:
     return f"{year}-{end_month:02d}-{calendar.monthrange(year, end_month)[1]}"
 
 
-def backfill_issuer(
+async def backfill_issuer(
     conn: duckdb.DuckDBPyConnection,
+    pg_conn: psycopg.AsyncConnection,
     client: EdgardClient,
     root: Path,
     *,
@@ -73,7 +85,9 @@ def backfill_issuer(
     """Backfill one issuer: deep metadata, 5-year full text, all insider forms.
 
     Args:
-        conn: DuckDB connection.
+        conn: DuckDB connection -- dedup gate, sole store for ownership/13F.
+        pg_conn: PostgreSQL connection -- additive store for document and
+            metadata-only filings.
         client: EDGAR client.
         root: Repository root for raw storage.
         ticker: Ticker symbol.
@@ -92,13 +106,25 @@ def backfill_issuer(
         "insider_rows": 0,
         "form13f_rows": 0,
     }
+    company_id: uuid.UUID | None = await get_current_company_id(
+        pg_conn, id_type="ticker", id_value=ticker
+    )
     for sub in client.all_submissions(cik):
         if sub.form_type not in COVERED_FORMS or filing_exists(conn, cik, sub.accession):
             continue
         counts["filings_fetched"] += 1
         try:
             if sub.form_type in DOCUMENT_FORMS and sub.filed_at >= full_text_since:
-                _process_document(conn, client, root, cik=cik, ticker=ticker, sub=sub)
+                await _process_document(
+                    conn,
+                    pg_conn,
+                    client,
+                    root,
+                    cik=cik,
+                    company_id=company_id,
+                    ticker=ticker,
+                    sub=sub,
+                )
             elif sub.form_type in OWNERSHIP_FORMS:
                 n_tx, n_h = _process_ownership(conn, client, root, cik=cik, ticker=ticker, sub=sub)
                 counts["insider_rows"] += n_tx + n_h
@@ -136,6 +162,7 @@ def backfill_issuer(
                     counts["form13f_rows"] += df.height
             else:
                 # metadata only — older full-text documents are out of window
+                url = _edgar_url(cik, sub.accession, sub.primary_document)
                 insert_filing(
                     conn,
                     cik=cik,
@@ -144,18 +171,29 @@ def backfill_issuer(
                     filed_at=sub.filed_at,
                     period_of_report=sub.period_of_report,
                     primary_document=sub.primary_document,
-                    url=_edgar_url(cik, sub.accession, sub.primary_document),
+                    url=url,
                     ticker=ticker,
+                )
+                await pg_create_filing(
+                    pg_conn,
+                    company_id=company_id,
+                    accession=sub.accession,
+                    form_type=sub.form_type,
+                    filed_at=dt.date.fromisoformat(sub.filed_at),
+                    period=(
+                        dt.date.fromisoformat(sub.period_of_report)
+                        if sub.period_of_report
+                        else None
+                    ),
+                    url=url,
                 )
             counts["filings_parsed"] += 1
         except Exception:
             logger.exception(f"backfill: filing {sub.accession} for {ticker} failed; skipped")
             counts["filings_skipped"] += 1
-    mark_checkpoint(
-        conn,
-        f"backfill:issuer:{ticker}",
-        checkpoint_date or dt.date.today().isoformat(),
-    )
+    checkpoint_key = checkpoint_date or dt.date.today().isoformat()
+    mark_checkpoint(conn, f"backfill:issuer:{ticker}", checkpoint_key)
+    await pg_mark_checkpoint(pg_conn, source=f"backfill:issuer:{ticker}", key=checkpoint_key)
     return counts
 
 
@@ -249,8 +287,40 @@ def backfill_13f(
     return counts
 
 
+async def _backfill_issuers_with_pool(conn: duckdb.DuckDBPyConnection, tickers: list[str]) -> None:
+    """Open one Postgres pool for the whole issuer backfill sweep.
+
+    Bridges the async repository layer into this module's synchronous CLI
+    entry point (main()) -- asyncio.run() at that boundary is an
+    acceptable bridge for now, matching data.filings.fetch.main().
+    """
+    pool = await open_pool()
+    try:
+        async with pool.connection() as pg_conn:
+            full_text_since = str(
+                dt.date.today().replace(year=dt.date.today().year - FULL_TEXT_YEARS)
+            )
+            for ticker in tickers:
+                cik = cik_for_ticker(conn, ticker)
+                if cik is None:
+                    continue
+                await backfill_issuer(
+                    conn,
+                    pg_conn,
+                    EdgardClient(),
+                    ROOT_DIR,
+                    ticker=ticker,
+                    cik=cik,
+                    full_text_since=full_text_since,
+                )
+    finally:
+        await close_pool(pool)
+
+
 def main() -> None:
     """Run issuer and/or 13F backfill from the CLI."""
+    import asyncio
+
     parser = argparse.ArgumentParser(description="SEC filings backfill")
     parser.add_argument("--issuers", action="store_true", help="backfill universe issuers")
     parser.add_argument(
@@ -274,21 +344,7 @@ def main() -> None:
             universe = get_universe(today)
             tickers = sorted(universe["ticker"].unique().to_list())
             ensure_cik_map(conn, EdgardClient(), tickers)
-            full_text_since = str(
-                dt.date.today().replace(year=dt.date.today().year - FULL_TEXT_YEARS)
-            )
-            for ticker in tickers:
-                cik = cik_for_ticker(conn, ticker)
-                if cik is None:
-                    continue
-                backfill_issuer(
-                    conn,
-                    EdgardClient(),
-                    ROOT_DIR,
-                    ticker=ticker,
-                    cik=cik,
-                    full_text_since=full_text_since,
-                )
+            asyncio.run(_backfill_issuers_with_pool(conn, tickers))
         backfill_13f(
             conn,
             EdgardClient(),
