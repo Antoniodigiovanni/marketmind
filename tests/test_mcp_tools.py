@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import uuid
+from contextlib import asynccontextmanager
 
 import duckdb
 import polars as pl
@@ -10,8 +12,48 @@ import pytest
 
 import server.mcp as mcp_mod
 from agent.ingestion import RawNewsArchive
+from data.db.companies import create_company
 from data.db.init import init_db
+from data.db.listings import upsert_listing
+from data.db.prices import replace_all_volatility, upsert_prices
+from data.fetch import ensure_index_listing
 from data.sources.rss import NEWS_RECORD_FIELDS, Article, article_to_record
+
+
+async def _mcp_listing(pg_conn, symbol: str = "AAPL") -> uuid.UUID:
+    company_id = await create_company(
+        pg_conn, name="Apple", country="US", sector="Technology", first_seen=dt.date(2000, 1, 1)
+    )
+    return await upsert_listing(
+        pg_conn,
+        company_id=company_id,
+        provider="yahoo",
+        symbol=symbol,
+        status="valid",
+        valid_from=dt.date(2000, 1, 1),
+    )
+
+
+def _pool_returning(pg_conn):
+    """Build a fake `_get_pool` whose `.connection()` yields the test's own
+    transaction-scoped connection, so tool calls run inside the same
+    rolled-back transaction as the rest of the test."""
+
+    class _FakeConnCtx:
+        async def __aenter__(self):
+            return pg_conn
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _FakePool:
+        def connection(self):
+            return _FakeConnCtx()
+
+    async def fake_get_pool():
+        return _FakePool()
+
+    return fake_get_pool
 
 
 def _article(**overrides: str) -> Article:
@@ -45,65 +87,79 @@ def db_file(tmp_path) -> str:
     return str(path)
 
 
-def test_get_prices_reads_parquet(tmp_path, monkeypatch) -> None:
-    prices_dir = tmp_path / "prices"
-    prices_dir.mkdir()
-    pl.DataFrame(
-        {
-            "date": [dt.date(2026, 8, 1), dt.date(2026, 8, 4)],
-            "open": [100.0, 101.0],
-            "high": [102.0, 103.0],
-            "low": [99.0, 100.0],
-            "close": [101.0, 102.0],
-            "volume": [1000, 1200],
-        }
-    ).write_parquet(prices_dir / "AAPL.parquet")
-    monkeypatch.setattr(mcp_mod, "PRICES_DIR", prices_dir)
+async def test_get_prices_returns_rows_for_resolved_symbol(pg_conn, monkeypatch) -> None:
+    listing_id = await _mcp_listing(pg_conn)
+    await upsert_prices(
+        pg_conn,
+        listing_id=listing_id,
+        rows=[
+            {
+                "date": dt.date(2026, 8, 1),
+                "open": 100.0,
+                "high": 102.0,
+                "low": 99.0,
+                "close": 101.0,
+                "volume": 1000,
+                "currency": "USD",
+            },
+            {
+                "date": dt.date(2026, 8, 4),
+                "open": 101.0,
+                "high": 103.0,
+                "low": 100.0,
+                "close": 102.0,
+                "volume": 1200,
+                "currency": "USD",
+            },
+        ],
+    )
+    monkeypatch.setattr(mcp_mod, "_get_pool", _pool_returning(pg_conn))
 
-    rows = mcp_mod.get_prices("AAPL", start="2026-08-01")
+    rows = await mcp_mod.get_prices("AAPL", start="2026-08-01")
     assert len(rows) == 2
     assert rows[0]["close"] == 101.0
     assert rows[0]["date"] == "2026-08-01"
 
 
-def test_get_prices_unknown_ticker_returns_empty(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(mcp_mod, "PRICES_DIR", tmp_path / "prices")
-    assert mcp_mod.get_prices("NOPE") == []
+async def test_get_prices_unknown_ticker_returns_empty(pg_conn, monkeypatch) -> None:
+    monkeypatch.setattr(mcp_mod, "_get_pool", _pool_returning(pg_conn))
+    assert await mcp_mod.get_prices("NOPE") == []
 
 
-def test_get_volatility_stock_reads_processed(tmp_path, monkeypatch) -> None:
-    vol_path = tmp_path / "volatility.parquet"
-    pl.DataFrame(
-        {
-            "date": [dt.date(2026, 8, 4)],
-            "ticker": ["AAPL"],
-            "rv_20d": [18.5],
-            "rv_60d": [21.0],
-        }
-    ).write_parquet(vol_path)
-    monkeypatch.setattr(mcp_mod, "PROCESSED_VOL_PATH", vol_path)
+async def test_get_volatility_stock_reads_from_postgres(pg_conn, monkeypatch) -> None:
+    listing_id = await _mcp_listing(pg_conn)
+    await replace_all_volatility(
+        pg_conn,
+        rows=[
+            {"listing_id": listing_id, "date": dt.date(2026, 8, 4), "rv_20d": 18.5, "rv_60d": 21.0}
+        ],
+    )
+    monkeypatch.setattr(mcp_mod, "_get_pool", _pool_returning(pg_conn))
 
-    rows = mcp_mod.get_volatility("AAPL")
+    rows = await mcp_mod.get_volatility("AAPL")
     assert rows[0]["rv_20d"] == 18.5
 
 
-def test_get_volatility_index_uses_prices(tmp_path, monkeypatch) -> None:
-    macro_dir = tmp_path / "macro"
-    macro_dir.mkdir()
-    pl.DataFrame(
-        {
-            "date": [dt.date(2026, 8, 4)],
-            "open": [14.0],
-            "high": [14.5],
-            "low": [13.5],
-            "close": [14.2],
-            "volume": [0],
-        }
-    ).write_parquet(macro_dir / "^VIX.parquet")
-    monkeypatch.setattr(mcp_mod, "MACRO_DIR", macro_dir)
-    monkeypatch.setattr(mcp_mod, "PRICES_DIR", macro_dir)
+async def test_get_volatility_index_reads_from_prices(pg_conn, monkeypatch) -> None:
+    monkeypatch.setattr(mcp_mod, "_get_pool", _pool_returning(pg_conn))
+    listing_id = await ensure_index_listing(pg_conn, symbol="^VIX", name="CBOE Volatility Index")
+    await upsert_prices(
+        pg_conn,
+        listing_id=listing_id,
+        rows=[
+            {
+                "date": dt.date(2026, 8, 4),
+                "open": 14.0,
+                "high": 14.5,
+                "low": 13.5,
+                "close": 14.2,
+                "volume": 0,
+                "currency": "USD",
+            }
+        ],
+    )
 
-    rows = mcp_mod.get_volatility("^VIX")
+    rows = await mcp_mod.get_volatility("^VIX")
     assert rows[0]["close"] == 14.2
 
 
@@ -154,22 +210,23 @@ def test_get_news_since_filter_and_empty_search(tmp_path, monkeypatch) -> None:
     assert mcp_mod.search_news("anything") == []
 
 
-def test_get_volatility_missing_file_and_date_window(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(mcp_mod, "PROCESSED_VOL_PATH", tmp_path / "missing.parquet")
-    assert mcp_mod.get_volatility("AAPL") == []
+async def test_get_volatility_unresolved_ticker_returns_empty(pg_conn, monkeypatch) -> None:
+    monkeypatch.setattr(mcp_mod, "_get_pool", _pool_returning(pg_conn))
+    assert await mcp_mod.get_volatility("NOPE") == []
 
-    vol_path = tmp_path / "volatility.parquet"
-    pl.DataFrame(
-        {
-            "date": [dt.date(2026, 8, 3), dt.date(2026, 8, 4)],
-            "ticker": ["AAPL", "AAPL"],
-            "rv_20d": [17.0, 18.5],
-            "rv_60d": [20.0, 21.0],
-        }
-    ).write_parquet(vol_path)
-    monkeypatch.setattr(mcp_mod, "PROCESSED_VOL_PATH", vol_path)
 
-    rows = mcp_mod.get_volatility("AAPL", start="2026-08-04", end="2026-08-04")
+async def test_get_volatility_date_window(pg_conn, monkeypatch) -> None:
+    listing_id = await _mcp_listing(pg_conn)
+    await replace_all_volatility(
+        pg_conn,
+        rows=[
+            {"listing_id": listing_id, "date": dt.date(2026, 8, 3), "rv_20d": 17.0, "rv_60d": 20.0},
+            {"listing_id": listing_id, "date": dt.date(2026, 8, 4), "rv_20d": 18.5, "rv_60d": 21.0},
+        ],
+    )
+    monkeypatch.setattr(mcp_mod, "_get_pool", _pool_returning(pg_conn))
+
+    rows = await mcp_mod.get_volatility("AAPL", start="2026-08-04", end="2026-08-04")
     assert [r["date"] for r in rows] == ["2026-08-04"]
 
 
@@ -194,15 +251,21 @@ def test_facts_tool_point_in_time(monkeypatch, db_file) -> None:
     assert facts[0]["statement"] == "AAPL guided higher."
 
 
-def test_market_views_tools(monkeypatch, db_file) -> None:
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-    view_id = mcp_mod.save_market_view_tool(
+async def test_market_views_tools(monkeypatch, pg_conn) -> None:
+    @asynccontextmanager
+    async def _fake_connect_pg():
+        yield pg_conn
+
+    monkeypatch.setattr(mcp_mod, "_connect_pg", _fake_connect_pg)
+
+    view_id = await mcp_mod.save_market_view_tool(
         as_of="2026-08-04",
         view_text="Equities skew to the upside.",
         model="hermes",
+        data_cutoff="2026-08-04",
     )
-    views = mcp_mod.get_market_views(as_of="2026-08-04")
-    assert views[0]["id"] == view_id
+    views = await mcp_mod.get_market_views(as_of="2026-08-04")
+    assert str(views[0]["view_id"]) == view_id
 
 
 def test_connect_raises_when_db_missing(monkeypatch, tmp_path) -> None:
@@ -246,19 +309,25 @@ def test_get_macro_missing_file_returns_empty(tmp_path, monkeypatch) -> None:
     assert mcp_mod.get_macro("DGS10") == []
 
 
-def test_save_market_view_tool_stores_used_fact_ids(monkeypatch, db_file) -> None:
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
+async def test_save_market_view_tool_stores_used_fact_ids(monkeypatch, pg_conn) -> None:
+    @asynccontextmanager
+    async def _fake_connect_pg():
+        yield pg_conn
 
-    view_id = mcp_mod.save_market_view_tool(
+    monkeypatch.setattr(mcp_mod, "_connect_pg", _fake_connect_pg)
+
+    fact_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
+    view_id = await mcp_mod.save_market_view_tool(
         as_of="2026-08-04",
         view_text="Rates path is the key swing factor for H2.",
         model="hermes",
-        used_fact_ids=["fact-1", "fact-2"],
+        data_cutoff="2026-08-04",
+        used_fact_ids=fact_ids,
     )
-    views = mcp_mod.get_market_views(as_of="2026-08-05")
+    views = await mcp_mod.get_market_views(as_of="2026-08-05")
 
-    assert views[0]["id"] == view_id
-    assert views[0]["used_fact_ids"] == ["fact-1", "fact-2"]
+    assert str(views[0]["view_id"]) == view_id
+    assert sorted(str(f) for f in views[0]["used_fact_ids"]) == sorted(fact_ids)
 
 
 def test_get_dividends_reads_parquet_with_filters(tmp_path, monkeypatch) -> None:

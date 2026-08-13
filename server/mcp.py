@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import duckdb
 import polars as pl
+import psycopg
 from mcp.server.fastmcp import FastMCP
 from psycopg_pool import AsyncConnectionPool
 
@@ -17,25 +19,47 @@ import server.jobs as jobs
 from agent.knowledge import get_current_company_profile, get_current_facts, write_fact
 from agent.views import get_market_views as get_views
 from agent.views import save_market_view as save_view
+from data.db import prices as prices_db
 from data.db.esef import get_european_filings as filings_get_european_filings
 from data.db.filings import get_filings as filings_get_filings
 from data.db.filings import search_filing_text as filings_search_filing_text
 from data.db.identifiers import get_current_company_id
 from data.db.init import init_db
-from data.db.pool import open_pool
+from data.db.listings import get_current_listing
+from data.db.pool import dsn_from_env, open_pool
 from data.sources.rss import NEWS_RECORD_FIELDS
 from data.universe.loader import get_universe
 
 mcp = FastMCP("marketmind")
 
+_POOL = None
+_POOL_LOCK = asyncio.Lock()
+
+
+async def _get_pool():
+    """Lazily open (once) the shared async Postgres pool for async tools.
+
+    Only the tools ported to Postgres so far (get_prices, get_volatility)
+    use this. Every other tool stays on the DuckDB `_connect()` path
+    unchanged -- FastMCP supports mixed sync/async tool handlers natively.
+    """
+    global _POOL
+    if _POOL is None:
+        async with _POOL_LOCK:
+            if _POOL is None:
+                _POOL = await open_pool(dsn_from_env())
+    return _POOL
+
+
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT_DIR / "data" / "db" / "research.duckdb"
-PRICES_DIR = ROOT_DIR / "data" / "raw" / "prices"
+# PRICES_DIR and PROCESSED_VOL_PATH (per-ticker OHLCV / realized-vol Parquet)
+# are retired -- get_prices/get_volatility read PostgreSQL now (see
+# data/db/prices.py). MACRO_DIR stays: get_macro is still Parquet-backed.
 MACRO_DIR = ROOT_DIR / "data" / "raw" / "macro"
 DIVIDENDS_DIR = ROOT_DIR / "data" / "raw" / "dividends"
 SHORT_INTEREST_GLOB = str(ROOT_DIR / "data" / "raw" / "short_interest" / "*.parquet")
 NEWS_GLOB = str(ROOT_DIR / "data" / "raw" / "news" / "*.ndjson")
-PROCESSED_VOL_PATH = ROOT_DIR / "data" / "processed" / "volatility.parquet"
 FILINGS_13F_GLOB = str(ROOT_DIR / "data" / "raw" / "13f" / "**" / "*.parquet")
 
 # Columns returned by the news tools. Every entry must exist in the on-disk
@@ -87,6 +111,23 @@ def _connect() -> duckdb.DuckDBPyConnection:
     return duckdb.connect(str(DB_PATH))
 
 
+@asynccontextmanager
+async def _connect_pg() -> AsyncIterator[psycopg.AsyncConnection]:
+    """Open a PostgreSQL connection for the views tools, closing it after use.
+
+    One connection per tool call — no pool lifecycle management here; that
+    is separate, later work once more tools are wired onto Postgres.
+
+    Yields:
+        A connection scoped to this call.
+    """
+    conn = await psycopg.AsyncConnection.connect(dsn_from_env())
+    try:
+        yield conn
+    finally:
+        await conn.close()
+
+
 def _rows_to_dicts(rows: list[tuple[object, ...]], columns: list[str]) -> list[dict[str, object]]:
     """Convert DuckDB rows + column names into JSON-friendly dicts."""
     result: list[dict[str, object]] = []
@@ -136,8 +177,11 @@ def _jsonify_pg_row(row: dict[str, object]) -> dict[str, object]:
 
 
 @mcp.tool()
-def get_prices(
-    ticker: str, start: str | None = None, end: str | None = None
+async def get_prices(
+    ticker: str,
+    start: str | None = None,
+    end: str | None = None,
+    to_currency: str | None = None,
 ) -> list[dict[str, object]]:
     """Return daily OHLCV rows for a ticker.
 
@@ -145,30 +189,34 @@ def get_prices(
         ticker: Yahoo symbol, e.g. 'AAPL' or 'ASML.AS'.
         start: Optional start date (YYYY-MM-DD).
         end: Optional end date (YYYY-MM-DD).
+        to_currency: Optional ISO 4217 code. When set, prices are converted
+            using the most recent ECB reference rate on or before each
+            bar's date. Omit for the bar's native currency (today's
+            behavior, unchanged).
 
     Returns:
         List of {date, open, high, low, close, volume}.
     """
-    price_file = PRICES_DIR / f"{ticker}.parquet"
-    if not price_file.exists():
-        return []
-
-    conn = duckdb.connect()
-    try:
-        query = "SELECT date, open, high, low, close, volume FROM read_parquet(?)"
-        params: list[object] = [str(price_file)]
-        if start or end:
-            query += " WHERE date BETWEEN ? AND ?"
-            params += [start or "1900-01-01", end or "2999-12-31"]
-        query += " ORDER BY date"
-        rows = conn.execute(query, params).fetchall()
-    finally:
-        conn.close()
-    return _rows_to_dicts(rows, ["date", "open", "high", "low", "close", "volume"])
+    pool = await _get_pool()
+    async with pool.connection() as conn:
+        listing = await get_current_listing(conn, provider="yahoo", symbol=ticker)
+        if listing is None:
+            return []
+        rows = await prices_db.get_prices(
+            conn,
+            listing_id=listing["listing_id"],
+            start=dt.date.fromisoformat(start) if start else None,
+            end=dt.date.fromisoformat(end) if end else None,
+            to_currency=to_currency,
+        )
+    return _rows_to_dicts(
+        [(r["date"], r["open"], r["high"], r["low"], r["close"], r["volume"]) for r in rows],
+        ["date", "open", "high", "low", "close", "volume"],
+    )
 
 
 @mcp.tool()
-def get_volatility(
+async def get_volatility(
     ticker: str, start: str | None = None, end: str | None = None
 ) -> list[dict[str, object]]:
     """Return volatility data for a ticker or market vol index.
@@ -180,25 +228,43 @@ def get_volatility(
 
     Returns:
         For a stock: {date, ticker, rv_20d, rv_60d} (annualised %).
-        For a vol index: {date, ticker, close} from the macro price file.
+        For a vol index: {date, ticker, open, high, low, close, volume}
+        (its raw daily bar -- there is no "volatility of a volatility
+        index" concept).
     """
-    if ticker in ("^VIX", "^VSTOXX"):
-        return get_prices(ticker, start, end)
+    pool = await _get_pool()
+    async with pool.connection() as conn:
+        listing = await get_current_listing(conn, provider="yahoo", symbol=ticker)
+        if listing is None:
+            return []
 
-    if not PROCESSED_VOL_PATH.exists():
-        return []
-    conn = duckdb.connect()
-    try:
-        query = "SELECT date, ticker, rv_20d, rv_60d FROM read_parquet(?) WHERE ticker = ?"
-        params: list[object] = [str(PROCESSED_VOL_PATH), ticker]
-        if start or end:
-            query += " AND date BETWEEN ? AND ?"
-            params += [start or "1900-01-01", end or "2999-12-31"]
-        query += " ORDER BY date"
-        rows = conn.execute(query, params).fetchall()
-    finally:
-        conn.close()
-    return _rows_to_dicts(rows, ["date", "ticker", "rv_20d", "rv_60d"])
+        start_date = dt.date.fromisoformat(start) if start else None
+        end_date = dt.date.fromisoformat(end) if end else None
+
+        if ticker in ("^VIX", "^VSTOXX"):
+            rows = await prices_db.get_prices(
+                conn, listing_id=listing["listing_id"], start=start_date, end=end_date
+            )
+            records = _rows_to_dicts(
+                [
+                    (r["date"], r["open"], r["high"], r["low"], r["close"], r["volume"])
+                    for r in rows
+                ],
+                ["date", "open", "high", "low", "close", "volume"],
+            )
+            for record in records:
+                record["ticker"] = ticker
+            return records
+
+        rows = await prices_db.get_volatility(
+            conn, listing_id=listing["listing_id"], start=start_date, end=end_date
+        )
+    records = _rows_to_dicts(
+        [(r["date"], r["rv_20d"], r["rv_60d"]) for r in rows], ["date", "rv_20d", "rv_60d"]
+    )
+    for record in records:
+        record["ticker"] = ticker
+    return records
 
 
 @mcp.tool()
@@ -733,7 +799,7 @@ def get_facts(ticker: str, as_of: str) -> list[dict[str, object]]:
 
 
 @mcp.tool()
-def get_market_views(
+async def get_market_views(
     as_of: str,
     ticker: str | None = None,
     scope: str | None = None,
@@ -743,16 +809,18 @@ def get_market_views(
 
     Args:
         as_of: Date (YYYY-MM-DD); returns views for this date or earlier.
-        ticker: Optional ticker filter.
+        ticker: Optional ticker filter; a ticker with no matching company
+            as of `as_of` yields an empty result rather than an error.
         scope: Optional scope filter ('market' | 'ticker' | 'theme').
         limit: Maximum views to return.
 
     Returns:
-        List of view dicts (id, as_of, scope, ticker, theme, view_text, model,
-        data_cutoff, used_fact_ids, created_at) ordered by as_of descending.
+        List of view dicts (view_id, as_of, scope, company_id, theme,
+        view_text, model, data_cutoff, used_fact_ids, created_at) ordered by
+        as_of descending.
     """
-    with _connect() as conn:
-        return get_views(conn, as_of=as_of, ticker=ticker, scope=scope, limit=limit)
+    async with _connect_pg() as conn:
+        return await get_views(conn, as_of=as_of, ticker=ticker, scope=scope, limit=limit)
 
 
 @mcp.tool()
@@ -797,14 +865,14 @@ def get_company_profile(
 
 
 @mcp.tool()
-def save_market_view_tool(
+async def save_market_view_tool(
     as_of: str,
     view_text: str,
     model: str,
+    data_cutoff: str,
     scope: str = "market",
     ticker: str | None = None,
     theme: str | None = None,
-    data_cutoff: str | None = None,
     used_fact_ids: list[str] | None = None,
 ) -> str:
     """Persist a free-text market view (immutable once written).
@@ -813,25 +881,27 @@ def save_market_view_tool(
         as_of: Market date (YYYY-MM-DD) the view refers to.
         view_text: Free-text view content.
         model: Model identifier that produced the view.
+        data_cutoff: Date (YYYY-MM-DD) of the newest data used to write the
+            view. Required.
         scope: 'market' | 'ticker' | 'theme'.
-        ticker: Required when scope == 'ticker'.
+        ticker: Required when scope == 'ticker'; must resolve to a known
+            company as of `as_of`.
         theme: Required when scope == 'theme'.
-        data_cutoff: ISO timestamp of newest data used, optional.
-        used_fact_ids: ticker_facts ids that informed this view, optional.
+        used_fact_ids: company_facts ids that informed this view, optional.
 
     Returns:
         New view ID.
     """
-    with _connect() as conn:
-        return save_view(
+    async with _connect_pg() as conn:
+        return await save_view(
             conn,
             as_of=as_of,
             view_text=view_text,
             model=model,
+            data_cutoff=data_cutoff,
             scope=scope,
             ticker=ticker,
             theme=theme,
-            data_cutoff=data_cutoff,
             used_fact_ids=used_fact_ids,
         )
 

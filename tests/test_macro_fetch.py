@@ -134,17 +134,10 @@ def test_fetch_main_runs_all_daily_syncs(monkeypatch) -> None:
 
     called: list[str] = []
 
-    def fake_prices(**kwargs: object) -> dict[str, list[str]]:
-        called.append("prices")
-        return {"fetched": [], "skipped_unresolved": [], "errors": []}
+    async def fake_run(as_of: str) -> None:
+        called.append("market_data")
 
-    monkeypatch.setattr(fetch_entry, "fetch_daily_prices", fake_prices)
-    monkeypatch.setattr(
-        fetch_entry,
-        "build_volatility_file",
-        lambda *args, **kwargs: called.append("volatility"),
-    )
-    monkeypatch.setattr(fetch_entry, "fetch_volatility_indices", lambda as_of: called.append("vol"))
+    monkeypatch.setattr(fetch_entry, "_run", fake_run)
     monkeypatch.setattr(
         fetch_entry, "run_daily_macro_sync", lambda **kwargs: called.append("macro")
     )
@@ -158,4 +151,4 @@ def test_fetch_main_runs_all_daily_syncs(monkeypatch) -> None:
 
     fetch_entry.main()
 
-    assert called == ["prices", "volatility", "vol", "macro", "dividends", "short_interest"]
+    assert called == ["market_data", "macro", "dividends", "short_interest"]
