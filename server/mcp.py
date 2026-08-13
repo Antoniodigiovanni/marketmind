@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import re
 from collections.abc import Callable
@@ -15,20 +16,43 @@ import server.jobs as jobs
 from agent.knowledge import get_current_company_profile, get_current_facts, write_fact
 from agent.views import get_market_views as get_views
 from agent.views import save_market_view as save_view
+from data.db import prices as prices_db
 from data.db.init import init_db
+from data.db.listings import get_current_listing
+from data.db.pool import dsn_from_env, open_pool
 from data.sources.rss import NEWS_RECORD_FIELDS
 from data.universe.loader import get_universe
 
 mcp = FastMCP("marketmind")
 
+_POOL = None
+_POOL_LOCK = asyncio.Lock()
+
+
+async def _get_pool():
+    """Lazily open (once) the shared async Postgres pool for async tools.
+
+    Only the tools ported to Postgres so far (get_prices, get_volatility)
+    use this. Every other tool stays on the DuckDB `_connect()` path
+    unchanged -- FastMCP supports mixed sync/async tool handlers natively.
+    """
+    global _POOL
+    if _POOL is None:
+        async with _POOL_LOCK:
+            if _POOL is None:
+                _POOL = await open_pool(dsn_from_env())
+    return _POOL
+
+
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT_DIR / "data" / "db" / "research.duckdb"
-PRICES_DIR = ROOT_DIR / "data" / "raw" / "prices"
+# PRICES_DIR and PROCESSED_VOL_PATH (per-ticker OHLCV / realized-vol Parquet)
+# are retired -- get_prices/get_volatility read PostgreSQL now (see
+# data/db/prices.py). MACRO_DIR stays: get_macro is still Parquet-backed.
 MACRO_DIR = ROOT_DIR / "data" / "raw" / "macro"
 DIVIDENDS_DIR = ROOT_DIR / "data" / "raw" / "dividends"
 SHORT_INTEREST_GLOB = str(ROOT_DIR / "data" / "raw" / "short_interest" / "*.parquet")
 NEWS_GLOB = str(ROOT_DIR / "data" / "raw" / "news" / "*.ndjson")
-PROCESSED_VOL_PATH = ROOT_DIR / "data" / "processed" / "volatility.parquet"
 FILINGS_13F_GLOB = str(ROOT_DIR / "data" / "raw" / "13f" / "**" / "*.parquet")
 
 # Columns returned by the news tools. Every entry must exist in the on-disk
@@ -95,8 +119,11 @@ def _rows_to_dicts(rows: list[tuple[object, ...]], columns: list[str]) -> list[d
 
 
 @mcp.tool()
-def get_prices(
-    ticker: str, start: str | None = None, end: str | None = None
+async def get_prices(
+    ticker: str,
+    start: str | None = None,
+    end: str | None = None,
+    to_currency: str | None = None,
 ) -> list[dict[str, object]]:
     """Return daily OHLCV rows for a ticker.
 
@@ -104,30 +131,34 @@ def get_prices(
         ticker: Yahoo symbol, e.g. 'AAPL' or 'ASML.AS'.
         start: Optional start date (YYYY-MM-DD).
         end: Optional end date (YYYY-MM-DD).
+        to_currency: Optional ISO 4217 code. When set, prices are converted
+            using the most recent ECB reference rate on or before each
+            bar's date. Omit for the bar's native currency (today's
+            behavior, unchanged).
 
     Returns:
         List of {date, open, high, low, close, volume}.
     """
-    price_file = PRICES_DIR / f"{ticker}.parquet"
-    if not price_file.exists():
-        return []
-
-    conn = duckdb.connect()
-    try:
-        query = "SELECT date, open, high, low, close, volume FROM read_parquet(?)"
-        params: list[object] = [str(price_file)]
-        if start or end:
-            query += " WHERE date BETWEEN ? AND ?"
-            params += [start or "1900-01-01", end or "2999-12-31"]
-        query += " ORDER BY date"
-        rows = conn.execute(query, params).fetchall()
-    finally:
-        conn.close()
-    return _rows_to_dicts(rows, ["date", "open", "high", "low", "close", "volume"])
+    pool = await _get_pool()
+    async with pool.connection() as conn:
+        listing = await get_current_listing(conn, provider="yahoo", symbol=ticker)
+        if listing is None:
+            return []
+        rows = await prices_db.get_prices(
+            conn,
+            listing_id=listing["listing_id"],
+            start=dt.date.fromisoformat(start) if start else None,
+            end=dt.date.fromisoformat(end) if end else None,
+            to_currency=to_currency,
+        )
+    return _rows_to_dicts(
+        [(r["date"], r["open"], r["high"], r["low"], r["close"], r["volume"]) for r in rows],
+        ["date", "open", "high", "low", "close", "volume"],
+    )
 
 
 @mcp.tool()
-def get_volatility(
+async def get_volatility(
     ticker: str, start: str | None = None, end: str | None = None
 ) -> list[dict[str, object]]:
     """Return volatility data for a ticker or market vol index.
@@ -139,25 +170,43 @@ def get_volatility(
 
     Returns:
         For a stock: {date, ticker, rv_20d, rv_60d} (annualised %).
-        For a vol index: {date, ticker, close} from the macro price file.
+        For a vol index: {date, ticker, open, high, low, close, volume}
+        (its raw daily bar -- there is no "volatility of a volatility
+        index" concept).
     """
-    if ticker in ("^VIX", "^VSTOXX"):
-        return get_prices(ticker, start, end)
+    pool = await _get_pool()
+    async with pool.connection() as conn:
+        listing = await get_current_listing(conn, provider="yahoo", symbol=ticker)
+        if listing is None:
+            return []
 
-    if not PROCESSED_VOL_PATH.exists():
-        return []
-    conn = duckdb.connect()
-    try:
-        query = "SELECT date, ticker, rv_20d, rv_60d FROM read_parquet(?) WHERE ticker = ?"
-        params: list[object] = [str(PROCESSED_VOL_PATH), ticker]
-        if start or end:
-            query += " AND date BETWEEN ? AND ?"
-            params += [start or "1900-01-01", end or "2999-12-31"]
-        query += " ORDER BY date"
-        rows = conn.execute(query, params).fetchall()
-    finally:
-        conn.close()
-    return _rows_to_dicts(rows, ["date", "ticker", "rv_20d", "rv_60d"])
+        start_date = dt.date.fromisoformat(start) if start else None
+        end_date = dt.date.fromisoformat(end) if end else None
+
+        if ticker in ("^VIX", "^VSTOXX"):
+            rows = await prices_db.get_prices(
+                conn, listing_id=listing["listing_id"], start=start_date, end=end_date
+            )
+            records = _rows_to_dicts(
+                [
+                    (r["date"], r["open"], r["high"], r["low"], r["close"], r["volume"])
+                    for r in rows
+                ],
+                ["date", "open", "high", "low", "close", "volume"],
+            )
+            for record in records:
+                record["ticker"] = ticker
+            return records
+
+        rows = await prices_db.get_volatility(
+            conn, listing_id=listing["listing_id"], start=start_date, end=end_date
+        )
+    records = _rows_to_dicts(
+        [(r["date"], r["rv_20d"], r["rv_60d"]) for r in rows], ["date", "rv_20d", "rv_60d"]
+    )
+    for record in records:
+        record["ticker"] = ticker
+    return records
 
 
 @mcp.tool()
