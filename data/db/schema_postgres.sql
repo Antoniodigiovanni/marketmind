@@ -6,7 +6,9 @@
 -- constraints as of that change. aggregate_fact_embeddings added 2026-08-11
 -- for the aggregate-facts-repo phase: 31 tables as of that change.
 -- aggregate_facts.dimension gained a CHECK constraint the same day: 20
--- check constraints as of that change.)
+-- check constraints as of that change. market_views.used_fact_ids UUID[]
+-- added 2026-08-11 for the views-cutover phase, restoring the DuckDB
+-- provenance column the initial port dropped; table count unchanged.)
 
 -- marketmind — PostgreSQL schema (draft for review)
 -- Target: PostgreSQL 16+ with the `vector` extension (pgvector).
@@ -391,6 +393,8 @@ CREATE TABLE IF NOT EXISTS market_views (
     view_text   TEXT        NOT NULL,     -- immutable, never edited in place
     written_by  TEXT        NOT NULL,     -- model id
     data_cutoff DATE        NOT NULL,
+    used_fact_ids UUID[],                 -- company_facts.fact_id provenance; not FK-enforced
+                                           -- (Postgres has no array foreign keys)
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT view_scope_target CHECK (
         (scope = 'ticker' AND company_id IS NOT NULL) OR

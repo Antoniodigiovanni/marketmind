@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from contextlib import asynccontextmanager
 
 import duckdb
 import polars as pl
@@ -250,15 +251,21 @@ def test_facts_tool_point_in_time(monkeypatch, db_file) -> None:
     assert facts[0]["statement"] == "AAPL guided higher."
 
 
-def test_market_views_tools(monkeypatch, db_file) -> None:
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-    view_id = mcp_mod.save_market_view_tool(
+async def test_market_views_tools(monkeypatch, pg_conn) -> None:
+    @asynccontextmanager
+    async def _fake_connect_pg():
+        yield pg_conn
+
+    monkeypatch.setattr(mcp_mod, "_connect_pg", _fake_connect_pg)
+
+    view_id = await mcp_mod.save_market_view_tool(
         as_of="2026-08-04",
         view_text="Equities skew to the upside.",
         model="hermes",
+        data_cutoff="2026-08-04",
     )
-    views = mcp_mod.get_market_views(as_of="2026-08-04")
-    assert views[0]["id"] == view_id
+    views = await mcp_mod.get_market_views(as_of="2026-08-04")
+    assert str(views[0]["view_id"]) == view_id
 
 
 def test_connect_raises_when_db_missing(monkeypatch, tmp_path) -> None:
@@ -302,19 +309,25 @@ def test_get_macro_missing_file_returns_empty(tmp_path, monkeypatch) -> None:
     assert mcp_mod.get_macro("DGS10") == []
 
 
-def test_save_market_view_tool_stores_used_fact_ids(monkeypatch, db_file) -> None:
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
+async def test_save_market_view_tool_stores_used_fact_ids(monkeypatch, pg_conn) -> None:
+    @asynccontextmanager
+    async def _fake_connect_pg():
+        yield pg_conn
 
-    view_id = mcp_mod.save_market_view_tool(
+    monkeypatch.setattr(mcp_mod, "_connect_pg", _fake_connect_pg)
+
+    fact_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
+    view_id = await mcp_mod.save_market_view_tool(
         as_of="2026-08-04",
         view_text="Rates path is the key swing factor for H2.",
         model="hermes",
-        used_fact_ids=["fact-1", "fact-2"],
+        data_cutoff="2026-08-04",
+        used_fact_ids=fact_ids,
     )
-    views = mcp_mod.get_market_views(as_of="2026-08-05")
+    views = await mcp_mod.get_market_views(as_of="2026-08-05")
 
-    assert views[0]["id"] == view_id
-    assert views[0]["used_fact_ids"] == ["fact-1", "fact-2"]
+    assert str(views[0]["view_id"]) == view_id
+    assert sorted(str(f) for f in views[0]["used_fact_ids"]) == sorted(fact_ids)
 
 
 def test_get_dividends_reads_parquet_with_filters(tmp_path, monkeypatch) -> None:
