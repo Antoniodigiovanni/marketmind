@@ -5,7 +5,6 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
-import duckdb
 import polars as pl
 import pytest
 
@@ -365,59 +364,3 @@ def test_get_short_interest_reads_partitions(tmp_path, monkeypatch) -> None:
 def test_get_short_interest_no_partitions_returns_empty(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(mcp_mod, "SHORT_INTEREST_GLOB", str(tmp_path / "si" / "*.parquet"))
     assert mcp_mod.get_short_interest("AAPL") == []
-
-
-def _seed_profile(db_file, ticker: str = "AAPL", valid_from: str = "2026-08-04") -> None:
-    from agent.knowledge import upsert_company, write_company_profile
-
-    conn = duckdb.connect(db_file)
-    try:
-        upsert_company(
-            conn,
-            ticker=ticker,
-            name="Apple Inc.",
-            country="US",
-            sector="Technology",
-        )
-        write_company_profile(
-            conn,
-            ticker=ticker,
-            description="Apple designs consumer electronics.",
-            products_services=["smartphones", "cloud services"],
-            valid_from=valid_from,
-            website_url="https://www.apple.com",
-            sources={"wikipedia": "https://en.wikipedia.org/wiki/Apple_Inc.", "crawled": []},
-            generated_by="deepseek-chat",
-        )
-    finally:
-        conn.close()
-
-
-def test_get_company_profile_returns_profile_with_company_metadata(monkeypatch, db_file) -> None:
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-    _seed_profile(db_file)
-
-    profile = mcp_mod.get_company_profile("AAPL", as_of="2026-08-05")
-
-    assert profile is not None
-    assert profile["ticker"] == "AAPL"
-    assert profile["name"] == "Apple Inc."
-    assert profile["sector"] == "Technology"
-    assert profile["country"] == "US"
-    assert profile["products_services"] == ["smartphones", "cloud services"]
-    assert profile["website_url"] == "https://www.apple.com"
-    assert profile["generated_by"] == "deepseek-chat"
-
-
-def test_get_company_profile_respects_as_of(monkeypatch, db_file) -> None:
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-    _seed_profile(db_file, valid_from="2026-08-04")
-
-    assert mcp_mod.get_company_profile("AAPL", as_of="2026-08-01") is None
-    assert mcp_mod.get_company_profile("AAPL", as_of="2026-08-05") is not None
-
-
-def test_get_company_profile_missing_returns_none(monkeypatch, db_file) -> None:
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-
-    assert mcp_mod.get_company_profile("NOPE") is None

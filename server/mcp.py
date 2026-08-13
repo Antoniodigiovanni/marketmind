@@ -15,10 +15,11 @@ from psycopg_pool import AsyncConnectionPool
 
 import server.jobs as jobs
 from agent.embedding import hash_embed
-from agent.knowledge import get_current_company_profile
 from agent.views import get_market_views as get_views
 from agent.views import save_market_view as save_view
 from data.db import prices as prices_db
+from data.db.companies import get_company
+from data.db.company_profiles import get_current_profile
 from data.db.esef import get_european_filings as filings_get_european_filings
 from data.db.facts import create_fact as facts_create_fact
 from data.db.facts import get_current_facts as facts_get_current_facts
@@ -797,44 +798,45 @@ async def get_market_views(
 
 
 @mcp.tool()
-def get_company_profile(
+async def get_company_profile(
     ticker: str,
     as_of: str | None = None,
 ) -> dict[str, object] | None:
     """Return the generated company profile (description + categories) as of a date.
 
     Args:
-        ticker: Company ticker symbol.
+        ticker: Company ticker, resolved to the company currently holding it.
         as_of: Date (YYYY-MM-DD); defaults to today. Profiles are versioned,
             so this returns the version valid on that date.
 
     Returns:
         Dict with ticker, name, sector, country, description,
         products_services, website_url, sources, valid_from, generated_by;
-        None when no profile exists as of the date.
+        None when the ticker doesn't resolve to a tracked company or no
+        profile exists as of the date.
     """
-    effective_as_of = as_of or dt.date.today().isoformat()
-    with _connect() as conn:
-        profile = get_current_company_profile(conn, ticker, effective_as_of)
+    effective_as_of = dt.date.fromisoformat(as_of) if as_of else dt.date.today()
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        company_id = await get_current_company_id(conn, id_type="ticker", id_value=ticker)
+        if company_id is None:
+            return None
+        profile = await get_current_profile(conn, company_id=company_id, as_of=effective_as_of)
         if profile is None:
             return None
-        company = conn.execute(
-            "SELECT name, sector, country FROM companies WHERE ticker = ?",
-            [ticker],
-        ).fetchone()
-        name, sector, country = company if company else (None, None, None)
-        return {
-            "ticker": ticker,
-            "name": name,
-            "sector": sector,
-            "country": country,
-            "description": profile["description"],
-            "products_services": profile["products_services"],
-            "website_url": profile["website_url"],
-            "sources": profile["sources"],
-            "valid_from": profile["valid_from"],
-            "generated_by": profile["generated_by"],
-        }
+        company = await get_company(conn, company_id=company_id)
+    return {
+        "ticker": ticker,
+        "name": company["name"] if company else None,
+        "sector": company["sector"] if company else None,
+        "country": company["country"] if company else None,
+        "description": profile["description"],
+        "products_services": profile["products_services"],
+        "website_url": profile["website_url"],
+        "sources": profile["sources"],
+        "valid_from": profile["valid_from"].isoformat(),
+        "generated_by": profile["generated_by"],
+    }
 
 
 @mcp.tool()

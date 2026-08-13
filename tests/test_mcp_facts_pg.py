@@ -8,6 +8,7 @@ import uuid
 import pytest
 
 import server.mcp as mcp_mod
+from data.db.company_profiles import create_profile
 from data.db.identifiers import get_or_create_identifier
 
 pytestmark = pytest.mark.asyncio
@@ -107,3 +108,60 @@ async def test_get_facts_is_point_in_time(monkeypatch, pg_conn) -> None:
     )
     before = await mcp_mod.get_facts("AAPL", "2019-12-31")
     assert before == []
+
+
+async def test_get_company_profile_returns_none_for_unresolvable_ticker(
+    monkeypatch, pg_conn
+) -> None:
+    _patch_pool(monkeypatch, pg_conn)
+    result = await mcp_mod.get_company_profile("NOPE")
+    assert result is None
+
+
+async def test_get_company_profile_returns_profile_and_company_fields(monkeypatch, pg_conn) -> None:
+    _patch_pool(monkeypatch, pg_conn)
+    company_id = await _company(pg_conn, "AAPL")
+    await create_profile(
+        pg_conn,
+        company_id=company_id,
+        description="Makes phones.",
+        products_services=["Hardware"],
+        valid_from=dt.date(2020, 1, 1),
+        generated_by="deepseek-chat",
+        website_url="https://www.apple.com",
+    )
+
+    profile = await mcp_mod.get_company_profile("AAPL", "2020-06-01")
+    assert profile["ticker"] == "AAPL"
+    assert profile["name"] == "Apple Inc."
+    assert profile["sector"] == "Technology"
+    assert profile["country"] == "US"
+    assert profile["description"] == "Makes phones."
+    assert profile["products_services"] == ["Hardware"]
+    assert profile["website_url"] == "https://www.apple.com"
+    assert profile["generated_by"] == "deepseek-chat"
+
+
+async def test_get_company_profile_is_point_in_time(monkeypatch, pg_conn) -> None:
+    _patch_pool(monkeypatch, pg_conn)
+    company_id = await _company(pg_conn, "AAPL")
+    await create_profile(
+        pg_conn,
+        company_id=company_id,
+        description="Makes phones.",
+        products_services=["Hardware"],
+        valid_from=dt.date(2020, 1, 1),
+        generated_by="deepseek-chat",
+    )
+
+    assert await mcp_mod.get_company_profile("AAPL", "2019-12-31") is None
+    assert await mcp_mod.get_company_profile("AAPL", "2020-06-01") is not None
+
+
+async def test_get_company_profile_returns_none_when_no_profile_exists(
+    monkeypatch, pg_conn
+) -> None:
+    _patch_pool(monkeypatch, pg_conn)
+    await _company(pg_conn, "AAPL")
+    result = await mcp_mod.get_company_profile("AAPL", "2020-06-01")
+    assert result is None
