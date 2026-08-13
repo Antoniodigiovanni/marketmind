@@ -28,6 +28,42 @@ SUFFIX_TO_EXCHANGE: dict[str, str] = {
 }
 
 
+CURRENCY_BY_SUFFIX: dict[str, str] = {
+    "": "USD",
+    ".AS": "EUR",
+    ".BR": "EUR",
+    ".CO": "DKK",
+    ".DE": "EUR",
+    ".HE": "EUR",
+    ".IR": "EUR",
+    ".L": "GBP",
+    ".LS": "EUR",
+    ".MC": "EUR",
+    ".MI": "EUR",
+    ".OL": "NOK",
+    ".PA": "EUR",
+    ".ST": "SEK",
+    ".SW": "CHF",
+    ".VI": "EUR",
+    ".WA": "PLN",
+}
+
+
+def infer_currency(symbol: str) -> str | None:
+    """Infer a listing's currency from its Yahoo exchange suffix.
+
+    Args:
+        symbol: Yahoo symbol, e.g. 'AAPL' or 'ASML.AS'.
+
+    Returns:
+        ISO 4217 currency code, or None for an unrecognised suffix.
+    """
+    if "." not in symbol:
+        return CURRENCY_BY_SUFFIX[""]
+    suffix = "." + symbol.rsplit(".", 1)[1].upper()
+    return CURRENCY_BY_SUFFIX.get(suffix)
+
+
 def exchange_for_suffix(suffix: str) -> str:
     """Map a Yahoo exchange suffix (e.g. '.DE') to an exchange-calendars code.
 
