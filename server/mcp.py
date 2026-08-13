@@ -14,11 +14,14 @@ from mcp.server.fastmcp import FastMCP
 from psycopg_pool import AsyncConnectionPool
 
 import server.jobs as jobs
-from agent.knowledge import get_current_company_profile, get_current_facts, write_fact
+from agent.embedding import hash_embed
+from agent.knowledge import get_current_company_profile
 from agent.views import get_market_views as get_views
 from agent.views import save_market_view as save_view
 from data.db import prices as prices_db
 from data.db.esef import get_european_filings as filings_get_european_filings
+from data.db.facts import create_fact as facts_create_fact
+from data.db.facts import get_current_facts as facts_get_current_facts
 from data.db.filings import get_filings as filings_get_filings
 from data.db.filings import search_filing_text as filings_search_filing_text
 from data.db.identifiers import get_current_company_id
@@ -744,19 +747,27 @@ def get_short_interest(
 
 
 @mcp.tool()
-def get_facts(ticker: str, as_of: str) -> list[dict[str, object]]:
+async def get_facts(ticker: str, as_of: str) -> list[dict[str, object]]:
     """Return facts for a ticker as of a date (point-in-time safe).
 
     Args:
-        ticker: Ticker symbol.
+        ticker: Ticker symbol, resolved to the company currently holding it.
         as_of: Date string (YYYY-MM-DD) — required, never omitted.
 
     Returns:
-        List of {id, fact_type, statement, confidence, valid_from, valid_until,
-        source_article}.
+        List of {fact_id, fact_type, statement, confidence, valid_from,
+        valid_until, source_article}. Empty list if the ticker doesn't
+        resolve to a tracked company.
     """
-    with _connect() as conn:
-        return get_current_facts(ticker, as_of, conn)
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        company_id = await get_current_company_id(conn, id_type="ticker", id_value=ticker)
+        if company_id is None:
+            return []
+        rows = await facts_get_current_facts(
+            conn, company_id=company_id, as_of=dt.date.fromisoformat(as_of)
+        )
+    return [_jsonify_pg_row(row) for row in rows]
 
 
 @mcp.tool()
@@ -870,7 +881,7 @@ async def save_market_view_tool(
 
 
 @mcp.tool()
-def save_fact(
+async def save_fact(
     ticker: str,
     statement: str,
     fact_type: str,
@@ -882,28 +893,39 @@ def save_fact(
     """Persist a versioned fact for a ticker.
 
     Args:
-        ticker: Ticker symbol.
+        ticker: Ticker symbol, resolved to the company currently holding it.
         statement: One-sentence fact statement.
         fact_type: Free-form category.
-        confidence: 0.0–1.0.
+        confidence: 0.0-1.0.
         valid_from: Date the fact became valid (YYYY-MM-DD).
-        source_article_id: FK to articles.id.
-        supersedes_id: Optional ID of the fact this replaces.
+        source_article_id: FK to articles.article_id, as a string.
+        supersedes_id: Optional ID of the fact this replaces, as a string.
 
     Returns:
-        New fact ID.
+        New fact_id, as a string.
+
+    Raises:
+        ValueError: If ticker does not resolve to a tracked company, or
+            confidence is outside [0, 1].
     """
-    with _connect() as conn:
-        return write_fact(
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        company_id = await get_current_company_id(conn, id_type="ticker", id_value=ticker)
+        if company_id is None:
+            raise ValueError(f"ticker {ticker!r} does not resolve to a tracked company")
+        fact_id = await facts_create_fact(
             conn,
-            ticker=ticker,
+            company_id=company_id,
             statement=statement,
             fact_type=fact_type,
             confidence=confidence,
-            valid_from=valid_from,
-            source_article_id=source_article_id,
-            supersedes_id=supersedes_id,
+            valid_from=dt.date.fromisoformat(valid_from),
+            source_article_id=uuid.UUID(source_article_id),
+            embed=hash_embed,
+            model="hash-ngram",
+            supersedes_id=uuid.UUID(supersedes_id) if supersedes_id else None,
         )
+    return str(fact_id)
 
 
 def _build_llm() -> Callable[[list[dict[str, str]]], str]:

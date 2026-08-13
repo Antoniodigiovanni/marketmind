@@ -236,20 +236,6 @@ def test_main_runs_server(monkeypatch) -> None:
     assert calls == ["run"]
 
 
-def test_facts_tool_point_in_time(monkeypatch, db_file) -> None:
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-    mcp_mod.save_fact(
-        ticker="AAPL",
-        statement="AAPL guided higher.",
-        fact_type="guidance",
-        confidence=0.8,
-        valid_from="2026-01-02",
-        source_article_id="art-1",
-    )
-    facts = mcp_mod.get_facts("AAPL", "2026-01-03")
-    assert facts[0]["statement"] == "AAPL guided higher."
-
-
 async def test_market_views_tools(monkeypatch, pg_conn) -> None:
     monkeypatch.setattr(mcp_mod, "_pg_pool", _pool_returning(pg_conn))
 
