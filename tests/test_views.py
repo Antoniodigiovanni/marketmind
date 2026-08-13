@@ -90,6 +90,18 @@ async def test_get_market_views_filters_by_as_of(pg_conn) -> None:
     assert [v["view_text"] for v in views] == ["new", "old"]
 
 
+async def test_invalid_scope_raises(pg_conn) -> None:
+    with pytest.raises(ValueError, match="scope must be one of"):
+        await save_market_view(
+            pg_conn,
+            as_of="2026-08-04",
+            view_text="x",
+            model="hermes",
+            data_cutoff="2026-08-04",
+            scope="sector",
+        )
+
+
 async def test_ticker_scope_validation(pg_conn) -> None:
     with pytest.raises(ValueError, match="ticker is required"):
         await save_market_view(
@@ -108,6 +120,27 @@ async def test_ticker_scope_validation(pg_conn) -> None:
             model="hermes",
             data_cutoff="2026-08-04",
             ticker="AAPL",
+        )
+
+
+async def test_theme_scope_validation(pg_conn) -> None:
+    with pytest.raises(ValueError, match="theme is required"):
+        await save_market_view(
+            pg_conn,
+            as_of="2026-08-04",
+            view_text="x",
+            model="hermes",
+            data_cutoff="2026-08-04",
+            scope="theme",
+        )
+    with pytest.raises(ValueError, match="theme is only allowed"):
+        await save_market_view(
+            pg_conn,
+            as_of="2026-08-04",
+            view_text="x",
+            model="hermes",
+            data_cutoff="2026-08-04",
+            theme="semiconductors",
         )
 
 
