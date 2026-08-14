@@ -29,6 +29,7 @@ from data.db.identifiers import get_current_company_id, resolve_identifier
 from data.db.init import init_db
 from data.db.listings import get_current_listing
 from data.db.pool import open_pool
+from data.db.runs import list_recent_runs
 from data.sources.rss import NEWS_RECORD_FIELDS
 from data.universe.loader import get_universe
 
@@ -50,28 +51,6 @@ FILINGS_13F_GLOB = str(ROOT_DIR / "data" / "raw" / "13f" / "**" / "*.parquet")
 # a producer/consumer drift fails the suite instead of the live tool.
 NEWS_COLUMNS = ["url", "source", "ticker", "published_at", "title", "summary"]
 assert set(NEWS_COLUMNS) <= set(NEWS_RECORD_FIELDS)
-
-# Columns of agent_runs surfaced by get_ingest_status, in report order.
-AGENT_RUN_COLUMNS = [
-    "id",
-    "run_date",
-    "job_type",
-    "started_at",
-    "finished_at",
-    "articles_fetched",
-    "articles_skipped",
-    "articles_redundant",
-    "facts_written",
-    "facts_superseded",
-    "profiles_built",
-    "profiles_failed",
-    "filings_fetched",
-    "filings_parsed",
-    "filings_skipped",
-    "insider_rows",
-    "form13f_rows",
-    "error",
-]
 
 
 def _13f_partitions_exist() -> bool:
@@ -969,13 +948,6 @@ def _build_llm() -> Callable[[list[dict[str, str]]], str]:
     return ChatClient().complete
 
 
-def _build_vector_store() -> object:
-    """Return the fact-embedding store used to retrieve similar past facts."""
-    from agent.embeddings import ChromaVectorStore, HashEmbeddingFunction
-
-    return ChromaVectorStore(embedding_function=HashEmbeddingFunction())
-
-
 def _build_edgar_client() -> object:
     """Return the EDGAR client used by the filings refresh."""
     from data.sources.sec import EdgardClient
@@ -1038,7 +1010,7 @@ def run_ingest(
         was started (bad date, unknown tickers, missing API key, or another
         run already in flight).
     """
-    from agent.ingestion import _default_profile_builder, run_daily_ingest
+    from agent.ingestion import _default_profile_builder, run_daily_ingest_with_pool
 
     if not _valid_date(date):
         return f"Invalid date '{date}': expected YYYY-MM-DD."
@@ -1049,26 +1021,21 @@ def run_ingest(
 
     try:
         llm = _build_llm()
-        vector_store = _build_vector_store()
     except Exception as exc:  # noqa: BLE001 - reported to the caller, not raised
         return f"Cannot start ingest: {exc}"
 
     def work(progress: jobs.ProgressCallback) -> dict[str, int]:
-        conn = init_db(DB_PATH)
-        try:
-            return run_daily_ingest(
+        return asyncio.run(
+            run_daily_ingest_with_pool(
                 date,
-                conn=conn,
                 universe=universe,
                 llm=llm,
                 profile_builder=_default_profile_builder(llm),
                 backfill=backfill,
                 profiles_only=profiles_only,
-                vector_store=vector_store,
                 progress=progress,
             )
-        finally:
-            conn.close()
+        )
 
     try:
         run_id = jobs.start_run("news", work)
@@ -1146,7 +1113,7 @@ def run_filings_refresh(run_date: str = "") -> str:
 
 
 @mcp.tool()
-def get_ingest_status(limit: int = 5) -> dict[str, object]:
+async def get_ingest_status(limit: int = 5) -> dict[str, object]:
     """Report the in-flight job run, if any, and recent run history.
 
     Args:
@@ -1157,23 +1124,21 @@ def get_ingest_status(limit: int = 5) -> dict[str, object]:
         through this server — run_id, job_type, state ('running',
         'succeeded' or 'failed'), started_at, finished_at, elapsed_seconds,
         tickers_done, tickers_total, counts, error — or None if this server
-        has started none. 'history' holds the most recent agent_runs rows,
-        newest first, including runs started by the scheduled jobs.
+        has started none. 'history' holds the most recent agent_runs rows
+        from PostgreSQL, newest first — run_id, run_date, job_type, status,
+        started_at, finished_at, counters (a nested dict of per-job counts,
+        not flattened into fixed keys), error. Only 'news'-job runs appear
+        here today; 'filings' runs are still logged to a separate DuckDB
+        table pending its own cutover, so they will not show up in this
+        history until that lands.
     """
     record = jobs.current_run()
-    with _connect() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT {", ".join(AGENT_RUN_COLUMNS)}
-            FROM agent_runs
-            ORDER BY started_at DESC
-            LIMIT ?
-            """,
-            [limit],
-        ).fetchall()
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        rows = await list_recent_runs(conn, limit=limit)
     return {
         "run": record.snapshot() if record else None,
-        "history": _rows_to_dicts(rows, AGENT_RUN_COLUMNS),
+        "history": [_jsonify_pg_row(row) for row in rows],
     }
 
 
