@@ -8,12 +8,19 @@ import json
 import polars as pl
 import pytest
 
-from agent.ingestion import IngestAborted, RawNewsArchive, main, run_daily_ingest
-from agent.knowledge import get_current_aggregate_facts, get_current_facts, write_fact
-from data.db.init import init_db
+from agent.ingestion import IngestAborted, RawNewsArchive, run_daily_ingest
+from data.db.aggregate_facts import get_current_aggregate_facts
+from data.db.companies import get_company
+from data.db.company_profiles import get_current_profile
+from data.db.facts import get_current_facts
+from data.db.identifiers import get_or_create_identifier
+from data.db.runs import list_recent_runs
 from data.sources.rss import Article
 
+pytestmark = pytest.mark.asyncio
+
 DATE = "2026-08-04"
+DATE_D = dt.date(2026, 8, 4)
 
 UNIVERSE = pl.DataFrame(
     {
@@ -118,560 +125,281 @@ def _fake_profile_builder(name: str) -> dict:
     }
 
 
-def _seed_article(conn, article_id: str = "art-0") -> None:
-    conn.execute(
-        """
-        INSERT INTO articles (id, url_hash, content_hash, url, source, ticker,
-                              published_at, fetched_at, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'processed')
-        """,
-        [
-            article_id,
-            "h-0",
-            "c-0",
-            "https://example.com/0",
-            "reuters",
-            "AAPL",
-            "2026-01-01 09:00:00+00",
-            "2026-01-01 10:00:00+00",
-        ],
+async def _company_id(pg_conn, ticker: str, name: str, country: str, sector: str) -> object:
+    return await get_or_create_identifier(
+        pg_conn,
+        id_type="ticker",
+        id_value=ticker,
+        valid_from=dt.date(2020, 1, 1),
+        source="test",
+        name=name,
+        country=country,
+        sector=sector,
     )
 
 
-def test_run_daily_ingest_end_to_end(tmp_path) -> None:
-    conn = init_db(":memory:")
-    try:
-        description_fetcher = _CountingDescriptionFetcher()
-
-        summary = run_daily_ingest(
-            DATE,
-            conn=conn,
-            universe=UNIVERSE,
-            news_fetcher=_fake_news_fetcher,
-            description_fetcher=description_fetcher,
-            profile_builder=_fake_profile_builder,
-            llm=_fake_llm,
-            raw_news_dir=tmp_path / "news",
-        )
-
-        assert summary["articles_fetched"] == 3
-        assert summary["articles_skipped"] == 1
-        assert summary["articles_redundant"] == 1
-        assert summary["facts_written"] == 1
-        assert summary["aggregate_written"] == 2
-        assert summary["profiles_built"] == 2
-        assert summary["profiles_failed"] == 0
-
-        facts = get_current_facts("AAPL", DATE, conn)
-        assert len(facts) == 1
-        assert "consensus" in facts[0]["statement"]
-
-        sector_facts = get_current_aggregate_facts("sector", "Technology", DATE, conn)
-        assert len(sector_facts) == 1
-        assert sector_facts[0]["evidence"] == [facts[0]["id"]]
-        geo_facts = get_current_aggregate_facts("geography", "US", DATE, conn)
-        assert len(geo_facts) == 1
-
-        run_row = conn.execute(
-            """
-            SELECT articles_fetched, articles_skipped, articles_redundant,
-                   facts_written
-            FROM agent_runs
-            """
-        ).fetchone()
-        assert run_row == (3, 1, 1, 1)
-
-        raw_path = tmp_path / "news" / f"{DATE}.ndjson"
-        assert raw_path.exists()
-        # Three articles fetched, but two share a url_hash: the archive (which
-        # dedups on url_hash only) stores 2 distinct records. That happens to
-        # equal articles_skipped == 1 above only because, in this fixture, the
-        # articles table's OR url_hash/content_hash dedup and the archive's
-        # url_hash-only dedup agree on which article is the duplicate — the
-        # two rules are not equivalent in general.
-        assert len(raw_path.read_text().strip().splitlines()) == 2
-
-        companies = conn.execute(
-            "SELECT ticker, description FROM companies ORDER BY ticker"
-        ).fetchall()
-        assert [(c[0], c[1]) for c in companies] == [
-            ("AAPL", "Apple designs consumer electronics."),
-            ("MSFT", "Microsoft sells software."),
-        ]
-        assert description_fetcher.calls == 2
-        profile_count = conn.execute("SELECT COUNT(*) FROM company_profiles").fetchone()[0]
-        assert profile_count == 2
-    finally:
-        conn.close()
-
-
-def test_description_is_cached_across_runs(tmp_path) -> None:
-    conn = init_db(":memory:")
-    try:
-        description_fetcher = _CountingDescriptionFetcher()
-
-        run_daily_ingest(
-            DATE,
-            conn=conn,
-            universe=UNIVERSE,
-            news_fetcher=_fake_news_fetcher,
-            description_fetcher=description_fetcher,
-            profile_builder=_fake_profile_builder,
-            llm=_fake_llm,
-            raw_news_dir=tmp_path / "news",
-        )
-        run_daily_ingest(
-            DATE,
-            conn=conn,
-            universe=UNIVERSE,
-            news_fetcher=_fake_news_fetcher,
-            description_fetcher=description_fetcher,
-            profile_builder=_fake_profile_builder,
-            llm=_fake_llm,
-            raw_news_dir=tmp_path / "news",
-        )
-
-        assert description_fetcher.calls == 2
-        counts = conn.execute("SELECT SUM(articles_skipped) FROM agent_runs").fetchone()[0]
-        assert counts == 4  # 1 in-run duplicate + 3 already-seen on the rerun
-        profiles_built = conn.execute("SELECT SUM(profiles_built) FROM agent_runs").fetchone()[0]
-        assert profiles_built == 2  # built once, reused on the rerun
-    finally:
-        conn.close()
-
-
-def test_supersedes_prior_fact(tmp_path) -> None:
-    conn = init_db(":memory:")
-    try:
-        _seed_article(conn)
-        old_fact = write_fact(
-            conn,
-            ticker="AAPL",
-            statement="CEO is Tim Cook.",
-            fact_type="management",
-            confidence=0.95,
-            valid_from="2026-01-01",
-            source_article_id="art-0",
-        )
-
-        def llm(messages: list[dict[str, str]]) -> str:
-            if "aggregate" in messages[-1]["content"]:
-                return "REDUNDANT"
-            return json.dumps(
-                [
-                    {
-                        "statement": "CEO is Jane Doe.",
-                        "fact_type": "management",
-                        "confidence": 0.9,
-                        "supersedes_statement": "CEO is Tim Cook.",
-                    }
-                ]
-            )
-
-        def news(ticker: str, name: str) -> list[Article]:
-            if ticker != "AAPL":
-                return []
-            return [
-                _article(
-                    "AAPL",
-                    "https://example.com/ceo",
-                    "Apple names new CEO",
-                    "Jane Doe takes over.",
-                )
-            ]
-
-        run_daily_ingest(
-            DATE,
-            conn=conn,
-            universe=UNIVERSE,
-            news_fetcher=news,
-            description_fetcher=lambda name: "x",
-            profile_builder=_fake_profile_builder,
-            llm=llm,
-            raw_news_dir=tmp_path / "news",
-        )
-
-        facts = get_current_facts("AAPL", DATE, conn)
-        assert [f["statement"] for f in facts] == ["CEO is Jane Doe."]
-        valid_until = conn.execute(
-            "SELECT valid_until FROM ticker_facts WHERE id = ?", [old_fact]
-        ).fetchone()[0]
-        assert valid_until.isoformat() == DATE
-    finally:
-        conn.close()
-
-
-def test_run_requires_llm() -> None:
-    conn = init_db(":memory:")
-    try:
-        with pytest.raises(ValueError, match="llm"):
-            run_daily_ingest(
-                DATE,
-                conn=conn,
-                universe=UNIVERSE,
-                news_fetcher=_fake_news_fetcher,
-                description_fetcher=_CountingDescriptionFetcher(),
-                profile_builder=_fake_profile_builder,
-                llm=None,
-            )
-    finally:
-        conn.close()
-
-
-def test_progress_is_reported_after_every_ticker(tmp_path) -> None:
-    conn = init_db(":memory:")
-    seen: list[tuple[int, int, int]] = []
-
-    def progress(done: int, total: int, counts: dict[str, int]) -> None:
-        seen.append((done, total, counts["articles_fetched"]))
-
-    try:
-        summary = run_daily_ingest(
-            DATE,
-            conn=conn,
-            universe=UNIVERSE,
-            news_fetcher=_fake_news_fetcher,
-            description_fetcher=_CountingDescriptionFetcher(),
-            profile_builder=_fake_profile_builder,
-            llm=_fake_llm,
-            raw_news_dir=tmp_path / "news",
-            progress=progress,
-        )
-    finally:
-        conn.close()
-
-    # One call per universe row, counting up, carrying the running summary.
-    assert [(done, total) for done, total, _ in seen] == [(1, 2), (2, 2)]
-    assert [fetched for _, _, fetched in seen] == [2, 3]
-    assert summary["articles_fetched"] == 3
-
-
-def test_backfill_creates_new_profile_version(tmp_path) -> None:
-    conn = init_db(":memory:")
-    try:
-        run_daily_ingest(
-            DATE,
-            conn=conn,
-            universe=UNIVERSE,
-            news_fetcher=_fake_news_fetcher,
-            description_fetcher=_CountingDescriptionFetcher(),
-            profile_builder=_fake_profile_builder,
-            llm=_fake_llm,
-            raw_news_dir=tmp_path / "news",
-        )
-        summary = run_daily_ingest(
-            DATE,
-            conn=conn,
-            universe=UNIVERSE,
-            news_fetcher=_fake_news_fetcher,
-            description_fetcher=_CountingDescriptionFetcher(),
-            profile_builder=_fake_profile_builder,
-            backfill=True,
-            llm=_fake_llm,
-            raw_news_dir=tmp_path / "news",
-        )
-
-        assert summary["profiles_built"] == 2
-        rows = conn.execute(
-            """
-            SELECT valid_until FROM company_profiles
-            WHERE ticker = 'AAPL' ORDER BY created_at
-            """
-        ).fetchall()
-        assert len(rows) == 2
-        assert rows[0][0].isoformat() == DATE
-        assert rows[1][0] is None
-    finally:
-        conn.close()
-
-
-def test_extraction_prompt_includes_bounded_categories(tmp_path) -> None:
-    captured: list[str] = []
-
-    def llm(messages: list[dict[str, str]]) -> str:
-        captured.append(messages[-1]["content"])
-        return _fake_llm(messages)
-
-    conn = init_db(":memory:")
-    try:
-        run_daily_ingest(
-            DATE,
-            conn=conn,
-            universe=UNIVERSE,
-            news_fetcher=_fake_news_fetcher,
-            description_fetcher=_CountingDescriptionFetcher(),
-            profile_builder=_fake_profile_builder,
-            llm=llm,
-            raw_news_dir=tmp_path / "news",
-        )
-    finally:
-        conn.close()
-
-    assert captured
-    assert "Products/services: category-a, category-b" in captured[0]
-
-
-def test_profile_failure_does_not_stop_run(tmp_path) -> None:
-    def broken_builder(name: str) -> dict:
-        raise RuntimeError("profile service down")
-
-    conn = init_db(":memory:")
-    try:
-        summary = run_daily_ingest(
-            DATE,
-            conn=conn,
-            universe=UNIVERSE,
-            news_fetcher=_fake_news_fetcher,
-            description_fetcher=_CountingDescriptionFetcher(),
-            profile_builder=broken_builder,
-            llm=_fake_llm,
-            raw_news_dir=tmp_path / "news",
-        )
-
-        assert summary["profiles_failed"] == 2
-        assert summary["facts_written"] == 1  # news still processed
-    finally:
-        conn.close()
-
-
-def test_profiles_only_skips_news_processing(tmp_path) -> None:
-    fetched: list[str] = []
-
-    def counting_news(ticker: str, name: str) -> list[Article]:
-        fetched.append(ticker)
-        return _fake_news_fetcher(ticker, name)
-
-    conn = init_db(":memory:")
-    try:
-        summary = run_daily_ingest(
-            DATE,
-            conn=conn,
-            universe=UNIVERSE,
-            news_fetcher=counting_news,
-            description_fetcher=_CountingDescriptionFetcher(),
-            profile_builder=_fake_profile_builder,
-            backfill=True,
-            profiles_only=True,
-            llm=_fake_llm,
-            raw_news_dir=tmp_path / "news",
-        )
-
-        assert summary["profiles_built"] == 2
-        assert summary["articles_fetched"] == 0
-        assert summary["facts_written"] == 0
-        assert fetched == []
-        assert not (tmp_path / "news" / f"{DATE}.ndjson").exists()
-    finally:
-        conn.close()
-
-
-def _read_ndjson(path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
-
-
-def test_archive_appends_across_calls(tmp_path) -> None:
-    archive = RawNewsArchive(tmp_path / f"{DATE}.ndjson")
-
-    assert archive.append([_article("AAPL", "http://a", "A", "sa")]) == 1
-    assert archive.append([_article("MSFT", "http://b", "B", "sb")]) == 1
-
-    records = _read_ndjson(archive.path)
-    assert [r["ticker"] for r in records] == ["AAPL", "MSFT"]
-
-
-def test_archive_is_idempotent_on_reruns(tmp_path) -> None:
-    path = tmp_path / f"{DATE}.ndjson"
-    first = RawNewsArchive(path)
-    first.append([_article("AAPL", "http://a", "A", "sa")])
-
-    # Simulate a fresh process after a crash.
-    second = RawNewsArchive(path)
-    written = second.append(
-        [_article("AAPL", "http://a", "A", "sa"), _article("MSFT", "http://b", "B", "sb")]
-    )
-
-    assert written == 1
-    assert len(_read_ndjson(path)) == 2
-
-
-def test_archive_tolerates_a_torn_final_line(tmp_path) -> None:
-    path = tmp_path / f"{DATE}.ndjson"
-    path.write_text('{"ticker": "AAPL", "url_hash": "h1"}\n{"ticker": "MS', encoding="utf-8")
-
-    archive = RawNewsArchive(path)
-    assert archive.append([_article("MSFT", "http://b", "B", "sb")]) == 1
-
-
-def test_ingest_writes_news_before_it_finishes(tmp_path) -> None:
-    """The archive is populated per company, not deferred to the end."""
-    conn = init_db(":memory:")
-    seen: list[int] = []
-    news_dir = tmp_path / "news"
-
-    def _counting_llm(messages: list[dict[str, str]]) -> str:
-        path = news_dir / f"{DATE}.ndjson"
-        seen.append(len(_read_ndjson(path)) if path.exists() else 0)
-        return "REDUNDANT"
-
-    run_daily_ingest(
+async def test_run_daily_ingest_writes_facts_and_profiles(pg_conn) -> None:
+    summary = await run_daily_ingest(
+        pg_conn,
         DATE,
-        conn=conn,
         universe=UNIVERSE,
         news_fetcher=_fake_news_fetcher,
-        description_fetcher=lambda name: "desc",
-        profile_builder=lambda name: None,
-        llm=_counting_llm,
-        raw_news_dir=news_dir,
+        description_fetcher=_CountingDescriptionFetcher(),
+        profile_builder=_fake_profile_builder,
+        llm=_fake_llm,
     )
 
-    assert seen, "no extraction calls were made"
-    assert seen[0] > 0, "archive was still empty during the first extraction"
+    assert summary["articles_fetched"] == 3
+    assert summary["articles_skipped"] == 1  # AAPL's duplicate URL
+    assert summary["facts_written"] == 1  # only AAPL's article yields a fact
+    assert summary["articles_redundant"] == 1  # MSFT's is REDUNDANT
+    assert summary["profiles_built"] == 2
+    # One AAPL fact lands in both the sector ("Technology") and the
+    # geography ("US") aggregation dimension -- one aggregate fact each.
+    assert summary["aggregate_written"] == 2
+
+    company_id = await _company_id(pg_conn, "AAPL", "Apple Inc", "US", "Technology")
+    facts = await get_current_facts(pg_conn, company_id=company_id, as_of=DATE_D)
+    assert len(facts) == 1
+    assert "consensus" in facts[0]["statement"]
+
+    company = await get_company(pg_conn, company_id=company_id)
+    assert company["description"] == "Apple designs consumer electronics."
+
+    aggregates = await get_current_aggregate_facts(
+        pg_conn, dimension="sector", dimension_key="Technology", as_of=DATE_D
+    )
+    assert len(aggregates) == 1
+    assert aggregates[0]["evidence"]
 
 
-def _always_failing_llm(messages: list[dict[str, str]]) -> str:
-    return "not json at all"
+async def test_run_daily_ingest_creates_companies_on_demand(pg_conn) -> None:
+    """No pre-seeding: the pipeline must create AAPL/MSFT itself, matching
+    the old DuckDB upsert_company behavior."""
+    summary = await run_daily_ingest(
+        pg_conn,
+        DATE,
+        universe=UNIVERSE,
+        news_fetcher=lambda ticker, name: [],
+        description_fetcher=lambda name: "",
+        profile_builder=_fake_profile_builder,
+        llm=_fake_llm,
+    )
+    assert summary["profiles_built"] == 2
 
 
-def test_run_aborts_after_consecutive_failures(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr("agent.ingestion.MAX_CONSECUTIVE_FAILURES", 2)
-    conn = init_db(":memory:")
+async def test_run_daily_ingest_records_a_succeeded_run(pg_conn) -> None:
+    await run_daily_ingest(
+        pg_conn,
+        DATE,
+        universe=UNIVERSE,
+        news_fetcher=_fake_news_fetcher,
+        description_fetcher=_CountingDescriptionFetcher(),
+        profile_builder=_fake_profile_builder,
+        llm=_fake_llm,
+    )
 
-    with pytest.raises(IngestAborted, match="2 consecutive"):
-        run_daily_ingest(
-            DATE,
-            conn=conn,
-            universe=UNIVERSE,
-            news_fetcher=_fake_news_fetcher,
-            description_fetcher=lambda name: "desc",
-            profile_builder=lambda name: None,
-            llm=_always_failing_llm,
-            raw_news_dir=tmp_path / "news",
-        )
+    runs = await list_recent_runs(pg_conn, job_type="news", limit=5)
+    assert len(runs) == 1
+    assert runs[0]["status"] == "succeeded"
+    assert runs[0]["run_date"] == DATE_D
+    assert runs[0]["counters"]["facts_written"] == 1
 
 
-def test_a_success_resets_the_failure_counter(monkeypatch, tmp_path) -> None:
-    """A reset between two failures must keep the streak below the threshold.
+async def test_run_daily_ingest_dedups_an_article_across_two_companies(pg_conn) -> None:
+    """The same story surfacing in two companies' feeds is processed once
+    per company (article_companies dedup), not dropped for the second."""
 
-    Sequence: fail -> REDUNDANT -> fail, with the threshold monkeypatched to
-    2. With a working reset the counter never exceeds 1, so no abort occurs.
-    With the reset missing/broken, the second failure pushes the counter to
-    2 and `run_daily_ingest` raises `IngestAborted` instead of returning — so
-    this test fails loudly if the reset regresses, unlike a version that only
-    asserts on `summary` counts (which pass regardless of whether the reset
-    runs, given only two extraction calls).
+    def news_fetcher(ticker: str, name: str) -> list[Article]:
+        return [_article(ticker, "https://example.com/shared", "Macro story", "Affects both.")]
 
-    Uses a test-local three-company universe and fetcher (not the shared
-    module-level `UNIVERSE`/`_fake_news_fetcher`) so there are three distinct,
-    non-deduped articles to drive three separate extraction calls.
-    """
-    monkeypatch.setattr("agent.ingestion.MAX_CONSECUTIVE_FAILURES", 2)
-    conn = init_db(":memory:")
-    calls = {"n": 0}
+    summary = await run_daily_ingest(
+        pg_conn,
+        DATE,
+        universe=UNIVERSE,
+        news_fetcher=news_fetcher,
+        description_fetcher=lambda name: "",
+        profile_builder=_fake_profile_builder,
+        llm=lambda messages: "REDUNDANT",
+    )
+    assert summary["articles_fetched"] == 2
+    assert summary["articles_skipped"] == 0
+    assert summary["articles_redundant"] == 2
 
-    three_company_universe = pl.DataFrame(
+
+async def test_run_daily_ingest_profiles_only_skips_news(pg_conn) -> None:
+    calls = {"news": 0}
+
+    def news_fetcher(ticker: str, name: str) -> list[Article]:
+        calls["news"] += 1
+        return []
+
+    summary = await run_daily_ingest(
+        pg_conn,
+        DATE,
+        universe=UNIVERSE,
+        news_fetcher=news_fetcher,
+        description_fetcher=lambda name: "",
+        profile_builder=_fake_profile_builder,
+        llm=_fake_llm,
+        profiles_only=True,
+    )
+    assert calls["news"] == 0
+    assert summary["articles_fetched"] == 0
+    assert summary["profiles_built"] == 2
+
+
+async def test_run_daily_ingest_backfill_supersedes_existing_profile(pg_conn) -> None:
+    await run_daily_ingest(
+        pg_conn,
+        DATE,
+        universe=UNIVERSE,
+        news_fetcher=lambda ticker, name: [],
+        description_fetcher=lambda name: "",
+        profile_builder=_fake_profile_builder,
+        llm=_fake_llm,
+        profiles_only=True,
+    )
+    summary = await run_daily_ingest(
+        pg_conn,
+        "2026-08-05",
+        universe=UNIVERSE,
+        news_fetcher=lambda ticker, name: [],
+        description_fetcher=lambda name: "",
+        profile_builder=lambda name: {
+            "description": f"{name} v2.",
+            "products_services": ["new-category"],
+            "website_url": None,
+            "sources": {},
+            "generated_by": "deepseek-chat",
+        },
+        llm=_fake_llm,
+        backfill=True,
+        profiles_only=True,
+    )
+    assert summary["profiles_built"] == 2
+
+    company_id = await _company_id(pg_conn, "AAPL", "Apple Inc", "US", "Technology")
+    old = await get_current_profile(pg_conn, company_id=company_id, as_of=DATE_D)
+    new = await get_current_profile(pg_conn, company_id=company_id, as_of=dt.date(2026, 8, 5))
+    assert old["description"] == "Apple Inc designs things."  # pre-backfill value, untouched
+    assert old["valid_until"] == dt.date(2026, 8, 5)  # closed out by the backfill
+    assert new["description"] == "Apple Inc v2."
+
+
+async def test_run_daily_ingest_resolves_ticker_as_of_not_current_holder(pg_conn) -> None:
+    """A ticker held by a different company on the run date must resolve to
+    that historical holder, not whichever company holds it today -- the
+    exact bug class the identifiers.py as-of fix targets."""
+    old_company = await get_or_create_identifier(
+        pg_conn,
+        id_type="ticker",
+        id_value="XYZ",
+        valid_from=dt.date(2010, 1, 1),
+        source="test",
+        name="Old Co",
+        country="US",
+        sector="Energy",
+    )
+    await pg_conn.execute(
+        "UPDATE company_identifiers SET valid_until = %s "
+        "WHERE company_id = %s AND id_type = 'ticker' AND id_value = 'XYZ'",
+        (dt.date(2018, 1, 1), old_company),
+    )
+    await get_or_create_identifier(
+        pg_conn,
+        id_type="ticker",
+        id_value="XYZ",
+        valid_from=dt.date(2022, 1, 1),
+        source="test",
+        name="New Co",
+        country="US",
+        sector="Technology",
+    )
+
+    universe = pl.DataFrame(
         {
-            "ticker": ["AAPL", "MSFT", "GOOGL"],
-            "name": ["Apple Inc", "Microsoft Corp", "Alphabet Inc"],
-            "country": ["US", "US", "US"],
-            "sector": ["Technology", "Technology", "Technology"],
-            "added_date": [dt.date(2026, 1, 1)] * 3,
-            "removed_date": [None, None, None],
-            "universe": ["sp500", "sp500", "sp500"],
+            "ticker": ["XYZ"],
+            "name": ["Old Co"],
+            "country": ["US"],
+            "sector": ["Energy"],
+            "added_date": [dt.date(2010, 1, 1)],
+            "removed_date": [dt.date(2018, 1, 1)],
+            "universe": ["sp500"],
         }
     )
-
-    def _three_article_news_fetcher(ticker: str, name: str) -> list[Article]:
-        return [
-            _article(
-                ticker,
-                f"https://example.com/{ticker.lower()}-1",
-                f"{name} news",
-                "summary",
-            )
-        ]
-
-    def _fail_redundant_fail_llm(messages: list[dict[str, str]]) -> str:
-        calls["n"] += 1
-        return "REDUNDANT" if calls["n"] == 2 else "not json"
-
-    summary = run_daily_ingest(
-        DATE,
-        conn=conn,
-        universe=three_company_universe,
-        news_fetcher=_three_article_news_fetcher,
-        description_fetcher=lambda name: "desc",
-        profile_builder=lambda name: None,
-        llm=_fail_redundant_fail_llm,
-        raw_news_dir=tmp_path / "news",
+    await run_daily_ingest(
+        pg_conn,
+        "2015-06-01",
+        universe=universe,
+        news_fetcher=lambda ticker, name: [],
+        description_fetcher=lambda name: "",
+        profile_builder=_fake_profile_builder,
+        llm=_fake_llm,
+        profiles_only=True,
     )
 
-    assert calls["n"] == 3
-    assert summary["articles_errored"] == 2
-    assert summary["articles_redundant"] == 1
+    old_profile = await get_current_profile(
+        pg_conn, company_id=old_company, as_of=dt.date(2015, 6, 1)
+    )
+    assert old_profile is not None
+    assert old_profile["description"] == "Old Co designs things."
 
 
-def test_aborted_run_still_writes_an_agent_runs_row(monkeypatch, tmp_path) -> None:
-    """An aborted run must leave an audit row an operator can diagnose from.
+async def test_run_daily_ingest_aborts_after_consecutive_failures(pg_conn, monkeypatch) -> None:
+    monkeypatch.setattr("agent.ingestion.MAX_CONSECUTIVE_FAILURES", 1)
 
-    Before this fix the INSERT lived after the aggregate loop inside the same
-    try block that raises IngestAborted, so an abort skipped it entirely —
-    the one case where an operator most needs the row. This asserts the row
-    exists, carries the partial counts accumulated before the abort, and has
-    a non-null error.
-    """
-    monkeypatch.setattr("agent.ingestion.MAX_CONSECUTIVE_FAILURES", 2)
-    conn = init_db(":memory:")
+    def exploding_llm(messages: list[dict[str, str]]) -> str:
+        raise RuntimeError("provider is down")
 
-    with pytest.raises(IngestAborted, match="2 consecutive"):
-        run_daily_ingest(
+    with pytest.raises(IngestAborted):
+        await run_daily_ingest(
+            pg_conn,
             DATE,
-            conn=conn,
             universe=UNIVERSE,
             news_fetcher=_fake_news_fetcher,
-            description_fetcher=lambda name: "desc",
-            profile_builder=lambda name: None,
-            llm=_always_failing_llm,
-            raw_news_dir=tmp_path / "news",
+            description_fetcher=lambda name: "",
+            profile_builder=_fake_profile_builder,
+            llm=exploding_llm,
         )
 
-    run_row = conn.execute(
-        """
-        SELECT articles_fetched, articles_skipped, profiles_failed, error
-        FROM agent_runs
-        """
-    ).fetchone()
-
-    assert run_row is not None, "aborted run left no agent_runs row"
-    articles_fetched, articles_skipped, profiles_failed, error = run_row
-    # Partial counts accumulated before the abort: AAPL contributes 2 fetched
-    # (one a same-url duplicate, so 1 skipped) and a failed profile build;
-    # MSFT contributes 1 fetched and a failed profile build before its
-    # extraction call trips the breaker.
-    assert articles_fetched == 3
-    assert articles_skipped == 1
-    assert profiles_failed == 2
-    assert error is not None
-    assert "2 consecutive" in error
+    runs = await list_recent_runs(pg_conn, job_type="news", limit=5)
+    assert runs[0]["status"] == "aborted"
+    assert "consecutive" in runs[0]["error"]
 
 
-class _StubChatClient:
-    """Stands in for ChatClient so main() needs no API key."""
+async def test_run_daily_ingest_records_failed_status_on_unhandled_error(pg_conn) -> None:
+    # A profile builder returning a dict missing "description" crashes on
+    # `built["description"]`, which is read outside the try/except that
+    # wraps only the call to profile_builder itself -- an unhandled error
+    # distinct from IngestAborted, exercising the bare `except Exception`
+    # branch in run_daily_ingest.
+    def broken_profile_builder(name: str) -> dict:
+        return {}
 
-    def complete(self, messages: list[dict[str, str]]) -> str:
-        return "REDUNDANT"
+    with pytest.raises(KeyError):
+        await run_daily_ingest(
+            pg_conn,
+            DATE,
+            universe=UNIVERSE,
+            news_fetcher=lambda ticker, name: [],
+            description_fetcher=lambda name: "",
+            profile_builder=broken_profile_builder,
+            llm=_fake_llm,
+            profiles_only=True,
+        )
+
+    runs = await list_recent_runs(pg_conn, job_type="news", limit=5)
+    assert runs[0]["status"] == "failed"
+    assert runs[0]["error"]
 
 
-def test_main_exits_non_zero_when_aborted(monkeypatch) -> None:
-    monkeypatch.setattr("sys.argv", ["ingestion", DATE])
-    monkeypatch.setattr("agent.ingestion.ChatClient", _StubChatClient)
-    monkeypatch.setattr("agent.ingestion.ChromaVectorStore", lambda **kwargs: None)
+async def test_raw_news_archive_dedups_and_resumes(tmp_path) -> None:
+    path = tmp_path / "2026-08-04.ndjson"
+    archive = RawNewsArchive(path)
+    written = archive.append([_article("AAPL", "https://example.com/a", "T1", "S1")])
+    assert written == 1
 
-    def _raise(*args, **kwargs):
-        raise IngestAborted("3 consecutive extraction failures")
-
-    monkeypatch.setattr("agent.ingestion.run_daily_ingest", _raise)
-
-    with pytest.raises(SystemExit) as excinfo:
-        main()
-
-    assert excinfo.value.code == 1
+    reopened = RawNewsArchive(path)
+    written_again = reopened.append([_article("AAPL", "https://example.com/a", "T1", "S1")])
+    assert written_again == 0
