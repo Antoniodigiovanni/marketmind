@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
-from contextlib import asynccontextmanager
 
-import duckdb
 import polars as pl
 import pytest
 
@@ -35,7 +33,7 @@ async def _mcp_listing(pg_conn, symbol: str = "AAPL") -> uuid.UUID:
 
 
 def _pool_returning(pg_conn):
-    """Build a fake `_get_pool` whose `.connection()` yields the test's own
+    """Build a fake `_pg_pool` whose `.connection()` yields the test's own
     transaction-scoped connection, so tool calls run inside the same
     rolled-back transaction as the rest of the test."""
 
@@ -50,10 +48,10 @@ def _pool_returning(pg_conn):
         def connection(self):
             return _FakeConnCtx()
 
-    async def fake_get_pool():
+    async def fake_pg_pool():
         return _FakePool()
 
-    return fake_get_pool
+    return fake_pg_pool
 
 
 def _article(**overrides: str) -> Article:
@@ -113,7 +111,7 @@ async def test_get_prices_returns_rows_for_resolved_symbol(pg_conn, monkeypatch)
             },
         ],
     )
-    monkeypatch.setattr(mcp_mod, "_get_pool", _pool_returning(pg_conn))
+    monkeypatch.setattr(mcp_mod, "_pg_pool", _pool_returning(pg_conn))
 
     rows = await mcp_mod.get_prices("AAPL", start="2026-08-01")
     assert len(rows) == 2
@@ -122,7 +120,7 @@ async def test_get_prices_returns_rows_for_resolved_symbol(pg_conn, monkeypatch)
 
 
 async def test_get_prices_unknown_ticker_returns_empty(pg_conn, monkeypatch) -> None:
-    monkeypatch.setattr(mcp_mod, "_get_pool", _pool_returning(pg_conn))
+    monkeypatch.setattr(mcp_mod, "_pg_pool", _pool_returning(pg_conn))
     assert await mcp_mod.get_prices("NOPE") == []
 
 
@@ -134,14 +132,14 @@ async def test_get_volatility_stock_reads_from_postgres(pg_conn, monkeypatch) ->
             {"listing_id": listing_id, "date": dt.date(2026, 8, 4), "rv_20d": 18.5, "rv_60d": 21.0}
         ],
     )
-    monkeypatch.setattr(mcp_mod, "_get_pool", _pool_returning(pg_conn))
+    monkeypatch.setattr(mcp_mod, "_pg_pool", _pool_returning(pg_conn))
 
     rows = await mcp_mod.get_volatility("AAPL")
     assert rows[0]["rv_20d"] == 18.5
 
 
 async def test_get_volatility_index_reads_from_prices(pg_conn, monkeypatch) -> None:
-    monkeypatch.setattr(mcp_mod, "_get_pool", _pool_returning(pg_conn))
+    monkeypatch.setattr(mcp_mod, "_pg_pool", _pool_returning(pg_conn))
     listing_id = await ensure_index_listing(pg_conn, symbol="^VIX", name="CBOE Volatility Index")
     await upsert_prices(
         pg_conn,
@@ -211,7 +209,7 @@ def test_get_news_since_filter_and_empty_search(tmp_path, monkeypatch) -> None:
 
 
 async def test_get_volatility_unresolved_ticker_returns_empty(pg_conn, monkeypatch) -> None:
-    monkeypatch.setattr(mcp_mod, "_get_pool", _pool_returning(pg_conn))
+    monkeypatch.setattr(mcp_mod, "_pg_pool", _pool_returning(pg_conn))
     assert await mcp_mod.get_volatility("NOPE") == []
 
 
@@ -224,7 +222,7 @@ async def test_get_volatility_date_window(pg_conn, monkeypatch) -> None:
             {"listing_id": listing_id, "date": dt.date(2026, 8, 4), "rv_20d": 18.5, "rv_60d": 21.0},
         ],
     )
-    monkeypatch.setattr(mcp_mod, "_get_pool", _pool_returning(pg_conn))
+    monkeypatch.setattr(mcp_mod, "_pg_pool", _pool_returning(pg_conn))
 
     rows = await mcp_mod.get_volatility("AAPL", start="2026-08-04", end="2026-08-04")
     assert [r["date"] for r in rows] == ["2026-08-04"]
@@ -237,26 +235,8 @@ def test_main_runs_server(monkeypatch) -> None:
     assert calls == ["run"]
 
 
-def test_facts_tool_point_in_time(monkeypatch, db_file) -> None:
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-    mcp_mod.save_fact(
-        ticker="AAPL",
-        statement="AAPL guided higher.",
-        fact_type="guidance",
-        confidence=0.8,
-        valid_from="2026-01-02",
-        source_article_id="art-1",
-    )
-    facts = mcp_mod.get_facts("AAPL", "2026-01-03")
-    assert facts[0]["statement"] == "AAPL guided higher."
-
-
 async def test_market_views_tools(monkeypatch, pg_conn) -> None:
-    @asynccontextmanager
-    async def _fake_connect_pg():
-        yield pg_conn
-
-    monkeypatch.setattr(mcp_mod, "_connect_pg", _fake_connect_pg)
+    monkeypatch.setattr(mcp_mod, "_pg_pool", _pool_returning(pg_conn))
 
     view_id = await mcp_mod.save_market_view_tool(
         as_of="2026-08-04",
@@ -310,11 +290,7 @@ def test_get_macro_missing_file_returns_empty(tmp_path, monkeypatch) -> None:
 
 
 async def test_save_market_view_tool_stores_used_fact_ids(monkeypatch, pg_conn) -> None:
-    @asynccontextmanager
-    async def _fake_connect_pg():
-        yield pg_conn
-
-    monkeypatch.setattr(mcp_mod, "_connect_pg", _fake_connect_pg)
+    monkeypatch.setattr(mcp_mod, "_pg_pool", _pool_returning(pg_conn))
 
     fact_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
     view_id = await mcp_mod.save_market_view_tool(
@@ -388,59 +364,3 @@ def test_get_short_interest_reads_partitions(tmp_path, monkeypatch) -> None:
 def test_get_short_interest_no_partitions_returns_empty(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(mcp_mod, "SHORT_INTEREST_GLOB", str(tmp_path / "si" / "*.parquet"))
     assert mcp_mod.get_short_interest("AAPL") == []
-
-
-def _seed_profile(db_file, ticker: str = "AAPL", valid_from: str = "2026-08-04") -> None:
-    from agent.knowledge import upsert_company, write_company_profile
-
-    conn = duckdb.connect(db_file)
-    try:
-        upsert_company(
-            conn,
-            ticker=ticker,
-            name="Apple Inc.",
-            country="US",
-            sector="Technology",
-        )
-        write_company_profile(
-            conn,
-            ticker=ticker,
-            description="Apple designs consumer electronics.",
-            products_services=["smartphones", "cloud services"],
-            valid_from=valid_from,
-            website_url="https://www.apple.com",
-            sources={"wikipedia": "https://en.wikipedia.org/wiki/Apple_Inc.", "crawled": []},
-            generated_by="deepseek-chat",
-        )
-    finally:
-        conn.close()
-
-
-def test_get_company_profile_returns_profile_with_company_metadata(monkeypatch, db_file) -> None:
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-    _seed_profile(db_file)
-
-    profile = mcp_mod.get_company_profile("AAPL", as_of="2026-08-05")
-
-    assert profile is not None
-    assert profile["ticker"] == "AAPL"
-    assert profile["name"] == "Apple Inc."
-    assert profile["sector"] == "Technology"
-    assert profile["country"] == "US"
-    assert profile["products_services"] == ["smartphones", "cloud services"]
-    assert profile["website_url"] == "https://www.apple.com"
-    assert profile["generated_by"] == "deepseek-chat"
-
-
-def test_get_company_profile_respects_as_of(monkeypatch, db_file) -> None:
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-    _seed_profile(db_file, valid_from="2026-08-04")
-
-    assert mcp_mod.get_company_profile("AAPL", as_of="2026-08-01") is None
-    assert mcp_mod.get_company_profile("AAPL", as_of="2026-08-05") is not None
-
-
-def test_get_company_profile_missing_returns_none(monkeypatch, db_file) -> None:
-    monkeypatch.setattr(mcp_mod, "_connect", lambda: duckdb.connect(db_file))
-
-    assert mcp_mod.get_company_profile("NOPE") is None

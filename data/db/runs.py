@@ -6,6 +6,7 @@ import datetime as dt
 import uuid
 
 import psycopg
+from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 VALID_STATUSES = frozenset({"succeeded", "failed", "aborted"})
@@ -70,3 +71,39 @@ async def finish_run(
             "WHERE run_id = %s",
             (status, Jsonb(counters), error, run_id),
         )
+
+
+async def list_recent_runs(
+    conn: psycopg.AsyncConnection,
+    *,
+    job_type: str | None = None,
+    limit: int = 5,
+) -> list[dict[str, object]]:
+    """Return the most recent agent_runs rows, newest first.
+
+    Args:
+        conn: An open connection.
+        job_type: Optional filter, e.g. 'news' or 'filings'; all job types
+            when omitted.
+        limit: Maximum rows.
+
+    Returns:
+        One dict per run: run_id, run_date, job_type, status, started_at,
+        finished_at, counters (a nested dict, not flattened -- that is the
+        whole point of counters being JSONB instead of fixed columns),
+        error.
+    """
+    query = (
+        "SELECT run_id, run_date, job_type, status, started_at, finished_at, counters, error "
+        "FROM agent_runs WHERE 1 = 1"
+    )
+    params: list[object] = []
+    if job_type is not None:
+        query += " AND job_type = %s"
+        params.append(job_type)
+    query += " ORDER BY started_at DESC LIMIT %s"
+    params.append(limit)
+
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(query, params)
+        return await cur.fetchall()
