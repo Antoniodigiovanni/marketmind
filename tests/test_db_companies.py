@@ -69,6 +69,27 @@ async def test_update_company_attributes_changes_the_row(pg_conn) -> None:
     assert row["sector"] == "New Sector"
 
 
+async def test_update_company_attributes_preserves_country_sector_on_none(pg_conn) -> None:
+    company_id = await create_company(
+        pg_conn,
+        name="Old Name",
+        country="US",
+        sector="Old Sector",
+        first_seen=dt.date(2000, 1, 1),
+    )
+    await update_company_attributes(
+        pg_conn,
+        company_id=company_id,
+        name="New Name",
+        country=None,
+        sector=None,
+    )
+    row = await get_company(pg_conn, company_id=company_id)
+    assert row["name"] == "New Name"
+    assert row["country"] == "US"
+    assert row["sector"] == "Old Sector"
+
+
 async def test_update_company_attributes_bumps_updated_at(pg_conn) -> None:
     company_id = await create_company(
         pg_conn,

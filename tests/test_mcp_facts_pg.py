@@ -8,6 +8,7 @@ import uuid
 import pytest
 
 import server.mcp as mcp_mod
+from data.db.companies import create_company
 from data.db.company_profiles import create_profile
 from data.db.identifiers import get_or_create_identifier
 
@@ -55,6 +56,36 @@ async def _company(pg_conn, ticker: str = "AAPL") -> uuid.UUID:
         country="US",
         sector="Technology",
     )
+
+
+async def _reassigned_ticker(pg_conn, ticker: str = "XYZ") -> tuple[uuid.UUID, uuid.UUID]:
+    """Simulate a delisted ticker later reassigned to an unrelated company.
+
+    Company A held `ticker` 2010-01-01..2018-01-01 (then delisted); Company
+    B holds it 2022-01-01..present. get_or_create_identifier deliberately
+    doesn't model reassignment (see its docstring), so the rows are
+    inserted directly, the way a real point-in-time universe backfill
+    eventually will.
+    """
+    company_a = await create_company(
+        pg_conn, name="Old Co", country="US", sector="Energy", first_seen=dt.date(2010, 1, 1)
+    )
+    await pg_conn.execute(
+        "INSERT INTO company_identifiers "
+        "(company_id, id_type, id_value, valid_from, valid_until, is_primary, source) "
+        "VALUES (%s, 'ticker', %s, %s, %s, TRUE, 'test')",
+        (company_a, ticker, dt.date(2010, 1, 1), dt.date(2018, 1, 1)),
+    )
+    company_b = await create_company(
+        pg_conn, name="New Co", country="US", sector="Technology", first_seen=dt.date(2022, 1, 1)
+    )
+    await pg_conn.execute(
+        "INSERT INTO company_identifiers "
+        "(company_id, id_type, id_value, valid_from, is_primary, source) "
+        "VALUES (%s, 'ticker', %s, %s, TRUE, 'test')",
+        (company_b, ticker, dt.date(2022, 1, 1)),
+    )
+    return company_a, company_b
 
 
 async def _article(pg_conn) -> uuid.UUID:
@@ -165,3 +196,74 @@ async def test_get_company_profile_returns_none_when_no_profile_exists(
     await _company(pg_conn, "AAPL")
     result = await mcp_mod.get_company_profile("AAPL", "2020-06-01")
     assert result is None
+
+
+async def test_get_facts_requires_as_of(monkeypatch, pg_conn) -> None:
+    _patch_pool(monkeypatch, pg_conn)
+    with pytest.raises(ValueError, match="as_of is required"):
+        await mcp_mod.get_facts("AAPL", "")
+
+
+async def test_save_fact_and_get_facts_resolve_ticker_as_of_not_current_holder(
+    monkeypatch, pg_conn
+) -> None:
+    """A ticker reused across two unrelated companies must resolve to
+    whichever company held it on the given date, not today's holder --
+    the exact scenario CLAUDE.md's identity model exists to handle."""
+    _patch_pool(monkeypatch, pg_conn)
+    await _reassigned_ticker(pg_conn, "XYZ")
+    article_id = await _article(pg_conn)
+
+    await mcp_mod.save_fact(
+        ticker="XYZ",
+        statement="Old Co statement",
+        fact_type="guidance",
+        confidence=0.9,
+        valid_from="2015-01-01",
+        source_article_id=str(article_id),
+    )
+    await mcp_mod.save_fact(
+        ticker="XYZ",
+        statement="New Co statement",
+        fact_type="guidance",
+        confidence=0.9,
+        valid_from="2023-01-01",
+        source_article_id=str(article_id),
+    )
+
+    old_facts = await mcp_mod.get_facts("XYZ", "2015-06-01")
+    assert [f["statement"] for f in old_facts] == ["Old Co statement"]
+
+    new_facts = await mcp_mod.get_facts("XYZ", "2023-06-01")
+    assert [f["statement"] for f in new_facts] == ["New Co statement"]
+
+
+async def test_get_company_profile_resolves_ticker_as_of_not_current_holder(
+    monkeypatch, pg_conn
+) -> None:
+    _patch_pool(monkeypatch, pg_conn)
+    company_a, company_b = await _reassigned_ticker(pg_conn, "XYZ")
+    await create_profile(
+        pg_conn,
+        company_id=company_a,
+        description="Old Co profile.",
+        products_services=["Oil"],
+        valid_from=dt.date(2015, 1, 1),
+        generated_by="test",
+    )
+    await create_profile(
+        pg_conn,
+        company_id=company_b,
+        description="New Co profile.",
+        products_services=["Software"],
+        valid_from=dt.date(2023, 1, 1),
+        generated_by="test",
+    )
+
+    old_profile = await mcp_mod.get_company_profile("XYZ", "2015-06-01")
+    assert old_profile["name"] == "Old Co"
+    assert old_profile["description"] == "Old Co profile."
+
+    new_profile = await mcp_mod.get_company_profile("XYZ", "2023-06-01")
+    assert new_profile["name"] == "New Co"
+    assert new_profile["description"] == "New Co profile."

@@ -93,18 +93,17 @@ async def list_recent_runs(
         whole point of counters being JSONB instead of fixed columns),
         error.
     """
+    query = (
+        "SELECT run_id, run_date, job_type, status, started_at, finished_at, counters, error "
+        "FROM agent_runs WHERE 1 = 1"
+    )
+    params: list[object] = []
+    if job_type is not None:
+        query += " AND job_type = %s"
+        params.append(job_type)
+    query += " ORDER BY started_at DESC LIMIT %s"
+    params.append(limit)
+
     async with conn.cursor(row_factory=dict_row) as cur:
-        if job_type is not None:
-            await cur.execute(
-                "SELECT run_id, run_date, job_type, status, started_at, finished_at, "
-                "counters, error FROM agent_runs WHERE job_type = %s "
-                "ORDER BY started_at DESC LIMIT %s",
-                (job_type, limit),
-            )
-        else:
-            await cur.execute(
-                "SELECT run_id, run_date, job_type, status, started_at, finished_at, "
-                "counters, error FROM agent_runs ORDER BY started_at DESC LIMIT %s",
-                (limit,),
-            )
+        await cur.execute(query, params)
         return await cur.fetchall()

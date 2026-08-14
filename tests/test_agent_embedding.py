@@ -32,3 +32,9 @@ async def test_hash_embed_is_l2_normalised() -> None:
     vector = await hash_embed("Revenue grew 12% YoY")
     norm = math.sqrt(sum(v * v for v in vector))
     assert norm == pytest.approx(1.0, abs=1e-6)
+
+
+async def test_hash_embed_empty_string_returns_all_zeros() -> None:
+    vector = await hash_embed("")
+    assert len(vector) == 1536
+    assert vector == [0.0] * 1536

@@ -31,6 +31,9 @@ async def hash_embed(text: str) -> list[float]:
         A 1536-element list of floats with L2 norm 1.0 (or all zeros for
         empty input, which is not L2-normalisable).
     """
+    if not text:
+        return [0.0] * DIM
+
     vector = [0.0] * DIM
     for n in (1, 2, 3):
         grams = (

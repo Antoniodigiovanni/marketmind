@@ -25,7 +25,7 @@ from data.db.facts import create_fact as facts_create_fact
 from data.db.facts import get_current_facts as facts_get_current_facts
 from data.db.filings import get_filings as filings_get_filings
 from data.db.filings import search_filing_text as filings_search_filing_text
-from data.db.identifiers import get_current_company_id
+from data.db.identifiers import get_current_company_id, resolve_identifier
 from data.db.init import init_db
 from data.db.listings import get_current_listing
 from data.db.pool import open_pool
@@ -752,22 +752,31 @@ async def get_facts(ticker: str, as_of: str) -> list[dict[str, object]]:
     """Return facts for a ticker as of a date (point-in-time safe).
 
     Args:
-        ticker: Ticker symbol, resolved to the company currently holding it.
+        ticker: Ticker symbol, resolved to whichever company held it as of
+            `as_of` (not necessarily today's holder).
         as_of: Date string (YYYY-MM-DD) — required, never omitted.
 
     Returns:
         List of {fact_id, fact_type, statement, confidence, valid_from,
         valid_until, source_article}. Empty list if the ticker doesn't
-        resolve to a tracked company.
+        resolve to a tracked company as of `as_of`.
+
+    Raises:
+        ValueError: If as_of is missing or empty.
     """
+    if not as_of:
+        raise ValueError(
+            "as_of is required — querying facts without a date is a look-ahead violation"
+        )
+    as_of_date = dt.date.fromisoformat(as_of)
     pool = await _pg_pool()
     async with pool.connection() as conn:
-        company_id = await get_current_company_id(conn, id_type="ticker", id_value=ticker)
+        company_id = await resolve_identifier(
+            conn, id_type="ticker", id_value=ticker, as_of=as_of_date
+        )
         if company_id is None:
             return []
-        rows = await facts_get_current_facts(
-            conn, company_id=company_id, as_of=dt.date.fromisoformat(as_of)
-        )
+        rows = await facts_get_current_facts(conn, company_id=company_id, as_of=as_of_date)
     return [_jsonify_pg_row(row) for row in rows]
 
 
@@ -805,20 +814,23 @@ async def get_company_profile(
     """Return the generated company profile (description + categories) as of a date.
 
     Args:
-        ticker: Company ticker, resolved to the company currently holding it.
+        ticker: Company ticker, resolved to whichever company held it as of
+            `as_of` (not necessarily today's holder).
         as_of: Date (YYYY-MM-DD); defaults to today. Profiles are versioned,
             so this returns the version valid on that date.
 
     Returns:
         Dict with ticker, name, sector, country, description,
         products_services, website_url, sources, valid_from, generated_by;
-        None when the ticker doesn't resolve to a tracked company or no
-        profile exists as of the date.
+        None when the ticker doesn't resolve to a tracked company as of
+        `as_of`, or no profile exists as of the date.
     """
     effective_as_of = dt.date.fromisoformat(as_of) if as_of else dt.date.today()
     pool = await _pg_pool()
     async with pool.connection() as conn:
-        company_id = await get_current_company_id(conn, id_type="ticker", id_value=ticker)
+        company_id = await resolve_identifier(
+            conn, id_type="ticker", id_value=ticker, as_of=effective_as_of
+        )
         if company_id is None:
             return None
         profile = await get_current_profile(conn, company_id=company_id, as_of=effective_as_of)
@@ -895,7 +907,8 @@ async def save_fact(
     """Persist a versioned fact for a ticker.
 
     Args:
-        ticker: Ticker symbol, resolved to the company currently holding it.
+        ticker: Ticker symbol, resolved to whichever company held it as of
+            `valid_from` (not necessarily today's holder).
         statement: One-sentence fact statement.
         fact_type: Free-form category.
         confidence: 0.0-1.0.
@@ -907,12 +920,27 @@ async def save_fact(
         New fact_id, as a string.
 
     Raises:
-        ValueError: If ticker does not resolve to a tracked company, or
-            confidence is outside [0, 1].
+        ValueError: If ticker does not resolve to a tracked company as of
+            `valid_from`, confidence is outside [0, 1], or source_article_id
+            / supersedes_id is not a well-formed UUID string.
     """
+    valid_from_date = dt.date.fromisoformat(valid_from)
+    source_article_uuid = uuid.UUID(source_article_id)
+    supersedes_uuid = uuid.UUID(supersedes_id) if supersedes_id else None
+
+    # Computed before checking out a pooled connection: hash_embed is
+    # CPU-bound with no internal await, so running it while a connection is
+    # held would block the event loop and tie up the pool for no DB work.
+    vector = await hash_embed(statement)
+
+    async def _precomputed_embed(_statement: str) -> list[float]:
+        return vector
+
     pool = await _pg_pool()
     async with pool.connection() as conn:
-        company_id = await get_current_company_id(conn, id_type="ticker", id_value=ticker)
+        company_id = await resolve_identifier(
+            conn, id_type="ticker", id_value=ticker, as_of=valid_from_date
+        )
         if company_id is None:
             raise ValueError(f"ticker {ticker!r} does not resolve to a tracked company")
         fact_id = await facts_create_fact(
@@ -921,11 +949,11 @@ async def save_fact(
             statement=statement,
             fact_type=fact_type,
             confidence=confidence,
-            valid_from=dt.date.fromisoformat(valid_from),
-            source_article_id=uuid.UUID(source_article_id),
-            embed=hash_embed,
+            valid_from=valid_from_date,
+            source_article_id=source_article_uuid,
+            embed=_precomputed_embed,
             model="hash-ngram",
-            supersedes_id=uuid.UUID(supersedes_id) if supersedes_id else None,
+            supersedes_id=supersedes_uuid,
         )
     return str(fact_id)
 
