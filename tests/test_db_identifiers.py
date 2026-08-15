@@ -9,6 +9,7 @@ import pytest
 
 from data.db.companies import get_company
 from data.db.identifiers import (
+    create_identifier,
     get_current_company_id,
     get_or_create_identifier,
     resolve_identifier,
@@ -110,6 +111,55 @@ async def test_resolve_identifier_is_point_in_time(pg_conn) -> None:
         )
         is None
     )
+
+
+async def test_create_identifier_creates_a_new_company(pg_conn) -> None:
+    company_id = await create_identifier(
+        pg_conn,
+        id_type="ticker",
+        id_value="XYZ",
+        valid_from=dt.date(2015, 1, 1),
+        source="ingest",
+        name="Historical Co",
+        country="US",
+        sector="Energy",
+    )
+    row = await get_company(pg_conn, company_id=company_id)
+    assert row["name"] == "Historical Co"
+    assert row["first_seen"] == dt.date(2015, 1, 1)
+
+
+async def test_create_identifier_does_not_reuse_or_overwrite_current_holder(pg_conn) -> None:
+    """The exact bug create_identifier exists to avoid: a ticker currently
+    held by 'New Co' must not absorb a historical (pre-existing-window)
+    identifier resolution into that same company, nor overwrite its
+    attributes with the historical caller's values."""
+    current_holder = await get_or_create_identifier(
+        pg_conn,
+        id_type="ticker",
+        id_value="XYZ",
+        valid_from=dt.date(2022, 1, 1),
+        source="universe-csv",
+        name="New Co",
+        country="US",
+        sector="Technology",
+    )
+
+    historical_id = await create_identifier(
+        pg_conn,
+        id_type="ticker",
+        id_value="XYZ",
+        valid_from=dt.date(2015, 1, 1),
+        source="ingest",
+        name="Old Co",
+        country="US",
+        sector="Energy",
+    )
+
+    assert historical_id != current_holder
+    current_row = await get_company(pg_conn, company_id=current_holder)
+    assert current_row["name"] == "New Co"  # untouched by the historical call
+    assert current_row["sector"] == "Technology"
 
 
 async def test_get_or_create_identifier_is_atomic_on_failure(pg_conn) -> None:

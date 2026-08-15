@@ -19,7 +19,7 @@ company_id = await resolve_identifier(
     conn, id_type="ticker", id_value=ticker, as_of=date_as_date
 )
 if company_id is None:
-    company_id = await get_or_create_identifier(
+    company_id = await create_identifier(
         conn, id_type="ticker", id_value=ticker, valid_from=date_as_date,
         source="ingest", name=name, country=country, sector=sector,
     )
@@ -27,17 +27,24 @@ if company_id is None:
 
 `resolve_identifier(as_of=...)` is always tried first — this is the fix the
 immediately-preceding PR applied to `get_facts`/`save_fact`/
-`get_company_profile`, extended here. `get_or_create_identifier` is only a
-fallback for a ticker with no covering identifier window at all (first time
-ever seen, or a genuine historical gap); it is never the primary lookup.
+`get_company_profile`, extended here.
 
-`get_or_create_identifier` internally resolves via `get_current_company_id`
-(no `as_of`), which does not detect ticker reuse — its own docstring
-documents this and defers it to separate follow-up work, the same
-limitation `data/db/universe.py::sync_universe` already accepts today. This
-phase inherits that pre-existing, project-wide gap rather than solving it;
-it does not reintroduce the specific bug (skipping `resolve_identifier`
-entirely) that was fixed in the prior PR.
+On a miss, the fallback is `data/db/identifiers.py::create_identifier`
+(new in this phase), not `get_or_create_identifier`. `get_or_create_identifier`
+resolves via `get_current_company_id` (no `as_of`) and, on a hit, updates
+that company's live attributes — correct for a live/current-date sync (its
+existing caller, `data/db/universe.py::sync_universe`) but wrong here: a
+backfill run for a date before a ticker's identifier window existed would,
+via `get_or_create_identifier`, attach the historical facts to whichever
+unrelated company currently holds that ticker *and* overwrite that
+company's live name/country/sector with the backfill's values.
+`create_identifier` always creates a fresh company instead — the only safe
+move once `resolve_identifier(as_of=...)` has already established that no
+window, current or historical, covers this date. It closes the new row's
+`valid_until` against the next-earliest later window for the same
+identifier if one already exists (so it doesn't collide with
+`uq_identifier_current`'s one-open-row-per-identifier constraint), left
+`NULL` otherwise.
 
 Company attribute refresh keeps today's lazy-write behavior: description,
 and the name/country/sector refresh that piggybacks on it, are only written
@@ -90,7 +97,7 @@ Per-step replacement of `agent/knowledge.py` calls:
 
 | Old (`agent/knowledge.py`, DuckDB) | New (`data/db/*.py`, Postgres) |
 |---|---|
-| `upsert_company` | §1 above (`resolve_identifier` / `get_or_create_identifier` / `update_company_description`) |
+| `upsert_company` | §1 above (`resolve_identifier` / `create_identifier` / `update_company_description`) |
 | `get_current_company_profile` | `company_profiles.get_current_profile(company_id=..., as_of=...)` |
 | `write_company_profile` | `company_profiles.create_profile(company_id=..., ...)` |
 | `get_current_facts` | `facts.get_current_facts(company_id=..., as_of=...)` |
@@ -110,6 +117,32 @@ supersession-matching map in `apply_facts` (`statement -> id`) becomes
 `list[uuid.UUID]` directly (no `str()` — the old DuckDB code stringified
 because DuckDB stored ids as hex strings; Postgres ids are already UUIDs
 end to end).
+
+The call to `apply_facts` is wrapped in the same try/except as the `llm(...)`
+call above it, not left bare: `create_fact` can raise (e.g.
+`ValueError` on an out-of-[0,1] confidence the model returned), and an
+uncaught exception there would abort the whole run over one malformed fact
+rather than marking just that article `'error'` and moving on — the same
+isolation the extraction-call try/except already provides, extended to
+cover the write side of the same per-article unit of work. It participates
+in the same consecutive-failure counter and circuit breaker as extraction
+failures.
+
+`data/db/pool.py::open_pool` opens its connections with `autocommit=True`.
+`run_daily_ingest` holds one connection for the whole run and issues many
+plain reads (`get_current_profile`, `get_current_facts`, `get_company`,
+`resolve_identifier`, ...) that aren't wrapped in their own
+`conn.transaction()`. Under the default `autocommit=False`, the first such
+read would open an implicit transaction; every subsequent repository
+call's own `async with conn.transaction():` would then nest as a
+savepoint inside it instead of a real, independently-committed transaction
+— exactly the failure mode §3's "no single enclosing transaction" design
+intent is meant to rule out. `autocommit=True` makes each unwrapped read
+its own statement and each repository call's `conn.transaction()` a real,
+independent transaction, matching the pg_conn test fixture's own nested
+behavior (a `conn.transaction()` opened while one is already active from
+the fixture nests as a savepoint there too, which is what makes the
+fixture's single rollback undo everything).
 
 `RawNewsArchive` (the per-date NDJSON archive under `data/raw/news/`) is
 unchanged — it is filesystem-based and has no DuckDB coupling.
