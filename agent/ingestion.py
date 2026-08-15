@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import hashlib
 import json
 import math
 import os
@@ -14,24 +13,21 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import duckdb
 import polars as pl
+import psycopg
 from loguru import logger
 
 from agent.company_profile import build_company_profile
-from agent.embeddings import ChromaVectorStore, HashEmbeddingFunction
-from agent.knowledge import (
-    get_company_description,
-    get_current_company_profile,
-    get_current_facts,
-    search_similar_facts,
-    upsert_company,
-    write_aggregate_fact,
-    write_company_profile,
-    write_fact,
-)
+from agent.embedding import hash_embed
 from agent.llm import ChatClient, parse_json_response
-from data.db.init import DEFAULT_DB_PATH, init_db
+from data.db.aggregate_facts import create_aggregate_fact
+from data.db.articles import register_article, set_article_status
+from data.db.companies import get_company, update_company_description
+from data.db.company_profiles import create_profile, get_current_profile
+from data.db.facts import create_fact, get_current_facts, search_similar_facts
+from data.db.identifiers import get_or_create_identifier, resolve_identifier
+from data.db.pool import close_pool, open_pool
+from data.db.runs import finish_run, start_run
 from data.sources.rss import Article, article_to_record, fetch_company_news
 from data.sources.wikipedia import fetch_company_description
 from data.universe.loader import get_universe
@@ -61,11 +57,6 @@ class IngestAborted(RuntimeError):
     """Raised when consecutive extraction failures trip the circuit breaker."""
 
 
-def _sha256(text: str) -> str:
-    """Return the SHA-256 hex digest of a string."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
 def _load_prompt(name: str) -> str:
     """Read a prompt template from agent/prompts."""
     return (PROMPTS_DIR / name).read_text(encoding="utf-8")
@@ -80,56 +71,6 @@ def pre_score(source: str, published_at: str, as_of: str) -> float:
     as_of_midnight = dt.datetime.combine(dt.date.fromisoformat(as_of), dt.time.min, tzinfo=dt.UTC)
     days_old = max((as_of_midnight - published).total_seconds() / 86_400.0, 0.0)
     return credibility * math.exp(-RECENCY_LAMBDA * days_old)
-
-
-def register_article(
-    conn: duckdb.DuckDBPyConnection,
-    article: Article,
-    score: float,
-) -> str | None:
-    """Insert an article unless it is a level-1 dedup hit.
-
-    Args:
-        conn: DuckDB connection.
-        article: Fetched article.
-        score: Pre-LLM score.
-
-    Returns:
-        New article id, or None when the url/content hash already exists.
-    """
-    existing = conn.execute(
-        """
-        SELECT 1 FROM articles
-        WHERE url_hash = ? OR content_hash = ?
-        LIMIT 1
-        """,
-        [article.url_hash, article.content_hash],
-    ).fetchone()
-    if existing:
-        return None
-
-    article_id = uuid.uuid4().hex
-    conn.execute(
-        """
-        INSERT INTO articles
-            (id, url_hash, content_hash, url, source, ticker,
-             published_at, fetched_at, title, pre_score, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-        """,
-        [
-            article_id,
-            article.url_hash,
-            article.content_hash,
-            article.url,
-            article.source,
-            article.ticker,
-            article.published_at,
-            dt.datetime.now(dt.UTC).isoformat(),
-            article.title,
-            score,
-        ],
-    )
-    return article_id
 
 
 def parse_fact_list_response(text: str) -> list[dict[str, Any]] | None:
@@ -162,11 +103,11 @@ def build_extraction_messages(
     """Render the fact-extraction prompt for one article."""
     template = _load_prompt("fact_extraction.md")
     current_block = (
-        "\n".join(f"- [{f['id']}] ({f['fact_type']}) {f['statement']}" for f in current_facts)
+        "\n".join(f"- [{f['fact_id']}] ({f['fact_type']}) {f['statement']}" for f in current_facts)
         or "(none)"
     )
     similar_block = (
-        "\n".join(f"- [{f['id']}] ({f['fact_type']}) {f['statement']}" for f in similar_facts)
+        "\n".join(f"- [{f['fact_id']}] ({f['fact_type']}) {f['statement']}" for f in similar_facts)
         or "(none)"
     )
     prompt = template.format(
@@ -225,38 +166,109 @@ def build_aggregate_messages(
     ]
 
 
-def apply_facts(
-    conn: duckdb.DuckDBPyConnection,
+async def _ensure_company(
+    conn: psycopg.AsyncConnection,
     *,
     ticker: str,
-    date: str,
-    article_id: str,
+    name: str,
+    country: str | None,
+    sector: str | None,
+    as_of: dt.date,
+    description_fetcher: DescriptionFetcher,
+) -> tuple[uuid.UUID, str]:
+    """Resolve or create the company holding `ticker` as of a date.
+
+    Refreshes the cached description (and, via get_or_create_identifier,
+    name/country/sector) only the first time a company has no description
+    yet -- matching the old DuckDB pipeline's lazy upsert_company gate,
+    not a refresh on every run.
+
+    Args:
+        conn: An open connection.
+        ticker: Ticker symbol from the point-in-time universe row.
+        name: Company display name from the universe row.
+        country: ISO country code from the universe row, if known.
+        sector: Sector label from the universe row, if known.
+        as_of: The run date -- resolution is point-in-time safe.
+        description_fetcher: Callable(name) -> description text.
+
+    Returns:
+        (company_id, description) -- description is the cached value when
+        present, otherwise the freshly fetched one (possibly "").
+    """
+    company_id = await resolve_identifier(conn, id_type="ticker", id_value=ticker, as_of=as_of)
+    if company_id is None:
+        company_id = await get_or_create_identifier(
+            conn,
+            id_type="ticker",
+            id_value=ticker,
+            valid_from=as_of,
+            source="ingest",
+            name=name,
+            country=country,
+            sector=sector,
+        )
+
+    company = await get_company(conn, company_id=company_id)
+    description = company["description"] if company else None
+    if not description:
+        try:
+            description = description_fetcher(name)
+        except Exception as exc:  # noqa: BLE001 - one company must not sink the run
+            logger.warning(f"description fetch failed for {ticker}: {exc}")
+            description = ""
+        await update_company_description(
+            conn,
+            company_id=company_id,
+            description=description,
+            description_source="wikipedia" if description else None,
+        )
+    return company_id, description or ""
+
+
+async def apply_facts(
+    conn: psycopg.AsyncConnection,
+    *,
+    company_id: uuid.UUID,
+    ticker: str,
+    date: dt.date,
+    article_id: uuid.UUID,
     facts: list[dict[str, Any]],
     current_facts: list[dict[str, object]],
-    vector_store: object | None,
-) -> tuple[int, int, list[dict[str, str]]]:
+) -> tuple[int, int, list[dict[str, object]]]:
     """Write extracted facts, retiring superseded ones.
+
+    Args:
+        conn: An open connection.
+        company_id: The facts' subject.
+        ticker: Ticker symbol, carried through to the aggregation step.
+        date: Date the facts became valid.
+        article_id: Source article for every fact written here.
+        facts: Parsed model output, one dict per fact.
+        current_facts: This company's facts as of `date`, used to resolve
+            `supersedes_statement` references by exact statement match.
 
     Returns:
         (facts written, facts superseded, written fact rows for aggregation).
     """
-    statements = {str(f["statement"]): f for f in current_facts}
+    statements = {str(f["statement"]): f["fact_id"] for f in current_facts}
     written = 0
     superseded = 0
-    rows: list[dict[str, str]] = []
+    rows: list[dict[str, object]] = []
     for fact in facts:
         supersede_stmt = str(fact.get("supersedes_statement") or "").strip()
-        supersedes_id = statements[supersede_stmt]["id"] if supersede_stmt in statements else None
-        fact_id = write_fact(
+        supersedes_id = statements.get(supersede_stmt)
+        fact_id = await create_fact(
             conn,
-            ticker=ticker,
+            company_id=company_id,
             statement=str(fact["statement"]),
             fact_type=str(fact.get("fact_type") or "general"),
             confidence=float(fact["confidence"]),
             valid_from=date,
             source_article_id=article_id,
+            embed=hash_embed,
+            model="hash-ngram",
             supersedes_id=supersedes_id,
-            vector_store=vector_store,
         )
         rows.append(
             {
@@ -270,64 +282,6 @@ def apply_facts(
         if supersedes_id:
             superseded += 1
     return written, superseded, rows
-
-
-def _set_article_status(
-    conn: duckdb.DuckDBPyConnection,
-    article_id: str,
-    status: str,
-) -> None:
-    """Update an article's processing status."""
-    conn.execute(
-        "UPDATE articles SET status = ? WHERE id = ?",
-        [status, article_id],
-    )
-
-
-def _write_agent_run(
-    conn: duckdb.DuckDBPyConnection,
-    *,
-    run_id: str,
-    date: str,
-    started_at: str,
-    summary: dict[str, int],
-    error: str | None = None,
-) -> None:
-    """Insert the audit row for one ingest run.
-
-    Args:
-        conn: DuckDB connection.
-        run_id: UUID identifying this run.
-        date: Run date (YYYY-MM-DD).
-        started_at: ISO timestamp captured at the start of the run.
-        summary: Summary counts dict, as returned by `run_daily_ingest`.
-        error: Error message when the run failed or aborted; None on success.
-
-    Returns:
-        None.
-    """
-    conn.execute(
-        """
-        INSERT INTO agent_runs
-            (id, run_date, job_type, started_at, finished_at,
-             articles_fetched, articles_skipped, articles_redundant,
-             facts_written, facts_superseded, profiles_built, profiles_failed, error)
-        VALUES (?, ?, 'news', ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        [
-            run_id,
-            dt.date.fromisoformat(date),
-            started_at,
-            summary["articles_fetched"],
-            summary["articles_skipped"],
-            summary["articles_redundant"],
-            summary["facts_written"],
-            summary["facts_superseded"],
-            summary["profiles_built"],
-            summary["profiles_failed"],
-            error,
-        ],
-    )
 
 
 class RawNewsArchive:
@@ -397,10 +351,10 @@ class RawNewsArchive:
         return len(new)
 
 
-def run_daily_ingest(
+async def run_daily_ingest(
+    conn: psycopg.AsyncConnection,
     date: str,
     *,
-    conn: duckdb.DuckDBPyConnection | None = None,
     universe: pl.DataFrame | None = None,
     news_fetcher: NewsFetcher | None = None,
     description_fetcher: DescriptionFetcher | None = None,
@@ -408,7 +362,6 @@ def run_daily_ingest(
     backfill: bool = False,
     profiles_only: bool = False,
     llm: LLMCallable | None = None,
-    vector_store: object | None = None,
     raw_news_dir: Path | None = None,
     progress: ProgressCallback | None = None,
 ) -> dict[str, int]:
@@ -416,20 +369,25 @@ def run_daily_ingest(
 
     Steps:
     1. Load the point-in-time universe for the date.
-    2. Per company: cache metadata, ensure a generated profile (lazy unless
-       backfill), fetch news (RSS, keyless), and append it to the raw news
-       archive for the date (deduped on url_hash, so a rerun is safe).
-    3. Level-1 dedup against the articles table (url/content hash).
+    2. Per company: resolve or create the company, cache metadata, ensure a
+       generated profile (lazy unless backfill), fetch news (RSS, keyless),
+       and append it to the raw news archive for the date (deduped on
+       url_hash, so a rerun is safe).
+    3. Article dedup + per-company attribution via data/db/articles.py.
     4. Pre-score each article.
-    5. Per new article: retrieve current + similar past facts, call the model,
-       and write (or retire) facts.
+    5. Per new (article, company) pair: retrieve current + similar past
+       facts, call the model, and write (or retire) facts.
     6. Aggregate the day's new facts by sector and country into
        aggregate_facts.
-    7. Write an agent_runs audit row.
+    7. Write an agent_runs audit row (started before the loop, finished
+       after — so a killed or crashed run still leaves a trace).
 
     Args:
+        conn: An open connection, held for the whole run. Each repository
+            call commits its own work independently -- there is no single
+            enclosing transaction, so a crash mid-run keeps whatever was
+            already committed rather than rolling all of it back.
         date: Date string (YYYY-MM-DD).
-        conn: Optional DuckDB connection (defaults to research.duckdb).
         universe: Optional point-in-time universe frame (defaults to loader).
         news_fetcher: Callable(ticker, name) -> list[Article] (defaults to RSS).
         description_fetcher: Callable(name) -> str (defaults to Wikipedia).
@@ -440,11 +398,10 @@ def run_daily_ingest(
         profiles_only: When True, only ensure profiles; skip news fetch,
             fact extraction, and aggregates (used by the annual refresh job).
         llm: Callable(messages) -> text; required.
-        vector_store: Optional ChromaVectorStore for embedding past facts.
         raw_news_dir: Directory for the immutable per-date NDJSON file.
         progress: Optional callable(tickers_done, tickers_total, summary)
             invoked after each universe row, so a caller can report live
-            progress before the agent_runs row is written at the end.
+            progress before the agent_runs row is finished at the end.
 
     Returns:
         Summary counts keyed by articles_fetched, articles_skipped,
@@ -454,22 +411,17 @@ def run_daily_ingest(
     Raises:
         ValueError: On an invalid date or a missing llm callable.
         IngestAborted: After MAX_CONSECUTIVE_FAILURES consecutive extraction
-            failures.
+            failures. The run is recorded with status='aborted' first.
     """
-    dt.date.fromisoformat(date)
+    date_as_date = dt.date.fromisoformat(date)
     if llm is None:
         raise ValueError("llm callable is required")
     description_fetcher = description_fetcher or fetch_company_description
 
-    owns_conn = conn is None
-    if conn is None:
-        conn = init_db(DEFAULT_DB_PATH)
     universe = universe if universe is not None else get_universe(date)
     raw_news_dir = raw_news_dir or RAW_NEWS_DIR
     archive = RawNewsArchive(raw_news_dir / f"{date}.ndjson")
 
-    started_at = dt.datetime.now(dt.UTC).isoformat()
-    run_id = uuid.uuid4().hex
     summary = {
         "articles_fetched": 0,
         "articles_skipped": 0,
@@ -481,36 +433,31 @@ def run_daily_ingest(
         "profiles_built": 0,
         "profiles_failed": 0,
     }
-    todays_facts: list[dict[str, str | None]] = []
+    todays_facts: list[dict[str, object]] = []
     consecutive_failures = 0
     tickers_total = universe.height
     tickers_done = 0
+
+    run_id = await start_run(conn, run_date=date_as_date, job_type="news")
 
     try:
         for row in universe.iter_rows(named=True):
             ticker = str(row["ticker"])
             name = str(row["name"])
-            country = row.get("country")
-            sector = row.get("sector")
+            country_str = str(row["country"]) if row.get("country") else None
+            sector_str = str(row["sector"]) if row.get("sector") else None
 
-            description = get_company_description(conn, ticker)
-            if description is None:
-                try:
-                    description = description_fetcher(name)
-                except Exception as exc:  # noqa: BLE001 - one company must not sink the run
-                    logger.warning(f"description fetch failed for {ticker}: {exc}")
-                    description = ""
-                upsert_company(
-                    conn,
-                    ticker=ticker,
-                    name=name,
-                    country=str(country) if country else None,
-                    sector=str(sector) if sector else None,
-                    description=description,
-                    description_source="wikipedia" if description else None,
-                )
+            company_id, description = await _ensure_company(
+                conn,
+                ticker=ticker,
+                name=name,
+                country=country_str,
+                sector=sector_str,
+                as_of=date_as_date,
+                description_fetcher=description_fetcher,
+            )
 
-            profile = get_current_company_profile(conn, ticker, date)
+            profile = await get_current_profile(conn, company_id=company_id, as_of=date_as_date)
             if profile is None or backfill:
                 try:
                     built = (profile_builder or _default_profile_builder(llm))(name)
@@ -520,21 +467,23 @@ def run_daily_ingest(
                 if built is None:
                     summary["profiles_failed"] += 1
                 else:
-                    write_company_profile(
+                    await create_profile(
                         conn,
-                        ticker=ticker,
+                        company_id=company_id,
                         description=str(built["description"]),
                         products_services=[str(c) for c in built.get("products_services") or []],
-                        valid_from=date,
+                        valid_from=date_as_date,
+                        generated_by=str(built.get("generated_by") or "deepseek-chat"),
                         website_url=built.get("website_url"),
                         sources=built.get("sources"),
-                        generated_by=str(built.get("generated_by") or "deepseek-chat"),
-                        supersedes_id=profile["id"] if backfill and profile else None,
+                        supersedes_id=profile["profile_id"] if backfill and profile else None,
                     )
                     summary["profiles_built"] += 1
-                    profile = get_current_company_profile(conn, ticker, date)
+                    profile = await get_current_profile(
+                        conn, company_id=company_id, as_of=date_as_date
+                    )
 
-            profile_description = profile["description"] if profile else description or ""
+            profile_description = profile["description"] if profile else description
             profile_categories = (
                 ", ".join(profile["products_services"])
                 if profile and profile["products_services"]
@@ -556,26 +505,41 @@ def run_daily_ingest(
 
                 for article in articles:
                     score = pre_score(article.source, article.published_at, date)
-                    article_id = register_article(conn, article, score)
+                    published = dt.datetime.fromisoformat(article.published_at)
+                    if published.tzinfo is None:
+                        published = published.replace(tzinfo=dt.UTC)
+                    article_id = await register_article(
+                        conn,
+                        company_id=company_id,
+                        url_hash=article.url_hash,
+                        content_hash=article.content_hash,
+                        url=article.url,
+                        source=article.source,
+                        title=article.title,
+                        published_at=published,
+                        pre_score=score,
+                    )
                     if article_id is None:
                         summary["articles_skipped"] += 1
                         continue
 
-                    current_facts = get_current_facts(ticker, date, conn)
-                    similar_facts = search_similar_facts(
-                        ticker,
-                        f"{article.title} {article.summary}",
-                        date,
+                    current_facts = await get_current_facts(
+                        conn, company_id=company_id, as_of=date_as_date
+                    )
+                    similar_facts = await search_similar_facts(
                         conn,
-                        vector_store=vector_store,
+                        company_id=company_id,
+                        query=f"{article.title} {article.summary}",
+                        as_of=date_as_date,
+                        embed=hash_embed,
                     )
                     messages = build_extraction_messages(
                         article=article,
                         company_name=name,
                         description=profile_description,
                         products_services=profile_categories,
-                        sector=str(sector) if sector else None,
-                        country=str(country) if country else None,
+                        sector=sector_str,
+                        country=country_str,
                         current_facts=current_facts,
                         similar_facts=similar_facts,
                         score=score,
@@ -585,7 +549,13 @@ def run_daily_ingest(
                         parsed = parse_fact_list_response(llm(messages))
                     except Exception as exc:  # noqa: BLE001
                         logger.error(f"extraction failed for article {article_id}: {exc}")
-                        _set_article_status(conn, article_id, "error")
+                        await set_article_status(
+                            conn,
+                            article_id=article_id,
+                            company_id=company_id,
+                            status="error",
+                            error=str(exc),
+                        )
                         summary["articles_errored"] += 1
                         consecutive_failures += 1
                         if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
@@ -598,20 +568,24 @@ def run_daily_ingest(
                     consecutive_failures = 0
 
                     if parsed is None:
-                        _set_article_status(conn, article_id, "redundant")
+                        await set_article_status(
+                            conn, article_id=article_id, company_id=company_id, status="redundant"
+                        )
                         summary["articles_redundant"] += 1
                         continue
 
-                    written, superseded, fact_rows = apply_facts(
+                    written, superseded, fact_rows = await apply_facts(
                         conn,
+                        company_id=company_id,
                         ticker=ticker,
-                        date=date,
+                        date=date_as_date,
                         article_id=article_id,
                         facts=parsed,
                         current_facts=current_facts,
-                        vector_store=vector_store,
                     )
-                    _set_article_status(conn, article_id, "processed")
+                    await set_article_status(
+                        conn, article_id=article_id, company_id=company_id, status="processed"
+                    )
                     summary["facts_written"] += written
                     summary["facts_superseded"] += superseded
                     for fact_row in fact_rows:
@@ -621,8 +595,8 @@ def run_daily_ingest(
                                 "fact_id": fact_row["fact_id"],
                                 "fact_type": fact_row["fact_type"],
                                 "statement": fact_row["statement"],
-                                "sector": str(sector) if sector else None,
-                                "country": str(country) if country else None,
+                                "sector": sector_str,
+                                "country": country_str,
                             }
                         )
 
@@ -631,7 +605,7 @@ def run_daily_ingest(
                 progress(tickers_done, tickers_total, summary)
 
         for dimension, key_field in (("sector", "sector"), ("geography", "country")):
-            groups: dict[str, list[dict[str, str | None]]] = {}
+            groups: dict[str, list[dict[str, object]]] = {}
             for fact in todays_facts:
                 key = fact[key_field]
                 if key:
@@ -659,47 +633,62 @@ def run_daily_ingest(
                     continue
                 if parsed is None:
                     continue
-                evidence = [str(f["fact_id"]) for f in group_facts]
+                evidence = [f["fact_id"] for f in group_facts]
                 for item in parsed:
-                    write_aggregate_fact(
+                    await create_aggregate_fact(
                         conn,
                         dimension=dimension,
                         dimension_key=dimension_key,
                         statement=str(item["statement"]),
                         fact_type=str(item.get("fact_type") or "general"),
                         confidence=float(item["confidence"]),
-                        valid_from=date,
+                        valid_from=date_as_date,
                         evidence=evidence,
-                        vector_store=vector_store,
+                        embed=hash_embed,
+                        model="hash-ngram",
                     )
                     summary["aggregate_written"] += 1
 
-        _write_agent_run(
-            conn,
-            run_id=run_id,
-            date=date,
-            started_at=started_at,
-            summary=summary,
-        )
     except IngestAborted as exc:
-        _write_agent_run(
-            conn,
-            run_id=run_id,
-            date=date,
-            started_at=started_at,
-            summary=summary,
-            error=str(exc),
-        )
+        await finish_run(conn, run_id=run_id, status="aborted", counters=summary, error=str(exc))
         raise
-    finally:
-        if owns_conn:
-            conn.close()
+    except Exception as exc:  # noqa: BLE001 - always record the outcome before propagating
+        await finish_run(conn, run_id=run_id, status="failed", counters=summary, error=str(exc))
+        raise
+    else:
+        await finish_run(conn, run_id=run_id, status="succeeded", counters=summary)
 
     return summary
 
 
+async def run_daily_ingest_with_pool(date: str, **kwargs: Any) -> dict[str, int]:
+    """Open a Postgres pool for the duration of one run_daily_ingest call.
+
+    Bridges the async repository layer into this module's synchronous CLI
+    entry point (main()) and, indirectly, into the thread-based
+    server.jobs.start_run work callback used by the run_ingest MCP tool --
+    asyncio.run() at that boundary is an acceptable bridge, matching
+    data/filings/fetch.py::run_daily_fetch_with_pool.
+
+    Args:
+        date: Date string (YYYY-MM-DD) to ingest.
+        **kwargs: Forwarded to run_daily_ingest.
+
+    Returns:
+        The summary dict from run_daily_ingest.
+    """
+    pool = await open_pool()
+    try:
+        async with pool.connection() as conn:
+            return await run_daily_ingest(conn, date, **kwargs)
+    finally:
+        await close_pool(pool)
+
+
 def main() -> None:
     """Run the daily ingest job from the command line."""
+    import asyncio
+
     parser = argparse.ArgumentParser(description="Daily news → facts ingest")
     parser.add_argument("date", help="YYYY-MM-DD")
     parser.add_argument(
@@ -715,15 +704,15 @@ def main() -> None:
     args = parser.parse_args()
 
     client = ChatClient()
-    vector_store = ChromaVectorStore(embedding_function=HashEmbeddingFunction())
     try:
-        summary = run_daily_ingest(
-            args.date,
-            llm=client.complete,
-            profile_builder=_default_profile_builder(client.complete),
-            backfill=args.backfill,
-            profiles_only=args.profiles_only,
-            vector_store=vector_store,
+        summary = asyncio.run(
+            run_daily_ingest_with_pool(
+                args.date,
+                llm=client.complete,
+                profile_builder=_default_profile_builder(client.complete),
+                backfill=args.backfill,
+                profiles_only=args.profiles_only,
+            )
         )
     except IngestAborted as exc:
         logger.error(f"ingest aborted for {args.date}: {exc}")

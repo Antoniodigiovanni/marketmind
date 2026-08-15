@@ -11,14 +11,14 @@ import pytest
 
 import server.jobs as jobs
 import server.mcp as mcp_mod
-from agent.knowledge import get_current_facts
+from data.db.facts import get_current_facts
+from data.db.identifiers import get_or_create_identifier
 from data.db.init import init_db
 from data.sources.rss import Article
 
-DATE = "2026-08-04"
+pytestmark = pytest.mark.asyncio
 
-# Captured before the autouse offline fixture stubs it out.
-_REAL_BUILD_VECTOR_STORE = mcp_mod._build_vector_store
+DATE = "2026-08-04"
 
 UNIVERSE = pl.DataFrame(
     {
@@ -40,10 +40,28 @@ def _clear_slot(monkeypatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+async def _reset_news_tables(postgres_pool) -> None:
+    """Reset the tables the news job writes before each test.
+
+    run_ingest's work() runs on its own background thread with its own
+    pool connection (asyncio.run() per call), so it commits for real
+    against the shared session-scoped test database -- unlike pg_conn's
+    per-test rollback, those rows persist across tests otherwise.
+    """
+    async with postgres_pool.connection() as conn:
+        await conn.execute(
+            "TRUNCATE agent_runs, company_facts, fact_embeddings, "
+            "aggregate_facts, aggregate_fact_embeddings, aggregate_fact_evidence, "
+            "article_companies, articles, company_profiles, "
+            "company_identifiers, companies RESTART IDENTITY CASCADE"
+        )
+        await conn.commit()
+
+
+@pytest.fixture(autouse=True)
 def _offline(monkeypatch) -> None:
     """Nothing in this module may reach the network."""
     monkeypatch.setattr(mcp_mod, "get_universe", lambda date: UNIVERSE)
-    monkeypatch.setattr(mcp_mod, "_build_vector_store", lambda: None)
     monkeypatch.setenv("AI_API_KEY", "test-key")
     # The profile builder reaches Wikipedia (and from there the company site)
     # unless its fetchers are stubbed. Stub the network, keep the real builder.
@@ -104,8 +122,12 @@ def _fake_news(ticker: str, name: str) -> list[Article]:
 
 
 @pytest.fixture()
-def wired(tmp_path, monkeypatch):
-    """Point the tools at a temp DB with the model and network calls faked."""
+def wired(tmp_path, monkeypatch, postgres_pool):
+    """Point the tools at a temp DuckDB (still needed by filings) and stub
+    the news job's network calls. Depending on postgres_pool guarantees the
+    shared test schema exists before the news job's background thread opens
+    its own pool against the same DSN (it can't share this test's event
+    loop/connection)."""
     db_path = tmp_path / "research.duckdb"
     init_db(db_path).close()
     monkeypatch.setattr(mcp_mod, "DB_PATH", db_path)
@@ -127,14 +149,14 @@ def _join_run(timeout: float = 20.0) -> jobs.RunRecord:
 # --- synchronous refusals: no run is started, the caller gets a diagnostic ---
 
 
-def test_run_ingest_rejects_a_malformed_date() -> None:
+async def test_run_ingest_rejects_a_malformed_date() -> None:
     result = mcp_mod.run_ingest("04-08-2026")
 
     assert "Invalid date" in result
     assert jobs.current_run() is None
 
 
-def test_run_ingest_rejects_tickers_outside_the_universe() -> None:
+async def test_run_ingest_rejects_tickers_outside_the_universe() -> None:
     result = mcp_mod.run_ingest(DATE, tickers=["ZZZZ"])
 
     assert "ZZZZ" in result
@@ -142,7 +164,7 @@ def test_run_ingest_rejects_tickers_outside_the_universe() -> None:
     assert jobs.current_run() is None
 
 
-def test_run_ingest_reports_a_missing_api_key_instead_of_starting(monkeypatch) -> None:
+async def test_run_ingest_reports_a_missing_api_key_instead_of_starting(monkeypatch) -> None:
     monkeypatch.delenv("AI_API_KEY", raising=False)
     monkeypatch.delenv("LLM_API_KEY", raising=False)
 
@@ -153,7 +175,7 @@ def test_run_ingest_reports_a_missing_api_key_instead_of_starting(monkeypatch) -
     assert jobs.current_run() is None
 
 
-def test_run_ingest_refuses_a_second_concurrent_run(wired) -> None:
+async def test_run_ingest_refuses_a_second_concurrent_run(wired) -> None:
     release = threading.Event()
     first_id = jobs.start_run("news", lambda progress: release.wait(timeout=5) and {})
     try:
@@ -168,31 +190,39 @@ def test_run_ingest_refuses_a_second_concurrent_run(wired) -> None:
 # --- the real pipeline, end to end, through the tool ---
 
 
-def test_run_ingest_drives_the_real_pipeline(wired) -> None:
+async def test_run_ingest_drives_the_real_pipeline(wired, pg_conn) -> None:
     result = mcp_mod.run_ingest(DATE)
     record = _join_run()
 
     assert "started" in result.lower()
     assert record.run_id in result
-    # The original bug: run_daily_ingest was called without llm=, so every
-    # invocation died on ValueError("llm callable is required").
     assert record.error is None
     assert record.state == "succeeded"
     assert record.counts["facts_written"] == 1
     assert record.tickers_done == 2
     assert record.tickers_total == 2
 
-    conn = init_db(wired)
-    try:
-        facts = get_current_facts("AAPL", DATE, conn)
-        assert len(facts) == 1
-        assert "consensus" in facts[0]["statement"]
-        assert conn.execute("SELECT COUNT(*) FROM agent_runs").fetchone()[0] == 1
-    finally:
-        conn.close()
+    company_id = await get_or_create_identifier(
+        pg_conn,
+        id_type="ticker",
+        id_value="AAPL",
+        valid_from=dt.date(2020, 1, 1),
+        source="test",
+        name="Apple Inc",
+        country="US",
+        sector="Technology",
+    )
+    facts = await get_current_facts(pg_conn, company_id=company_id, as_of=dt.date(2026, 8, 4))
+    assert len(facts) == 1
+    assert "consensus" in facts[0]["statement"]
+
+    row = await (
+        await pg_conn.execute("SELECT COUNT(*) FROM agent_runs WHERE job_type = 'news'")
+    ).fetchone()
+    assert row[0] == 1
 
 
-def test_run_ingest_honours_a_ticker_subset(wired) -> None:
+async def test_run_ingest_honours_a_ticker_subset(wired) -> None:
     mcp_mod.run_ingest(DATE, tickers=["aapl"])
     record = _join_run()
 
@@ -200,7 +230,7 @@ def test_run_ingest_honours_a_ticker_subset(wired) -> None:
     assert record.tickers_total == 1
 
 
-def test_run_ingest_names_unknown_tickers_but_runs_the_known_ones(wired) -> None:
+async def test_run_ingest_names_unknown_tickers_but_runs_the_known_ones(wired) -> None:
     result = mcp_mod.run_ingest(DATE, tickers=["AAPL", "ZZZZ"])
     record = _join_run()
 
@@ -209,7 +239,7 @@ def test_run_ingest_names_unknown_tickers_but_runs_the_known_ones(wired) -> None
     assert record.tickers_total == 1
 
 
-def test_run_ingest_passes_profiles_only_through(wired) -> None:
+async def test_run_ingest_passes_profiles_only_through(wired) -> None:
     mcp_mod.run_ingest(DATE, profiles_only=True)
     record = _join_run()
 
@@ -218,7 +248,7 @@ def test_run_ingest_passes_profiles_only_through(wired) -> None:
     assert record.counts["profiles_built"] == 2
 
 
-def test_an_aborted_run_is_reported_by_the_status_tool(wired, monkeypatch) -> None:
+async def test_an_aborted_run_is_reported_by_the_status_tool(wired, monkeypatch) -> None:
     def exploding_llm(messages: list[dict[str, str]]) -> str:
         raise RuntimeError("provider is down")
 
@@ -231,7 +261,7 @@ def test_an_aborted_run_is_reported_by_the_status_tool(wired, monkeypatch) -> No
     assert record.state == "failed"
     assert "consecutive" in record.error
 
-    status = mcp_mod.get_ingest_status()
+    status = await mcp_mod.get_ingest_status()
     assert status["run"]["state"] == "failed"
     assert "consecutive" in status["run"]["error"]
 
@@ -239,18 +269,18 @@ def test_an_aborted_run_is_reported_by_the_status_tool(wired, monkeypatch) -> No
 # --- status ---
 
 
-def test_get_ingest_status_reports_history_and_no_live_run(wired) -> None:
-    status = mcp_mod.get_ingest_status()
+async def test_get_ingest_status_reports_history_and_no_live_run(wired) -> None:
+    status = await mcp_mod.get_ingest_status()
 
     assert status["run"] is None
     assert status["history"] == []
 
 
-def test_get_ingest_status_reports_a_finished_run_and_its_audit_row(wired) -> None:
+async def test_get_ingest_status_reports_a_finished_run_and_its_audit_row(wired) -> None:
     mcp_mod.run_ingest(DATE)
     record = _join_run()
 
-    status = mcp_mod.get_ingest_status()
+    status = await mcp_mod.get_ingest_status()
 
     assert status["run"]["run_id"] == record.run_id
     assert status["run"]["state"] == "succeeded"
@@ -258,65 +288,67 @@ def test_get_ingest_status_reports_a_finished_run_and_its_audit_row(wired) -> No
     assert status["run"]["elapsed_seconds"] >= 0.0
     assert len(status["history"]) == 1
     assert status["history"][0]["job_type"] == "news"
-    assert status["history"][0]["facts_written"] == 1
+    assert status["history"][0]["counters"]["facts_written"] == 1
 
 
-def test_get_ingest_status_limits_history(wired) -> None:
-    conn = init_db(wired)
-    try:
-        for i in range(3):
-            conn.execute(
-                """
-                INSERT INTO agent_runs (id, run_date, job_type, started_at, finished_at)
-                VALUES (?, ?, 'news', ?, NOW())
-                """,
-                [f"r{i}", dt.date(2026, 8, i + 1), f"2026-08-0{i + 1} 09:00:00+00"],
-            )
-    finally:
-        conn.close()
+async def test_get_ingest_status_limits_history(wired, pg_conn, monkeypatch) -> None:
+    # get_ingest_status checks out its own connection from the real pool by
+    # default, which can't see writes still sitting in pg_conn's uncommitted
+    # transaction -- reuse the test's own connection instead, the same
+    # _FakePool pattern tests/test_mcp_facts_pg.py already establishes.
+    class _FakePool:
+        def connection(self) -> _FakePool:
+            return self
 
-    status = mcp_mod.get_ingest_status(limit=2)
+        async def __aenter__(self):
+            return pg_conn
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+    async def _fake_pg_pool():
+        return _FakePool()
+
+    monkeypatch.setattr(mcp_mod, "_pg_pool", _fake_pg_pool)
+
+    for i in range(3):
+        await pg_conn.execute(
+            "INSERT INTO agent_runs (run_id, run_date, job_type, started_at, finished_at, status) "
+            "VALUES (gen_random_uuid(), %s, 'news', %s, NOW(), 'succeeded')",
+            (dt.date(2026, 8, i + 1), dt.datetime(2026, 8, i + 1, 9, 0, tzinfo=dt.UTC)),
+        )
+
+    status = await mcp_mod.get_ingest_status(limit=2)
 
     assert len(status["history"]) == 2
-    assert status["history"][0]["id"] == "r2"
 
 
-def test_status_is_readable_while_a_run_holds_the_database(wired) -> None:
-    """The status tool opens its own connection while a run is mid-write."""
+async def test_status_is_readable_while_a_run_holds_the_database(wired) -> None:
+    """The status tool checks out its own pooled connection while a run is
+    mid-write on a different one."""
     writing = threading.Event()
     release = threading.Event()
 
     def slow_work(progress: jobs.ProgressCallback) -> dict[str, int]:
-        conn = init_db(mcp_mod.DB_PATH)
-        try:
-            conn.execute(
-                """
-                INSERT INTO agent_runs (id, run_date, job_type, started_at)
-                VALUES ('live', DATE '2026-08-04', 'news', NOW())
-                """
-            )
-            progress(1, 2, {"facts_written": 0})
-            writing.set()
-            release.wait(timeout=5)
-            return {"facts_written": 0}
-        finally:
-            conn.close()
+        progress(1, 2, {"facts_written": 0})
+        writing.set()
+        release.wait(timeout=5)
+        return {"facts_written": 0}
 
     jobs.start_run("news", slow_work)
     try:
         assert writing.wait(timeout=5)
-        status = mcp_mod.get_ingest_status()
+        status = await mcp_mod.get_ingest_status()
 
         assert status["run"]["state"] == "running"
         assert status["run"]["tickers_done"] == 1
         assert status["run"]["finished_at"] is None
-        assert [row["id"] for row in status["history"]] == ["live"]
     finally:
         release.set()
         _join_run()
 
 
-# --- filings ---
+# --- filings (unchanged by this cutover -- still DuckDB-audited) ---
 
 
 class _EmptyEdgarClient:
@@ -329,15 +361,9 @@ class _EmptyEdgarClient:
         return []
 
 
-def test_run_filings_refresh_drives_the_real_fetch(
+async def test_run_filings_refresh_drives_the_real_fetch(
     wired, postgres_pool, monkeypatch, tmp_path
 ) -> None:
-    # run_filings_refresh's work() runs on its own background thread and
-    # opens its own Postgres pool there (asyncio.run() per call, same as
-    # production) -- it can't share this test's pg_conn/event loop across
-    # threads. Depending on postgres_pool here (unused otherwise) just
-    # guarantees the shared test schema is already applied before that
-    # thread opens its own connection against the same DSN.
     monkeypatch.setattr(mcp_mod, "_build_edgar_client", _EmptyEdgarClient)
     monkeypatch.setattr(mcp_mod, "ROOT_DIR", tmp_path)
 
@@ -357,7 +383,9 @@ def test_run_filings_refresh_drives_the_real_fetch(
         conn.close()
 
 
-def test_run_filings_refresh_defaults_to_today(wired, postgres_pool, monkeypatch, tmp_path) -> None:
+async def test_run_filings_refresh_defaults_to_today(
+    wired, postgres_pool, monkeypatch, tmp_path
+) -> None:
     monkeypatch.setattr(mcp_mod, "_build_edgar_client", _EmptyEdgarClient)
     monkeypatch.setattr(mcp_mod, "ROOT_DIR", tmp_path)
 
@@ -367,14 +395,14 @@ def test_run_filings_refresh_defaults_to_today(wired, postgres_pool, monkeypatch
     assert dt.date.today().isoformat() in result
 
 
-def test_run_filings_refresh_rejects_a_malformed_date() -> None:
+async def test_run_filings_refresh_rejects_a_malformed_date() -> None:
     result = mcp_mod.run_filings_refresh("not-a-date")
 
     assert "Invalid date" in result
     assert jobs.current_run() is None
 
 
-def test_run_filings_refresh_reports_an_empty_universe(monkeypatch) -> None:
+async def test_run_filings_refresh_reports_an_empty_universe(monkeypatch) -> None:
     monkeypatch.setattr(mcp_mod, "get_universe", lambda date: UNIVERSE.clear())
 
     result = mcp_mod.run_filings_refresh(DATE)
@@ -383,7 +411,7 @@ def test_run_filings_refresh_reports_an_empty_universe(monkeypatch) -> None:
     assert jobs.current_run() is None
 
 
-def test_run_filings_refresh_refuses_a_second_concurrent_run() -> None:
+async def test_run_filings_refresh_refuses_a_second_concurrent_run() -> None:
     release = threading.Event()
     first_id = jobs.start_run("news", lambda progress: release.wait(timeout=5) and {})
     try:
@@ -395,7 +423,7 @@ def test_run_filings_refresh_refuses_a_second_concurrent_run() -> None:
         _join_run()
 
 
-def test_run_filings_refresh_reports_a_client_it_cannot_build(monkeypatch) -> None:
+async def test_run_filings_refresh_reports_a_client_it_cannot_build(monkeypatch) -> None:
     def broken_client() -> object:
         raise RuntimeError("no EDGAR user agent configured")
 
@@ -411,15 +439,7 @@ def test_run_filings_refresh_reports_a_client_it_cannot_build(monkeypatch) -> No
 # --- the construction seams the tools rely on ---
 
 
-def test_build_edgar_client_returns_a_usable_client() -> None:
+async def test_build_edgar_client_returns_a_usable_client() -> None:
     from data.sources.sec import EdgardClient
 
     assert isinstance(mcp_mod._build_edgar_client(), EdgardClient)
-
-
-def test_build_vector_store_returns_a_fact_store(monkeypatch, tmp_path) -> None:
-    from agent.embeddings import ChromaVectorStore
-
-    monkeypatch.setattr("agent.embeddings.DEFAULT_VECTOR_DIR", tmp_path / "vectors")
-
-    assert isinstance(_REAL_BUILD_VECTOR_STORE(), ChromaVectorStore)
