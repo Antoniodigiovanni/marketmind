@@ -25,7 +25,7 @@ from data.db.articles import register_article, set_article_status
 from data.db.companies import get_company, update_company_description
 from data.db.company_profiles import create_profile, get_current_profile
 from data.db.facts import create_fact, get_current_facts, search_similar_facts
-from data.db.identifiers import get_or_create_identifier, resolve_identifier
+from data.db.identifiers import create_identifier, resolve_identifier
 from data.db.pool import close_pool, open_pool
 from data.db.runs import finish_run, start_run
 from data.sources.rss import Article, article_to_record, fetch_company_news
@@ -178,10 +178,17 @@ async def _ensure_company(
 ) -> tuple[uuid.UUID, str]:
     """Resolve or create the company holding `ticker` as of a date.
 
-    Refreshes the cached description (and, via get_or_create_identifier,
+    Refreshes the cached description (and, for a genuinely new identifier,
     name/country/sector) only the first time a company has no description
     yet -- matching the old DuckDB pipeline's lazy upsert_company gate,
     not a refresh on every run.
+
+    When resolve_identifier finds no coverage for `as_of`, this always
+    creates a fresh company rather than falling back to whichever company
+    currently holds `ticker` -- that fallback would misattribute historical
+    facts to an unrelated company and overwrite its live attributes on a
+    backfill run for a date before this ticker's identifier existed. See
+    create_identifier's docstring.
 
     Args:
         conn: An open connection.
@@ -198,7 +205,7 @@ async def _ensure_company(
     """
     company_id = await resolve_identifier(conn, id_type="ticker", id_value=ticker, as_of=as_of)
     if company_id is None:
-        company_id = await get_or_create_identifier(
+        company_id = await create_identifier(
             conn,
             id_type="ticker",
             id_value=ticker,
@@ -211,7 +218,7 @@ async def _ensure_company(
 
     company = await get_company(conn, company_id=company_id)
     description = company["description"] if company else None
-    if not description:
+    if description is None:
         try:
             description = description_fetcher(name)
         except Exception as exc:  # noqa: BLE001 - one company must not sink the run
@@ -574,15 +581,34 @@ async def run_daily_ingest(
                         summary["articles_redundant"] += 1
                         continue
 
-                    written, superseded, fact_rows = await apply_facts(
-                        conn,
-                        company_id=company_id,
-                        ticker=ticker,
-                        date=date_as_date,
-                        article_id=article_id,
-                        facts=parsed,
-                        current_facts=current_facts,
-                    )
+                    try:
+                        written, superseded, fact_rows = await apply_facts(
+                            conn,
+                            company_id=company_id,
+                            ticker=ticker,
+                            date=date_as_date,
+                            article_id=article_id,
+                            facts=parsed,
+                            current_facts=current_facts,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error(f"fact write failed for article {article_id}: {exc}")
+                        await set_article_status(
+                            conn,
+                            article_id=article_id,
+                            company_id=company_id,
+                            status="error",
+                            error=str(exc),
+                        )
+                        summary["articles_errored"] += 1
+                        consecutive_failures += 1
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                            raise IngestAborted(
+                                f"{consecutive_failures} consecutive extraction failures; "
+                                f"aborting run for {date}"
+                            ) from exc
+                        continue
+
                     await set_article_status(
                         conn, article_id=article_id, company_id=company_id, status="processed"
                     )

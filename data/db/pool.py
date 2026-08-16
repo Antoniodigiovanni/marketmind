@@ -61,6 +61,17 @@ async def open_pool(
 ) -> AsyncConnectionPool:
     """Open a connection pool with the vector type registered per connection.
 
+    Connections are opened with autocommit=True, so an unwrapped repository
+    read commits (or fails) as its own standalone statement rather than
+    silently opening a transaction that lingers until something else closes
+    it. Every repository write already scopes its own `conn.transaction()`
+    block; under autocommit that block runs as a real, independent
+    transaction (or, nested inside a caller's own `conn.transaction()` --
+    e.g. the pg_conn test fixture -- as a savepoint, unaffected by
+    autocommit). Without this, a long-lived connection held across many
+    calls (e.g. one daily ingest run) turns into one giant, never-committed
+    transaction the moment the first unwrapped read opens it.
+
     Args:
         dsn: Connection string; defaults to dsn_from_env().
         min_size: Connections kept open.
@@ -83,6 +94,7 @@ async def open_pool(
         resolved_dsn,
         min_size=min_size,
         max_size=max_size,
+        kwargs={"autocommit": True},
         configure=_configure,
         open=False,
     )
