@@ -52,6 +52,10 @@ if ! command -v systemctl >/dev/null 2>&1; then
   echo "error: systemd is required" >&2
   exit 1
 fi
+if ! docker compose version >/dev/null 2>&1; then
+  echo "error: docker with the compose plugin is required (docker compose version failed)" >&2
+  exit 1
+fi
 
 log() { printf '\033[1;34m[marketmind]\033[0m %s\n' "$*"; }
 
@@ -144,35 +148,51 @@ else
   log "keeping existing .env"
 fi
 
-if grep -qE '^(AI_API_KEY=sk-\.\.\.|FRED_API_KEY=\.\.\.|SEC_CONTACT_NAME=Your Name|SEC_CONTACT_EMAIL=you@example\.com)[[:space:]]*$' "$INSTALL_DIR/.env"; then
+if grep -qE '^(AI_API_KEY=sk-\.\.\.|FRED_API_KEY=\.\.\.|SEC_CONTACT_NAME="Your Name"|SEC_CONTACT_EMAIL=you@example\.com|MARKETMIND_DB_PASSWORD=change-me|MARKETMIND_DATABASE_DSN=postgresql://marketmind:change-me@127\.0\.0\.1:5432/marketmind)[[:space:]]*$' "$INSTALL_DIR/.env"; then
   echo "error: $INSTALL_DIR/.env still contains example placeholder values." >&2
   echo "       Set real values (AI_API_KEY, FRED_API_KEY, SEC_CONTACT_NAME," >&2
-  echo "       SEC_CONTACT_EMAIL) and rerun. SEC rate-limits and blocks requests" >&2
-  echo "       that do not carry a genuine contact address." >&2
+  echo "       SEC_CONTACT_EMAIL, MARKETMIND_DB_PASSWORD, MARKETMIND_DATABASE_DSN)" >&2
+  echo "       and rerun. SEC rate-limits and blocks requests that do not carry" >&2
+  echo "       a genuine contact address." >&2
   exit 1
 fi
 
-# 6. Database initialisation
+# 6. Postgres (docker compose) — must come up, and its schema must be applied,
+# before anything below that opens a pool against it.
+log "starting Postgres"
+docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" --project-directory "$INSTALL_DIR" \
+  up -d --wait
+log "applying Postgres schema"
+# --env-file: run_as_app has no equivalent of systemd's EnvironmentFile=, and
+# this is the first run_as_app step that needs a secret (MARKETMIND_DATABASE_DSN)
+# rather than just files already on disk.
+run_as_app uv run --env-file "$INSTALL_DIR/.env" python -m data.db.init_postgres
+
+# 7. Database initialisation (DuckDB)
 log "initialising database"
 run_as_app uv run python -m data.db.init
 
-# 7. systemd units
+# 8. systemd units
 log "installing systemd units"
 install -o root -g root -m 0644 \
   "$INSTALL_DIR"/deploy/systemd/*.service \
   "$INSTALL_DIR"/deploy/systemd/*.timer \
   /etc/systemd/system/
 
-# The update script runs as root, so it must not live in a directory the
-# service user can write to — that user processes untrusted network input and
-# would otherwise be one file write away from root at the next timer firing.
+# The update script and the Postgres backup script both run as root, so
+# neither may live in a directory the service user can write to — that user
+# processes untrusted network input and would otherwise be one file write
+# away from root at the next timer firing.
 install -o root -g root -m 0755 "$INSTALL_DIR/deploy/update.sh" /usr/local/sbin/marketmind-update
+install -o root -g root -m 0755 \
+  "$INSTALL_DIR/deploy/postgres-backup.sh" /usr/local/sbin/marketmind-postgres-backup
 
 systemctl daemon-reload
 systemctl enable --now \
   marketmind-daily.timer \
   marketmind-universe.timer \
   marketmind-backup.timer \
+  marketmind-postgres-backup.timer \
   marketmind-profiles.timer
 if [[ "$ENABLE_AUTO_UPDATE" == "1" ]]; then
   log "enabling weekly auto-update timer"

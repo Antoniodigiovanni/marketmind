@@ -19,12 +19,12 @@ async def _skip_if_unavailable() -> None:
 
 
 async def test_dsn_prefers_the_environment(monkeypatch) -> None:
-    monkeypatch.setenv("MARKETMIND_TEST_DSN", "postgresql://x@example/y")
+    monkeypatch.setenv("MARKETMIND_DATABASE_DSN", "postgresql://x@example/y")
     assert dsn_from_env() == "postgresql://x@example/y"
 
 
 async def test_dsn_falls_back_to_the_default(monkeypatch) -> None:
-    monkeypatch.delenv("MARKETMIND_TEST_DSN", raising=False)
+    monkeypatch.delenv("MARKETMIND_DATABASE_DSN", raising=False)
     assert dsn_from_env().startswith("postgresql://")
 
 

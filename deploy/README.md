@@ -8,6 +8,10 @@ system user via hardened systemd units.
 ## Requirements
 
 - Linux with systemd (Ubuntu/Debian recommended).
+- Docker with the Compose plugin (`docker compose version` must succeed) —
+  runs the production Postgres container. Not installed by these scripts;
+  install it yourself first (e.g. Docker's official install script or your
+  distro's package).
 - Root access for the installer.
 - Network access to GitHub (public clone by default; see "Private repo").
 
@@ -72,10 +76,21 @@ sudo bash deploy/install.sh   # or: REPO_URL=git@github.com:... sudo -E bash dep
 3. Installs the `uv` binary (static, arch-aware) to `/usr/local/bin`.
 4. `uv sync --frozen` (dependencies locked by `uv.lock`).
 5. Installs `.env` from `ENV_FILE`; **aborts** when no `.env` exists or when
-   it still contains the example placeholders (`AI_API_KEY`, `FRED_API_KEY`).
-6. Initialises `data/db/research.duckdb` from `schema.sql`.
-7. Installs hardened systemd units and enables timers.
-8. Installs the root-owned update script to `/usr/local/sbin/marketmind-update`.
+   it still contains an example placeholder (`AI_API_KEY`, `FRED_API_KEY`,
+   `SEC_CONTACT_NAME`/`_EMAIL`, `MARKETMIND_DB_PASSWORD`,
+   `MARKETMIND_DATABASE_DSN`).
+6. Starts the production Postgres container (`docker-compose.prod.yml`,
+   persistent named volume, bound to `127.0.0.1` only) and applies
+   `data/db/schema_postgres.sql` against it.
+7. Initialises `data/db/research.duckdb` from `schema.sql`.
+8. Installs hardened systemd units and enables timers.
+9. Installs the root-owned update script to `/usr/local/sbin/marketmind-update`.
+
+`update.sh` repeats steps 6–7 on every run (`docker compose ... up -d --wait`
+is idempotent; the schema apply re-runs the same `CREATE TABLE IF NOT
+EXISTS`/`CREATE INDEX IF NOT EXISTS` DDL, safe against an already-current
+database), so a later migration to `schema_postgres.sql` is picked up by the
+next `marketmind-update` run same as any other code change.
 
 ### Overrides
 
@@ -92,6 +107,7 @@ ENV_FILE=/path/to/secrets.env sudo -E bash deploy/install.sh
 | `marketmind-universe.timer` | Mondays 06:00 | `data.universe.update` + `data.universe.resolve` (fills `symbol_map`, which the daily price fetch requires) |
 | `marketmind-profiles.timer` | annually on 5 Jan, 06:30 | `agent.ingestion --backfill --profiles-only` |
 | `marketmind-backup.timer` | nightly 02:30 | `deploy/backup.sh` → `/srv/marketmind-backups/` (14-day retention) |
+| `marketmind-postgres-backup.timer` | nightly 02:35 | `pg_dump` of the Postgres database → `/srv/marketmind-backups/` (14-day retention); runs as root, see "Hardening notes" |
 | `marketmind-update.timer` | Mondays 05:30 (opt-in) | `/usr/local/sbin/marketmind-update` self-update |
 
 Adjust with `systemctl edit marketmind-daily.timer` (override `OnCalendar`).
@@ -148,11 +164,24 @@ sudo -u marketmind env HOME=/srv/marketmind bash -c \
 
 ## Rollback
 
-Backups are plain tarballs of `data/`:
+`data/` (DuckDB, raw Parquet/NDJSON) and the Postgres database are backed up
+and restored separately — restoring one does not touch the other.
+
+`data/` backups are plain tarballs:
 
 ```bash
 sudo tar -xzf /srv/marketmind-backups/marketmind-YYYY-MM-DD-HHMM.tar.gz -C /srv/marketmind
 sudo chown -R marketmind:marketmind /srv/marketmind/data
+```
+
+Postgres backups are `pg_dump -Fc` custom-format dumps, restored into a
+running (empty) container:
+
+```bash
+sudo docker compose -f /srv/marketmind/docker-compose.prod.yml \
+  --project-directory /srv/marketmind exec -T postgres \
+  pg_restore -U marketmind -d marketmind --clean --if-exists \
+  < /srv/marketmind-backups/marketmind-postgres-YYYY-MM-DD-HHMM.dump
 ```
 
 Code rollback: `sudo BRANCH=<previous-tag> bash deploy/install.sh`.

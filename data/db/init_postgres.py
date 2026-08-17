@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import psycopg
 from loguru import logger
+
+from data.db.pool import dsn_from_env
 
 POSTGRES_SCHEMA_PATH = Path(__file__).parent / "schema_postgres.sql"
 
@@ -44,3 +47,14 @@ async def apply_schema(dsn: str) -> None:
     finally:
         await conn.close()
     logger.debug("PostgreSQL schema applied")
+
+
+def main() -> None:
+    """Apply the schema against MARKETMIND_DATABASE_DSN (or its local default)."""
+    dsn = dsn_from_env()
+    asyncio.run(apply_schema(dsn))
+    logger.info("PostgreSQL schema applied")
+
+
+if __name__ == "__main__":
+    main()

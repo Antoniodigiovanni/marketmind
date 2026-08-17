@@ -20,6 +20,10 @@ if [[ "$(id -u)" -ne 0 ]]; then
   echo "error: run as root (sudo bash $INSTALL_DIR/deploy/update.sh)" >&2
   exit 1
 fi
+if ! docker compose version >/dev/null 2>&1; then
+  echo "error: docker with the compose plugin is required (docker compose version failed)" >&2
+  exit 1
+fi
 if [[ ! -d "$INSTALL_DIR/.git" ]]; then
   echo "error: no install found at $INSTALL_DIR — run install.sh first" >&2
   exit 1
@@ -66,6 +70,12 @@ run_as_app() { # run_as_app <command...>
 log "syncing dependencies"
 run_as_app uv sync --frozen
 
+log "starting Postgres"
+docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" --project-directory "$INSTALL_DIR" \
+  up -d --wait
+log "applying Postgres schema"
+run_as_app uv run --env-file "$INSTALL_DIR/.env" python -m data.db.init_postgres
+
 log "initialising database"
 run_as_app uv run python -m data.db.init
 
@@ -84,11 +94,16 @@ install -o root -g root -m 0755 \
   "$INSTALL_DIR/deploy/update.sh" /usr/local/sbin/.marketmind-update.new
 mv -f /usr/local/sbin/.marketmind-update.new /usr/local/sbin/marketmind-update
 
+log "refreshing /usr/local/sbin/marketmind-postgres-backup"
+install -o root -g root -m 0755 \
+  "$INSTALL_DIR/deploy/postgres-backup.sh" /usr/local/sbin/marketmind-postgres-backup
+
 systemctl daemon-reload
 systemctl enable --now \
   marketmind-daily.timer \
   marketmind-universe.timer \
   marketmind-backup.timer \
+  marketmind-postgres-backup.timer \
   marketmind-profiles.timer
 if [[ "$ENABLE_AUTO_UPDATE" == "1" ]]; then
   log "enabling weekly auto-update timer"

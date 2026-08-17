@@ -1,0 +1,26 @@
+# Persistent production Postgres, installed by deploy/install.sh. Distinct
+# from docker-compose.yml (the disposable local/CI test database, reset on
+# every test run) — separate file, separate volume, real credentials, no
+# hardcoded password. Bound to 127.0.0.1 only: marketmind's harness and the
+# service itself run on the same box and connect over loopback, matching
+# deploy/README.md's "no network listener" posture.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: marketmind
+      POSTGRES_PASSWORD: ${MARKETMIND_DB_PASSWORD:?set MARKETMIND_DB_PASSWORD in .env}
+      POSTGRES_DB: marketmind
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - marketmind_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketmind -d marketmind"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  marketmind_postgres_data:

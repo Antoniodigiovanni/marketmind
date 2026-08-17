@@ -1,0 +1,16 @@
+[Unit]
+Description=marketmind nightly Postgres backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+# Runs the root-owned copy under /usr/local/sbin, never the one inside the
+# install tree: that tree is writable by the marketmind service user, which
+# processes untrusted network input. install.sh/update.sh keep the copy
+# fresh. Root (not the app user) because pg_dump needs the Docker socket to
+# reach the Postgres container -- see deploy/README.md's hardening notes.
+ExecStart=/usr/local/sbin/marketmind-postgres-backup
+UMask=0077
