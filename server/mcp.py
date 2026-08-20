@@ -13,6 +13,7 @@ import duckdb
 import polars as pl
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from psycopg_pool import AsyncConnectionPool
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -40,7 +41,24 @@ from data.universe.loader import get_universe
 
 MCP_PORT = int(os.getenv("MARKETMIND_MCP_PORT", "8000"))
 
-mcp = FastMCP("marketmind", host="127.0.0.1", port=MCP_PORT)
+# The process binds 0.0.0.0 -- Docker's port publishing forwards to a
+# container's network interface, not its own internal 127.0.0.1, so a
+# process bound only to loopback inside the container is unreachable even
+# from the host despite `docker-compose.prod.yml` mapping the port to
+# 127.0.0.1. That host-side mapping (not this bind address) is what keeps
+# the service unreachable off-box; DNS-rebinding protection is configured
+# explicitly here since FastMCP only auto-enables it when host is a
+# loopback name, which "0.0.0.0" is not.
+mcp = FastMCP(
+    "marketmind",
+    host="0.0.0.0",  # noqa: S104 -- see comment above; loopback-only enforced by the host port mapping
+    port=MCP_PORT,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=["127.0.0.1:*", "localhost:*"],
+        allowed_origins=["http://127.0.0.1:*", "http://localhost:*"],
+    ),
+)
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT_DIR / "data" / "db" / "research.duckdb"
@@ -1201,7 +1219,7 @@ def main() -> None:
     token = os.environ["MARKETMIND_MCP_TOKEN"]
     app = mcp.streamable_http_app()
     app.add_middleware(_BearerAuthMiddleware, token=token)
-    uvicorn.run(app, host="127.0.0.1", port=MCP_PORT, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=MCP_PORT, log_level="info")  # noqa: S104 -- see mcp's construction comment above
 
 
 if __name__ == "__main__":

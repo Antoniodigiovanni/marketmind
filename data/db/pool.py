@@ -23,10 +23,18 @@ DEFAULT_DSN = "postgresql://marketmind:marketmind@127.0.0.1:5433/marketmind_test
 def dsn_from_env() -> str:
     """Return the configured DSN, falling back to the local test default.
 
+    MARKETMIND_DATABASE_DSN is the one variable for every environment --
+    local dev, CI, and production. There is no separate prod-only name: an
+    unset variable falls back to DEFAULT_DSN (the local docker-compose test
+    database on 127.0.0.1:5433), which is unreachable from a real
+    production host, so a missing/forgotten production DSN fails loudly as
+    a connection error rather than silently succeeding against the wrong
+    database.
+
     Returns:
         A libpq connection string.
     """
-    return os.getenv("MARKETMIND_TEST_DSN") or DEFAULT_DSN
+    return os.getenv("MARKETMIND_DATABASE_DSN") or DEFAULT_DSN
 
 
 async def _configure(conn: psycopg.AsyncConnection) -> None:

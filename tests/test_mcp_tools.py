@@ -251,7 +251,7 @@ def test_main_initialises_both_databases_then_serves_with_auth(monkeypatch) -> N
     assert calls == [
         "apply_schema:postgresql://x",
         "init_db",
-        f"uvicorn.run:127.0.0.1:{mcp_mod.MCP_PORT}",
+        f"uvicorn.run:0.0.0.0:{mcp_mod.MCP_PORT}",
     ]
 
 

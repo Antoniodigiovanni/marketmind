@@ -34,6 +34,14 @@ services:
     ports:
       - "127.0.0.1:${MARKETMIND_MCP_PORT:-8000}:${MARKETMIND_MCP_PORT:-8000}"
     volumes:
+      # data/ mixes generated content (raw/, processed/*.parquet,
+      # db/*.duckdb) with application code (data/db/*.py, data/sources/,
+      # data/universe/, ...) in the same tree -- this bind mount shadows
+      # both. It only works because `build: .` and this mount point at the
+      # same checkout: the image's copy of data/*.py and the host's are
+      # therefore always identical. Never point this at a directory that
+      # isn't the exact checkout the image was built from (a stale or
+      # unrelated data/ directory silently breaks every `data.*` import).
       - ./data:/app/data
 
 volumes:
