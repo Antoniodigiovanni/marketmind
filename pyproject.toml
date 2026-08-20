@@ -27,6 +27,8 @@ dependencies = [
     "feedparser>=6.0",
     # MCP interface
     "mcp>=1.0,<2.0",
+    "uvicorn>=0.30",
+    "starlette>=0.37",
     # Trading calendars
     "exchange-calendars>=4.5",
     # Utilities

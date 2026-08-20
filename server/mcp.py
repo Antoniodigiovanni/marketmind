@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import os
 import uuid
 from collections.abc import Callable
 from pathlib import Path
 
 import duckdb
 import polars as pl
+import uvicorn
 from mcp.server.fastmcp import FastMCP
 from psycopg_pool import AsyncConnectionPool
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 import server.jobs as jobs
 from agent.embedding import hash_embed
@@ -27,13 +31,16 @@ from data.db.filings import get_filings as filings_get_filings
 from data.db.filings import search_filing_text as filings_search_filing_text
 from data.db.identifiers import get_current_company_id, resolve_identifier
 from data.db.init import init_db
+from data.db.init_postgres import apply_schema
 from data.db.listings import get_current_listing
-from data.db.pool import open_pool
+from data.db.pool import dsn_from_env, open_pool
 from data.db.runs import list_recent_runs
 from data.sources.rss import NEWS_RECORD_FIELDS
 from data.universe.loader import get_universe
 
-mcp = FastMCP("marketmind")
+MCP_PORT = int(os.getenv("MARKETMIND_MCP_PORT", "8000"))
+
+mcp = FastMCP("marketmind", host="127.0.0.1", port=MCP_PORT)
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT_DIR / "data" / "db" / "research.duckdb"
@@ -1142,9 +1149,59 @@ async def get_ingest_status(limit: int = 5) -> dict[str, object]:
     }
 
 
+class _BearerAuthMiddleware:
+    """ASGI middleware requiring a static bearer token on every HTTP request.
+
+    Plain ASGI, not Starlette's BaseHTTPMiddleware — that helper buffers
+    the whole response before forwarding it, which breaks streaming/SSE
+    bodies. streamable-http's transport depends on unbuffered streaming, so
+    this passes scope/receive/send straight through unmodified once the
+    token check passes.
+
+    Deliberately not FastMCP's own `auth`/`token_verifier` constructor
+    arguments: those model an OAuth 2.1 resource server (`AuthSettings`
+    requires a real `issuer_url`) built for multi-tenant remote servers
+    authorizing many distinct third-party clients. marketmind has exactly
+    one caller (the harness, same box) — a shared-secret bearer check is
+    the right amount of machinery for that, not a fake OAuth issuer.
+    """
+
+    def __init__(self, app: ASGIApp, token: str) -> None:
+        """Wrap `app`, rejecting any HTTP request without the matching token."""
+        self._app = app
+        self._expected = f"Bearer {token}"
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Check the Authorization header for http scopes; pass everything else through."""
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers") or [])
+        presented = headers.get(b"authorization", b"").decode("latin-1")
+        if presented != self._expected:
+            response = JSONResponse({"error": "unauthorized"}, status_code=401)
+            await response(scope, receive, send)
+            return
+        await self._app(scope, receive, send)
+
+
 def main() -> None:
-    """Run the MCP server over stdio."""
-    mcp.run()
+    """Run the MCP server over streamable-http.
+
+    On every start (including a restart: unless-stopped recovery): applies
+    the Postgres schema and ensures research.duckdb exists. Both are
+    idempotent, so running them unconditionally here is what replaces the
+    old deploy tooling's one-time `data.db.init`/`data.db.init_postgres`
+    steps — initialisation is the app's own responsibility now, not
+    something deploy scripting does once ahead of time.
+    """
+    asyncio.run(apply_schema(dsn_from_env()))
+    init_db()
+
+    token = os.environ["MARKETMIND_MCP_TOKEN"]
+    app = mcp.streamable_http_app()
+    app.add_middleware(_BearerAuthMiddleware, token=token)
+    uvicorn.run(app, host="127.0.0.1", port=MCP_PORT, log_level="info")
 
 
 if __name__ == "__main__":

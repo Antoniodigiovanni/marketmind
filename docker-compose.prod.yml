@@ -1,0 +1,40 @@
+# Production deploy: Postgres + the marketmind app, both always-on
+# (restart: unless-stopped). Distinct from docker-compose.yml (the
+# disposable local/CI test database only). Setup:
+#   git clone ... && cd marketmind
+#   cp .env.example .env && edit it
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   crontab deploy/crontab
+# See deploy/README.md.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: marketmind
+      POSTGRES_PASSWORD: ${MARKETMIND_DB_PASSWORD:?set MARKETMIND_DB_PASSWORD in .env}
+      POSTGRES_DB: marketmind
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - marketmind_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketmind -d marketmind"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  marketmind:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${MARKETMIND_MCP_PORT:-8000}:${MARKETMIND_MCP_PORT:-8000}"
+    volumes:
+      - ./data:/app/data
+
+volumes:
+  marketmind_postgres_data:

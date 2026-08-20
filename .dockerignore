@@ -1,0 +1,21 @@
+# Generated/downloaded data — bind-mounted at runtime (docker-compose.prod.yml),
+# never baked into the image. Mirrors .gitignore's data/ rules.
+data/raw/
+data/processed/*.parquet
+data/db/*.duckdb
+data/db/*.duckdb.wal
+data/db/*.duckdb.tmp
+data/db/vectors/
+
+.venv/
+.git/
+.github/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+
+.env
+tests/
+docs/
+deploy/

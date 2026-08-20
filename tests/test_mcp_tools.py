@@ -228,11 +228,88 @@ async def test_get_volatility_date_window(pg_conn, monkeypatch) -> None:
     assert [r["date"] for r in rows] == ["2026-08-04"]
 
 
-def test_main_runs_server(monkeypatch) -> None:
+def test_main_initialises_both_databases_then_serves_with_auth(monkeypatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr(mcp_mod.mcp, "run", lambda: calls.append("run"))
+
+    async def fake_apply_schema(dsn: str) -> None:
+        calls.append(f"apply_schema:{dsn}")
+
+    def fake_init_db() -> None:
+        calls.append("init_db")
+
+    def fake_run(app: object, *, host: str, port: int, log_level: str) -> None:
+        calls.append(f"uvicorn.run:{host}:{port}")
+
+    monkeypatch.setattr(mcp_mod, "apply_schema", fake_apply_schema)
+    monkeypatch.setattr(mcp_mod, "init_db", fake_init_db)
+    monkeypatch.setattr(mcp_mod.uvicorn, "run", fake_run)
+    monkeypatch.setattr(mcp_mod, "dsn_from_env", lambda: "postgresql://x")
+    monkeypatch.setenv("MARKETMIND_MCP_TOKEN", "secret-token")
+
     mcp_mod.main()
-    assert calls == ["run"]
+
+    assert calls == [
+        "apply_schema:postgresql://x",
+        "init_db",
+        f"uvicorn.run:127.0.0.1:{mcp_mod.MCP_PORT}",
+    ]
+
+
+def test_main_requires_the_mcp_token(monkeypatch) -> None:
+    async def fake_apply_schema(dsn: str) -> None:
+        return None
+
+    monkeypatch.setattr(mcp_mod, "apply_schema", fake_apply_schema)
+    monkeypatch.setattr(mcp_mod, "init_db", lambda: None)
+    monkeypatch.delenv("MARKETMIND_MCP_TOKEN", raising=False)
+
+    with pytest.raises(KeyError, match="MARKETMIND_MCP_TOKEN"):
+        mcp_mod.main()
+
+
+class _FakeASGIApp:
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    async def __call__(self, scope, receive, send) -> None:
+        self.calls.append((scope["type"],))
+
+
+async def test_bearer_auth_middleware_rejects_missing_or_wrong_token() -> None:
+    inner = _FakeASGIApp()
+    middleware = mcp_mod._BearerAuthMiddleware(inner, token="correct")
+
+    sent: list[dict] = []
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    scope = {"type": "http", "headers": [(b"authorization", b"Bearer wrong")]}
+    await middleware(scope, None, send)
+
+    assert inner.calls == []  # never reached the wrapped app
+    assert sent[0]["status"] == 401
+
+
+async def test_bearer_auth_middleware_accepts_the_correct_token() -> None:
+    inner = _FakeASGIApp()
+    middleware = mcp_mod._BearerAuthMiddleware(inner, token="correct")
+
+    scope = {"type": "http", "headers": [(b"authorization", b"Bearer correct")]}
+    await middleware(scope, None, None)
+
+    assert inner.calls == [("http",)]
+
+
+async def test_bearer_auth_middleware_passes_through_non_http_scopes() -> None:
+    """The lifespan scope (startup/shutdown) must never be auth-gated."""
+    inner = _FakeASGIApp()
+    middleware = mcp_mod._BearerAuthMiddleware(inner, token="correct")
+
+    scope = {"type": "lifespan"}
+    await middleware(scope, None, None)
+
+    assert inner.calls == [("lifespan",)]
 
 
 async def test_market_views_tools(monkeypatch, pg_conn) -> None:
