@@ -1,0 +1,29 @@
+# marketmind — installed with: crontab deploy/crontab
+#
+# Every job runs the same production image via `docker compose run --rm`,
+# which waits for Postgres to be healthy first (compose's own depends_on) --
+# no separate readiness check needed here. Run as root's crontab: every line
+# needs Docker access, and none of these commands process untrusted network
+# input directly (unlike the app itself, which is why its own container
+# runs as a non-root user).
+#
+# Ported 1:1 from the schedule the old systemd timers ran (deploy/systemd/,
+# removed): same times, same commands. Plain cron has no equivalent of
+# systemd's Persistent=true (a missed run just doesn't happen, it isn't
+# caught up later) or RandomizedDelaySec (jitter) -- accepted, this is a
+# single-box deploy, not a fleet.
+
+# Daily 06:10 — price/macro fetch + news ingest
+10 6 * * * cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python data/fetch.py && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.ingestion "$(date -I)"
+
+# Mondays 06:00 — universe (S&P 500 / STOXX 600 membership) refresh
+0 6 * * 1 cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m data.universe.update && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m data.universe.resolve
+
+# Annually, 5 Jan 06:30 — company profile refresh (new version for every company)
+30 6 5 1 * cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.ingestion "$(date -I)" --backfill --profiles-only
+
+# Nightly 02:30 — data/ tarball backup, 14-day retention
+30 2 * * * cd /srv/marketmind && tar -czf /srv/marketmind-backups/marketmind-$(date +\%F-\%H\%M).tar.gz -C /srv/marketmind data && find /srv/marketmind-backups -name 'marketmind-*.tar.gz' -mtime +14 -delete
+
+# Nightly 02:35 — Postgres backup (pg_dump), 14-day retention
+35 2 * * * cd /srv/marketmind && docker compose -f docker-compose.prod.yml exec -T postgres pg_dump -U marketmind -Fc marketmind > /srv/marketmind-backups/marketmind-postgres-$(date +\%F-\%H\%M).dump && find /srv/marketmind-backups -name 'marketmind-postgres-*.dump' -mtime +14 -delete

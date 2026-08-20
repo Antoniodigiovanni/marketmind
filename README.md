@@ -9,10 +9,11 @@ The harness is both a consumer and a writer: it reads prices, news, facts, and
 views through MCP tools, and writes free-text market snapshots back into the
 database, which a structuring job then turns into queryable JSON.
 
-This is **not a standalone app**. There is no UI, no HTTP API, and no separate
-deployment stack. marketmind runs as a service on the same box as the harness,
-shares its cron schedule and secrets, and is driven exclusively through the MCP
-server in `server/mcp.py`.
+This is **not a standalone app**. There is no UI and no separate deployment
+stack. marketmind runs as a service on the same box as the harness and is
+driven exclusively through the MCP server in `server/mcp.py`, over
+streamable-http bound to `127.0.0.1` — reachable only from that box, not a
+public HTTP API.
 
 ## Status
 
@@ -24,7 +25,7 @@ server in `server/mcp.py`.
 
 ```
 Hermes / agent harness
-        │  MCP (stdio)
+        │  MCP (streamable-http, 127.0.0.1, bearer token)
         ▼
    marketmind
    ├── server/mcp.py     read/write tools over the database
@@ -93,9 +94,10 @@ uv run pytest tests/ -v --cov=. --cov-report=term-missing
 
 ### Environment variables
 
-`.env` is never committed. In production the systemd units load it via
-`EnvironmentFile=/srv/marketmind/.env` (see `deploy/systemd/*.service`); no
-code in this repo calls `python-dotenv`.
+`.env` is never committed. In production, `docker compose`'s `env_file:`
+directive loads it into the app container (see `docker-compose.prod.yml`);
+locally, export the values in your shell or pass `--env-file .env` to
+`uv run` yourself — no code in this repo calls `python-dotenv`.
 
 | Variable | Purpose |
 |---|---|
@@ -108,6 +110,10 @@ code in this repo calls `python-dotenv`.
 | `SEC_CONTACT_NAME` | Operator name sent to SEC EDGAR and filings.xbrl.org (required) |
 | `SEC_CONTACT_EMAIL` | Operator email sent with every EDGAR request (required) |
 | `INGEST_MAX_CONSECUTIVE_FAILURES` | Consecutive extraction failures before the ingest run aborts (default 20) |
+| `MARKETMIND_DATABASE_DSN` | Postgres connection string; unset falls back to the local docker-compose test database |
+| `MARKETMIND_DB_PASSWORD` | Production Postgres container password (`docker-compose.prod.yml`); must match the password embedded in `MARKETMIND_DATABASE_DSN` |
+| `MARKETMIND_MCP_TOKEN` | Bearer token the harness must present on every MCP request |
+| `MARKETMIND_MCP_PORT` | Port the MCP server listens on (default 8000) |
 
 ## Commands
 
@@ -118,7 +124,7 @@ uv run python -m data.universe.resolve        # resolve symbols into symbol_map
 uv run python data/fetch.py                   # daily price + macro refresh
 uv run python -m agent.ingestion {YYYY-MM-DD} # daily news + fact ingest
 uv run python -m agent.views {YYYY-MM-DD}     # structure free-text market views
-uv run python -m server.mcp                   # run the MCP server (stdio)
+uv run python -m server.mcp                   # run the MCP server (streamable-http, 127.0.0.1:8000)
 uv run ruff check . && uv run ruff format .   # lint + format
 ```
 
@@ -129,103 +135,28 @@ profiles, and MCP server are functional.
 
 ## Deployment (generic VPS)
 
-marketmind is designed to run on the same Linux box as the harness: a
-dedicated system user, systemd timers for the daily jobs, and an MCP server
-spawned over stdio — **no ports are opened**.
-
-### Requirements
-
-- Linux with systemd (Ubuntu/Debian recommended), root access.
-- GitHub access: public clone, or a read-only deploy key for a private repo.
-- `uv` — installed automatically by the installer.
-
-### One-command install
+Docker-native: one image for the whole app, `docker compose` for the
+always-on services (Postgres, the MCP server over streamable-http — no
+ports beyond `127.0.0.1`), plain cron for scheduled jobs. No systemd, no
+install/update scripts.
 
 ```bash
-# public repo
-curl -fsSL https://raw.githubusercontent.com/Antoniodigiovanni/marketmind/main/deploy/install.sh | sudo bash
+git clone git@github.com:Antoniodigiovanni/marketmind.git /srv/marketmind
+cd /srv/marketmind
+cp .env.example .env   # edit: real secrets, MARKETMIND_DB_PASSWORD/DATABASE_DSN, MARKETMIND_MCP_TOKEN
 
-# private repo (clone once, then run locally)
-git clone git@github.com:<you>/marketmind.git
-cd marketmind
-sudo REPO_URL=git@github.com:<you>/marketmind.git bash deploy/install.sh
+docker compose -f docker-compose.prod.yml up -d --build
+crontab deploy/crontab
 ```
 
-For a private repo, create a **read-only deploy key** (GitHub → repo →
-Settings → Deploy keys), place the private half at `/root/.ssh/marketmind_deploy`
-on the VPS, and add the `Host github.com` config entry so root's git uses it —
-full recipe in [deploy/README.md](deploy/README.md).
+Updating is `git pull && docker compose -f docker-compose.prod.yml up -d
+--build` — the app applies schema changes to both databases itself on
+every start, so there's no separate migration step.
 
-The installer is idempotent: it creates the `marketmind` system user, clones
-the repo to `/srv/marketmind`, installs `uv`, runs `uv sync --frozen`,
-installs `.env`, initialises the DuckDB schema, installs hardened systemd
-units, and enables the timers.
-
-### Secrets
-
-Prepare a `.env` and pass it to the installer:
-
-```bash
-sudo ENV_FILE=/root/marketmind.env \
-     REPO_URL=git@github.com:<you>/marketmind.git \
-     bash /srv/marketmind/deploy/install.sh
-```
-
-Required keys: `AI_API_KEY` (chat API), `FRED_API_KEY`. The installed
-`/srv/marketmind/.env` is mode `0600` and is **never touched** by installs or
-updates. The installer **aborts** if no `.env` exists or if it still holds the
-example placeholders — enabling the timers with an unusable key would give you
-a job that fails silently every morning.
-
-### Schedules (systemd timers)
-
-| Timer | Schedule | Job |
-|---|---|---|
-| `marketmind-daily.timer` | daily 06:10 | price/macro fetch + news ingest |
-| `marketmind-universe.timer` | Mondays 06:00 | universe refresh + symbol resolution |
-| `marketmind-profiles.timer` | annually, 5 Jan | company profile refresh (`--backfill --profiles-only`) |
-| `marketmind-backup.timer` | nightly 02:30 | `data/` tarball, 14-day retention |
-| `marketmind-update.timer` | Mondays 05:30 (opt-in) | self-update |
-
-Override a schedule with `sudo systemctl edit <timer>` — overrides survive
-updates.
-
-### Updating
-
-```bash
-sudo /usr/local/sbin/marketmind-update
-```
-
-Pulls the configured branch/tag (read from `/srv/marketmind/deploy.conf`),
-re-syncs dependencies, migrates the schema, reinstalls units, and re-arms
-timers. Opt into weekly unattended updates with `ENABLE_AUTO_UPDATE=1` in
-`deploy.conf`.
-
-### MCP wiring for the harness
-
-The harness spawns the server as the `marketmind` user:
-
-```bash
-sudo -u marketmind env HOME=/srv/marketmind UV_CACHE_DIR=/srv/marketmind/.cache \
-  bash -c 'cd /srv/marketmind && exec /usr/local/bin/uv run --frozen --no-sync python -m server.mcp'
-```
-
-### Health checks
-
-```bash
-systemctl list-timers | grep marketmind
-journalctl -u marketmind-daily.service -e
-```
-
-Every job also writes an audit row to `agent_runs` (counts + `error` column).
-
-### Backups
-
-The nightly timer tarballs `data/` to `/srv/marketmind-backups/`. Move it
-off-box (rclone/restic) — a same-machine copy is a local safety net, not
-disaster recovery.
-
-Full operational detail lives in [deploy/README.md](deploy/README.md).
+Full operational detail — schedule table, harness MCP wiring (the harness
+now connects to `http://127.0.0.1:8000/mcp` as a streamable-http client
+with a bearer token, rather than spawning a stdio subprocess), operations,
+and rollback — lives in [deploy/README.md](deploy/README.md).
 
 ## MCP tools
 
