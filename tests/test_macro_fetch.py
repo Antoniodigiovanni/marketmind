@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import datetime as dt
+from pathlib import Path
 
 import polars as pl
 
 import data.macro.fetch as fetch_mod
 from data.macro.series import MACRO_SERIES
 from data.macro.store import append_series, read_series
+
+
+def test_default_processed_dir_accepts_a_runtime_override(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MARKETMIND_PROCESSED_DIR", str(tmp_path))
+
+    assert fetch_mod._default_processed_dir() == tmp_path / "macro"
 
 
 def _frame(dates: list[dt.date], values: list[float]) -> pl.DataFrame:

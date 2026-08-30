@@ -6,16 +6,25 @@ data/db/*.duckdb
 data/db/*.duckdb.wal
 data/db/*.duckdb.tmp
 data/db/vectors/
+state/
 
 .venv/
 .git/
 .github/
 .pytest_cache/
 .ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 __pycache__/
 *.pyc
+*.egg-info/
+.DS_Store
 
-.env
+.env*
+AGENTS.md
+CLAUDE.md
+todo.md
 tests/
 docs/
 deploy/

@@ -1,8 +1,8 @@
-# marketmind — installed with: crontab deploy/crontab
+# marketmind — install as root-owned /etc/cron.d/marketmind (mode 0644)
 #
 # Every job runs the same production image via `docker compose run --rm`,
 # which waits for Postgres to be healthy first (compose's own depends_on) --
-# no separate readiness check needed here. Run as root's crontab: every line
+# no separate readiness check needed here. Every entry runs as root because it
 # needs Docker access, and none of these commands process untrusted network
 # input directly (unlike the app itself, which is why its own container
 # runs as a non-root user).
@@ -13,17 +13,20 @@
 # caught up later) or RandomizedDelaySec (jitter) -- accepted, this is a
 # single-box deploy, not a fleet.
 
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 # Daily 06:10 — price/macro fetch + news ingest
-10 6 * * * cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python data/fetch.py && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.ingestion "$(date -I)"
+10 6 * * * root flock -n /run/lock/marketmind-data.lock sh -c 'cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python data/fetch.py && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.ingestion "$(date -I)"' >> /var/log/marketmind/daily.log 2>&1
 
 # Mondays 06:00 — universe (S&P 500 / STOXX 600 membership) refresh
-0 6 * * 1 cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m data.universe.update && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m data.universe.resolve
+0 6 * * 1 root flock -n /run/lock/marketmind-data.lock sh -c 'cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m data.universe.update && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m data.universe.resolve' >> /var/log/marketmind/universe.log 2>&1
 
 # Annually, 5 Jan 06:30 — company profile refresh (new version for every company)
-30 6 5 1 * cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.ingestion "$(date -I)" --backfill --profiles-only
+30 6 5 1 * root flock -n /run/lock/marketmind-data.lock sh -c 'cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.ingestion "$(date -I)" --backfill --profiles-only' >> /var/log/marketmind/profiles.log 2>&1
 
-# Nightly 02:30 — data/ tarball backup, 14-day retention
-30 2 * * * cd /srv/marketmind && tar -czf /srv/marketmind-backups/marketmind-$(date +\%F-\%H\%M).tar.gz -C /srv/marketmind data && find /srv/marketmind-backups -name 'marketmind-*.tar.gz' -mtime +14 -delete
+# Nightly 02:30 — raw data + mutable state tarball, 14-day retention
+30 2 * * * root flock -n /run/lock/marketmind-data.lock /srv/marketmind/deploy/backup-files.sh >> /var/log/marketmind/backup.log 2>&1
 
 # Nightly 02:35 — Postgres backup (pg_dump), 14-day retention
-35 2 * * * cd /srv/marketmind && docker compose -f docker-compose.prod.yml exec -T postgres pg_dump -U marketmind -Fc marketmind > /srv/marketmind-backups/marketmind-postgres-$(date +\%F-\%H\%M).dump && find /srv/marketmind-backups -name 'marketmind-postgres-*.dump' -mtime +14 -delete
+35 2 * * * root sh -c 'umask 077 && mkdir -p /srv/marketmind-backups && find /srv/marketmind-backups -name "marketmind-*.tmp" -mtime +1 -delete && cd /srv/marketmind && pg_backup=/srv/marketmind-backups/marketmind-postgres-$(date +\%F-\%H\%M).dump && docker compose -f docker-compose.prod.yml exec -T postgres pg_dump -U marketmind -Fc marketmind > "$pg_backup.tmp" && mv "$pg_backup.tmp" "$pg_backup" && find /srv/marketmind-backups -name "marketmind-postgres-*.dump" -mtime +14 -delete' >> /var/log/marketmind/backup.log 2>&1

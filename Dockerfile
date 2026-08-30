@@ -1,9 +1,9 @@
 # marketmind — production image. Runs the MCP server (default CMD) or any
 # one-off job via `docker compose run --rm marketmind <command>`, reusing
 # the same image and dependency install for both.
-FROM python:3.12-slim
+FROM python:3.12.14-slim
 
-RUN pip install --no-cache-dir uv
+RUN pip install --no-cache-dir "uv==0.12.7"
 
 WORKDIR /app
 
@@ -16,7 +16,9 @@ COPY . .
 RUN uv sync --frozen
 
 RUN useradd --system --create-home --home-dir /app marketmind \
-    && chown -R marketmind:marketmind /app
+    && chown -R marketmind:marketmind /app \
+    && chmod 0755 /app/docker-entrypoint.sh
 USER marketmind
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["uv", "run", "--frozen", "--no-sync", "python", "-m", "server.mcp"]

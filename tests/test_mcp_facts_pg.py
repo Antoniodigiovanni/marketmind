@@ -125,6 +125,21 @@ async def test_save_fact_then_get_facts_round_trip(monkeypatch, pg_conn) -> None
     assert facts[0]["statement"] == "Revenue grew 12% YoY"
 
 
+async def test_save_fact_rejects_an_unresolvable_ticker(monkeypatch, pg_conn) -> None:
+    _patch_pool(monkeypatch, pg_conn)
+    article_id = await _article(pg_conn)
+
+    with pytest.raises(ValueError, match="does not resolve to a tracked company"):
+        await mcp_mod.save_fact(
+            ticker="NOPE",
+            statement="Unknown company statement",
+            fact_type="risk",
+            confidence=0.5,
+            valid_from="2020-01-01",
+            source_article_id=str(article_id),
+        )
+
+
 async def test_get_facts_is_point_in_time(monkeypatch, pg_conn) -> None:
     _patch_pool(monkeypatch, pg_conn)
     await _company(pg_conn, "AAPL")

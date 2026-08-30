@@ -255,15 +255,19 @@ def test_main_initialises_both_databases_then_serves_with_auth(monkeypatch) -> N
     ]
 
 
-def test_main_requires_the_mcp_token(monkeypatch) -> None:
+@pytest.mark.parametrize("token", [None, "", "   "])
+def test_main_requires_a_nonblank_mcp_token(monkeypatch, token: str | None) -> None:
     async def fake_apply_schema(dsn: str) -> None:
         return None
 
     monkeypatch.setattr(mcp_mod, "apply_schema", fake_apply_schema)
     monkeypatch.setattr(mcp_mod, "init_db", lambda: None)
-    monkeypatch.delenv("MARKETMIND_MCP_TOKEN", raising=False)
+    if token is None:
+        monkeypatch.delenv("MARKETMIND_MCP_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("MARKETMIND_MCP_TOKEN", token)
 
-    with pytest.raises(KeyError, match="MARKETMIND_MCP_TOKEN"):
+    with pytest.raises(RuntimeError, match="MARKETMIND_MCP_TOKEN"):
         mcp_mod.main()
 
 
@@ -289,6 +293,7 @@ async def test_bearer_auth_middleware_rejects_missing_or_wrong_token() -> None:
 
     assert inner.calls == []  # never reached the wrapped app
     assert sent[0]["status"] == 401
+    assert dict(sent[0]["headers"])[b"www-authenticate"] == b"Bearer"
 
 
 async def test_bearer_auth_middleware_accepts_the_correct_token() -> None:

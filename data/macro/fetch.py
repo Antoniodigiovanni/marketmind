@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 from pathlib import Path
 
 import polars as pl
@@ -19,7 +20,15 @@ from data.processed.spreads import compute_hy_minus_bbb
 
 FULL_HISTORY_START = "1900-01-01"
 OVERLAP_DAYS = 30  # refetch buffer so monthly series revisions are caught
-PROCESSED_DIR = Path(__file__).resolve().parents[2] / "data" / "processed" / "macro"
+
+
+def _default_processed_dir() -> Path:
+    """Return the configured directory for derived macro artifacts."""
+    default_root = Path(__file__).resolve().parents[2] / "data" / "processed"
+    return Path(os.getenv("MARKETMIND_PROCESSED_DIR", default_root)) / "macro"
+
+
+PROCESSED_DIR = _default_processed_dir()
 CREDIT_SPREADS_FILENAME = "credit_spreads.parquet"
 HY_OAS_ID = "BAMLH0A0HYM2"
 BBB_OAS_ID = "BAMLC0A4CBBB"

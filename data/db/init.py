@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import duckdb
@@ -9,7 +10,14 @@ from loguru import logger
 
 DB_DIR = Path(__file__).parent
 SCHEMA_PATH = DB_DIR / "schema.sql"
-DEFAULT_DB_PATH = DB_DIR / "research.duckdb"
+
+
+def _default_db_path() -> Path:
+    """Return the configured DuckDB path, falling back to the package data directory."""
+    return Path(os.getenv("MARKETMIND_DUCKDB_PATH", DB_DIR / "research.duckdb"))
+
+
+DEFAULT_DB_PATH = _default_db_path()
 
 
 def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> duckdb.DuckDBPyConnection:

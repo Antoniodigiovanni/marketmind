@@ -1,16 +1,16 @@
 # marketmind
 
-**Market-memory microservice for agent harnesses — S&P 500 + Eurostoxx 600.**
+**Market-memory microservice for Hermes — S&P 500 + Eurostoxx 600.**
 
 marketmind owns a growing database of market data — daily closing prices for
 ~1,100 US and European equities, news, extracted facts, and historical market
-views — and exposes that database to an agent harness (Hermes) through **MCP**.
-The harness is both a consumer and a writer: it reads prices, news, facts, and
+views — and exposes that database to Hermes through **MCP**.
+The MCP client is both a consumer and a writer: it reads prices, news, facts, and
 views through MCP tools, and writes free-text market snapshots back into the
 database, which a structuring job then turns into queryable JSON.
 
-This is **not a standalone app**. There is no UI and no separate deployment
-stack. marketmind runs as a service on the same box as the harness and is
+This is **not a standalone app**. There is no UI or independent public
+deployment. marketmind runs as a service on the same box as Hermes and is
 driven exclusively through the MCP server in `server/mcp.py`, over
 streamable-http bound to `127.0.0.1` — reachable only from that box, not a
 public HTTP API.
@@ -24,29 +24,30 @@ public HTTP API.
 ## Architecture
 
 ```
-Hermes / agent harness
+Hermes
         │  MCP (streamable-http, 127.0.0.1, bearer token)
         ▼
    marketmind
    ├── server/mcp.py     read/write tools over the database
    ├── daily jobs        universe refresh · price + macro fetch · news ingest · view structuring
    └── storage
-       ├── DuckDB        structured data: facts, views, audit (data/db/research.duckdb)
-       ├── Parquet       immutable raw prices/macro (data/raw/) and derived series (data/processed/)
+       ├── PostgreSQL    identity, prices, news, facts, views, filings, audit
+       ├── DuckDB        transitional stores (state/research.duckdb in production)
+       ├── Parquet       immutable raw data (data/raw/) and derived series (state/processed/)
        ├── NDJSON        raw news articles, one file per date (data/raw/news/)
-       └── ChromaDB      fact embeddings for semantic retrieval (data/db/vectors/)
+       └── pgvector      fact embeddings inside PostgreSQL
 ```
 
 Key principles:
 
 - **Raw data is immutable.** Anything under `data/raw/` is never edited after
-  download; derived series live in `data/processed/`.
+  download; production-derived series live in `state/processed/`.
 - **Facts are versioned, never mutated.** Superseding a fact closes the old row
   with `valid_until` and inserts a new one. Every query must be point-in-time
   (`as_of`) to avoid look-ahead bias.
 - **Free-text views are immutable.** Structured JSON is derived from them, never
   the other way around.
-- **MCP is the only harness-facing interface.**
+- **MCP is the only client-facing interface.**
 - **Free data sources only.** No paid APIs.
 
 ## Repository layout
@@ -58,9 +59,10 @@ marketmind/
 │   ├── processed/      derived series, e.g. volatility.parquet
 │   ├── universe/       point-in-time constituents: sp500.csv, eurostoxx600.csv, delisted.csv
 │   ├── db/
-│   │   ├── schema.sql  DuckDB schema — the single source of truth
+│   │   ├── schema.sql  DuckDB schema for transitional stores
+│   │   ├── schema_postgres.sql  canonical PostgreSQL schema
+│   │   ├── postgres_migrations/ versioned PostgreSQL transitions
 │   │   ├── init.py     creates research.duckdb from schema.sql
-│   │   └── vectors/    ChromaDB embeddings (not committed)
 │   └── sources/        yfinance.py, fred.py, ecb.py, sec.py, rss.py
 ├── agent/
 │   ├── ingestion.py    daily news → fact pipeline
@@ -68,8 +70,9 @@ marketmind/
 │   ├── knowledge.py    fact store read/write (as_of-enforced)
 │   └── prompts/        all prompt templates as .md files
 ├── server/
-│   └── mcp.py          the only harness-facing interface
+│   └── mcp.py          the only client-facing interface
 ├── journal/            Obsidian-compatible daily notes
+├── state/              production DuckDB, derived files, universe snapshots (not committed)
 └── docs/               design specs and implementation plans
 ```
 
@@ -88,7 +91,7 @@ cp .env.example .env
 # Create / verify the DuckDB database
 uv run python -m data.db.init
 
-# Run the test suite (in-memory DuckDB, mocked APIs, no network)
+# Run the test suite (DuckDB fixtures, disposable PostgreSQL, mocked APIs)
 uv run pytest tests/ -v --cov=. --cov-report=term-missing
 ```
 
@@ -111,9 +114,10 @@ locally, export the values in your shell or pass `--env-file .env` to
 | `SEC_CONTACT_EMAIL` | Operator email sent with every EDGAR request (required) |
 | `INGEST_MAX_CONSECUTIVE_FAILURES` | Consecutive extraction failures before the ingest run aborts (default 20) |
 | `MARKETMIND_DATABASE_DSN` | Postgres connection string; unset falls back to the local docker-compose test database |
-| `MARKETMIND_DB_PASSWORD` | Production Postgres container password (`docker-compose.prod.yml`); must match the password embedded in `MARKETMIND_DATABASE_DSN` |
-| `MARKETMIND_MCP_TOKEN` | Bearer token the harness must present on every MCP request |
+| `MARKETMIND_DB_PASSWORD` | Production Postgres password, supplied to libpq separately from the DSN |
+| `MARKETMIND_MCP_TOKEN` | Bearer token the MCP client must present on every request |
 | `MARKETMIND_MCP_PORT` | Port the MCP server listens on (default 8000) |
+| `MARKETMIND_UID` / `MARKETMIND_GID` | Numeric owner used by the production app container for its bind-mounted data tree |
 
 ## Commands
 
@@ -141,19 +145,29 @@ ports beyond `127.0.0.1`), plain cron for scheduled jobs. No systemd, no
 install/update scripts.
 
 ```bash
+deploy_user="$(id -un)"
+deploy_group="$(id -gn)"
+sudo install -d -m 0755 -o "$deploy_user" -g "$deploy_group" \
+  /srv/marketmind
+sudo install -d -m 0700 -o root -g root \
+  /srv/marketmind-backups /var/log/marketmind
 git clone git@github.com:Antoniodigiovanni/marketmind.git /srv/marketmind
 cd /srv/marketmind
-cp .env.example .env   # edit: real secrets, MARKETMIND_DB_PASSWORD/DATABASE_DSN, MARKETMIND_MCP_TOKEN
+install -d -m 0700 data/raw state state/universe state/processed
+cp .env.example .env   # edit: real secrets, database settings, MCP token, host UID/GID
+chmod 0600 .env
 
 docker compose -f docker-compose.prod.yml up -d --build
-crontab deploy/crontab
+sudo install -o root -g root -m 0644 deploy/crontab /etc/cron.d/marketmind
+sudo install -o root -g root -m 0644 deploy/logrotate /etc/logrotate.d/marketmind
 ```
 
-Updating is `git pull && docker compose -f docker-compose.prod.yml up -d
---build` — the app applies schema changes to both databases itself on
-every start, so there's no separate migration step.
+Updating pulls the checkout, rebuilds Compose, and reinstalls
+`/etc/cron.d/marketmind`; the app applies checksum-verified PostgreSQL
+migrations and initialises the DuckDB schema on startup. See the deployment
+guide for the exact commands.
 
-Full operational detail — schedule table, harness MCP wiring (the harness
+Full operational detail — schedule table, MCP client wiring (the client
 now connects to `http://127.0.0.1:8000/mcp` as a streamable-http client
 with a bearer token, rather than spawning a stdio subprocess), operations,
 and rollback — lives in [deploy/README.md](deploy/README.md).
@@ -195,31 +209,34 @@ still covers the full universe.
 
 ## Storage model
 
-Structured, queryable data lives in DuckDB (`data/db/research.duckdb`), created
-from `data/db/schema.sql` — the single source of truth for the schema.
+Most structured, queryable data lives in PostgreSQL. The canonical fresh
+schema is `data/db/schema_postgres.sql`; immutable transitions for existing
+databases live in `data/db/postgres_migrations/`. DuckDB remains in use for
+stores whose cutover is not complete.
 
 | Table | Purpose |
 |---|---|
-| `articles` | Deduplication registry and ingest audit trail (sha256 URL/content hashes) |
-| `ticker_facts` | Versioned knowledge base — one row per extracted fact |
-| `agent_runs` | Audit log for every job execution |
-| `market_views` | Free-text market snapshots written by the harness, immutable |
-| `market_view_structures` | Structured JSON derived from free-text views (`schema_version`-keyed) |
+| `articles` | Deduplication registry and ingest audit trail (PostgreSQL) |
+| `company_facts` | Versioned company knowledge with pgvector embeddings (PostgreSQL) |
+| `agent_runs` | Audit log for every job execution (PostgreSQL) |
+| `market_views` | Immutable free-text market snapshots (PostgreSQL) |
+| `market_view_structures` | Structured JSON derived from free text (PostgreSQL) |
+| Ownership/13F stores | Transitional DuckDB-backed data pending a later cutover |
 
 ### Point-in-time queries
 
 Always query facts as-of a date:
 
 ```sql
-SELECT statement FROM ticker_facts
-WHERE ticker = :ticker
+SELECT statement FROM company_facts
+WHERE company_id = :company_id
   AND valid_from <= :as_of
   AND (valid_until IS NULL OR valid_until > :as_of);
 ```
 
-Querying without `:as_of` is a look-ahead bias violation. Use
-`agent.knowledge.get_current_facts(ticker, as_of=...)` — it enforces this —
-never raw SQL in research code.
+Querying without `:as_of` is a look-ahead bias violation. Resolve the ticker
+point-in-time, then use `data.db.facts.get_current_facts()`; it requires the
+date explicitly. Do not bypass the repository with raw SQL.
 
 ## Daily jobs
 

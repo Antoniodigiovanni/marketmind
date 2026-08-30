@@ -5,6 +5,9 @@ from __future__ import annotations
 import pytest
 from pgvector import Vector
 
+from data.db.init_postgres import apply_schema
+from data.db.pool import dsn_from_env
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -15,6 +18,17 @@ async def test_schema_applies_and_creates_the_expected_objects(pg_conn) -> None:
         )
     ).fetchone()
     assert tables[0] == 31
+
+
+async def test_schema_application_records_baseline_and_is_idempotent(pg_conn) -> None:
+    await apply_schema(dsn_from_env())
+
+    rows = await (
+        await pg_conn.execute(
+            "SELECT version, name, checksum FROM marketmind_meta.schema_migrations ORDER BY version"
+        )
+    ).fetchall()
+    assert rows == [(1, "production_baseline", "baseline")]
 
 
 async def test_vector_column_and_hnsw_index_exist(pg_conn) -> None:

@@ -1,10 +1,11 @@
-"""MCP server — exposes the marketmind market database to the agent harness."""
+"""MCP server exposing the marketmind database to its local client."""
 
 from __future__ import annotations
 
 import asyncio
 import datetime as dt
 import os
+import secrets
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -31,7 +32,7 @@ from data.db.facts import get_current_facts as facts_get_current_facts
 from data.db.filings import get_filings as filings_get_filings
 from data.db.filings import search_filing_text as filings_search_filing_text
 from data.db.identifiers import get_current_company_id, resolve_identifier
-from data.db.init import init_db
+from data.db.init import DEFAULT_DB_PATH, init_db
 from data.db.init_postgres import apply_schema
 from data.db.listings import get_current_listing
 from data.db.pool import dsn_from_env, open_pool
@@ -61,7 +62,7 @@ mcp = FastMCP(
 )
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = ROOT_DIR / "data" / "db" / "research.duckdb"
+DB_PATH = DEFAULT_DB_PATH
 # PRICES_DIR and PROCESSED_VOL_PATH (per-ticker OHLCV / realized-vol Parquet)
 # are retired -- get_prices/get_volatility read PostgreSQL now (see
 # data/db/prices.py). MACRO_DIR stays: get_macro is still Parquet-backed.
@@ -1180,7 +1181,7 @@ class _BearerAuthMiddleware:
     arguments: those model an OAuth 2.1 resource server (`AuthSettings`
     requires a real `issuer_url`) built for multi-tenant remote servers
     authorizing many distinct third-party clients. marketmind has exactly
-    one caller (the harness, same box) — a shared-secret bearer check is
+    one caller (the local MCP client) — a shared-secret bearer check is
     the right amount of machinery for that, not a fake OAuth issuer.
     """
 
@@ -1196,8 +1197,12 @@ class _BearerAuthMiddleware:
             return
         headers = dict(scope.get("headers") or [])
         presented = headers.get(b"authorization", b"").decode("latin-1")
-        if presented != self._expected:
-            response = JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not secrets.compare_digest(presented, self._expected):
+            response = JSONResponse(
+                {"error": "unauthorized"},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
             await response(scope, receive, send)
             return
         await self._app(scope, receive, send)
@@ -1207,7 +1212,7 @@ def main() -> None:
     """Run the MCP server over streamable-http.
 
     On every start (including a restart: unless-stopped recovery): applies
-    the Postgres schema and ensures research.duckdb exists. Both are
+    pending Postgres migrations and ensures research.duckdb exists. Both are
     idempotent, so running them unconditionally here is what replaces the
     old deploy tooling's one-time `data.db.init`/`data.db.init_postgres`
     steps — initialisation is the app's own responsibility now, not
@@ -1216,11 +1221,13 @@ def main() -> None:
     asyncio.run(apply_schema(dsn_from_env()))
     init_db()
 
-    token = os.environ["MARKETMIND_MCP_TOKEN"]
+    token = os.getenv("MARKETMIND_MCP_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("MARKETMIND_MCP_TOKEN must be set to a nonblank value")
     app = mcp.streamable_http_app()
     app.add_middleware(_BearerAuthMiddleware, token=token)
     uvicorn.run(app, host="0.0.0.0", port=MCP_PORT, log_level="info")  # noqa: S104 -- see mcp's construction comment above
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by the container entry point
     main()
