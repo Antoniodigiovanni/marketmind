@@ -18,6 +18,9 @@ data/db/*.duckdb.wal
 data/db/*.duckdb.tmp
 data/db/vectors/
 
+# Mutable production state kept outside tracked source/data baselines
+state/
+
 # Notebooks with outputs — strip outputs before committing
 **/.ipynb_checkpoints/
 *.ipynb

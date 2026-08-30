@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "marketmind"
 version = "0.1.0"
-description = "Market-memory microservice for agent harnesses — S&P 500 + Eurostoxx 600"
+description = "Market-memory microservice for Hermes — S&P 500 + Eurostoxx 600"
 requires-python = ">=3.11"
 dependencies = [
     # Data sources
@@ -27,6 +27,8 @@ dependencies = [
     "feedparser>=6.0",
     # MCP interface
     "mcp>=1.0,<2.0",
+    "uvicorn>=0.30",
+    "starlette>=0.37",
     # Trading calendars
     "exchange-calendars>=4.5",
     # Utilities

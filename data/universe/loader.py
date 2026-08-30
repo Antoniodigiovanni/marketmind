@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 from pathlib import Path
 
 import polars as pl
 
-UNIVERSE_DIR = Path(__file__).parent
+
+def _default_universe_dir() -> Path:
+    """Return the configured universe directory or the tracked baseline path."""
+    configured = os.getenv("MARKETMIND_UNIVERSE_DIR")
+    return Path(configured) if configured else Path(__file__).parent
+
+
+UNIVERSE_DIR = _default_universe_dir()
 UNIVERSE_FILES = ("sp500.csv", "eurostoxx600.csv")
 DELISTED_FILE = "delisted.csv"
 REQUIRED_COLUMNS = ["ticker", "name", "country", "sector", "added_date", "removed_date"]

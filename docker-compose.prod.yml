@@ -1,0 +1,65 @@
+# Production deploy: Postgres + the marketmind app, both always-on
+# (restart: unless-stopped). Distinct from docker-compose.yml (the
+# disposable local/CI test database only). Setup:
+#   git clone ... && cd marketmind
+#   cp .env.example .env && edit it
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   sudo install -o root -g root -m 0644 deploy/crontab /etc/cron.d/marketmind
+# See deploy/README.md.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: marketmind
+      POSTGRES_PASSWORD: ${MARKETMIND_DB_PASSWORD:?set MARKETMIND_DB_PASSWORD in .env}
+      POSTGRES_DB: marketmind
+    volumes:
+      - marketmind_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketmind -d marketmind"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  marketmind:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Compose networking resolves the `postgres` hostname in the DSN.
+      # Supplying the password through libpq avoids URL-encoding problems.
+      MARKETMIND_DATABASE_DSN: ${MARKETMIND_DATABASE_DSN:?set MARKETMIND_DATABASE_DSN in .env}
+      PGPASSWORD: ${MARKETMIND_DB_PASSWORD:?set MARKETMIND_DB_PASSWORD in .env}
+      MARKETMIND_MCP_TOKEN: ${MARKETMIND_MCP_TOKEN:?set MARKETMIND_MCP_TOKEN in .env}
+      MARKETMIND_DUCKDB_PATH: /var/lib/marketmind/research.duckdb
+      MARKETMIND_PROCESSED_DIR: /var/lib/marketmind/processed
+      MARKETMIND_UNIVERSE_DIR: /var/lib/marketmind/universe
+      HOME: /tmp/marketmind
+      UV_CACHE_DIR: /tmp/uv-cache
+      PYTHONDONTWRITEBYTECODE: "1"
+    # Match the checkout owner: numeric ownership is what Linux containers
+    # see on the raw-data and mutable-state bind mounts below.
+    user: "${MARKETMIND_UID:?set MARKETMIND_UID in .env}:${MARKETMIND_GID:?set MARKETMIND_GID in .env}"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${MARKETMIND_MCP_PORT:-8000}:${MARKETMIND_MCP_PORT:-8000}"
+    volumes:
+      # Raw downloads retain their existing on-host layout without replacing
+      # the image's `data.*` application modules.
+      - ./data/raw:/app/data/raw
+      # DuckDB, derived files, and mutable universe CSVs live outside tracked
+      # source. The entrypoint seeds universe baselines on first start.
+      - ./state:/var/lib/marketmind
+
+volumes:
+  marketmind_postgres_data:

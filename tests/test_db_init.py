@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from data.db import init as db_init
 from data.db.init import init_db
+
+
+def test_default_db_path_accepts_a_runtime_override(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MARKETMIND_DUCKDB_PATH", str(tmp_path / "runtime.duckdb"))
+
+    assert db_init._default_db_path() == tmp_path / "runtime.duckdb"
+
 
 EXPECTED_TABLES = {
     "agent_runs",

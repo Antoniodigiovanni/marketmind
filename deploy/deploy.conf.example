@@ -1,5 +1,0 @@
-# marketmind deploy configuration — copied to /srv/marketmind/deploy.conf on
-# install. Edit it on the box; install.sh and update.sh both read it.
-BRANCH=main
-REPO_URL=git@github.com:Antoniodigiovanni/marketmind.git
-ENABLE_AUTO_UPDATE=0

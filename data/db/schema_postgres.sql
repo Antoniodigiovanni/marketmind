@@ -1,18 +1,10 @@
--- TRANSITIONAL: this file does not yet replace data/db/schema.sql.
--- The DuckDB schema remains authoritative until the application code is
--- ported in B1b. Verified against pgvector/pgvector:pg16 on 2026-08-09:
--- 30 tables, 72 indexes, 18 check constraints, idempotent across two applies.
--- (listings.status added 2026-08-10 for the identity-port phase: 19 check
--- constraints as of that change. aggregate_fact_embeddings added 2026-08-11
--- for the aggregate-facts-repo phase: 31 tables as of that change.
--- aggregate_facts.dimension gained a CHECK constraint the same day: 20
--- check constraints as of that change. market_views.used_fact_ids UUID[]
--- added 2026-08-11 for the views-cutover phase, restoring the DuckDB
--- provenance column the initial port dropped; table count unchanged.)
-
--- marketmind — PostgreSQL schema (draft for review)
+-- marketmind — canonical PostgreSQL schema
 -- Target: PostgreSQL 16+ with the `vector` extension (pgvector).
--- Greenfield: no migration path, no legacy compatibility.
+-- Fresh databases are created from this file. Existing databases are advanced
+-- by immutable files in data/db/postgres_migrations/; every in-place change
+-- made here must have a corresponding migration.
+-- DuckDB remains authoritative only for stores whose PostgreSQL cutover is
+-- incomplete (currently ownership/13F data and related checkpoints).
 --
 -- Identity model
 -- ──────────────
