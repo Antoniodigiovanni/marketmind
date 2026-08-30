@@ -169,7 +169,7 @@ reach it.
 
 | When | Job |
 |---|---|
-| daily 06:10 | price/macro fetch + news ingest |
+| daily 06:10 | price/macro fetch + news ingest + market-view structuring |
 | Mondays 06:00 | universe refresh + symbol resolution |
 | annually, 5 Jan 06:30 | company profile refresh (`--backfill --profiles-only`) |
 | nightly 02:30 | `data/raw/` + mutable state tarball → `/srv/marketmind-backups/` (14-day retention) |
