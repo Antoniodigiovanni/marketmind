@@ -16,6 +16,7 @@ from loguru import logger
 from data.db.filings import (
     create_filing,
     filing_exists,
+    get_checkpoint_date,
     insert_13f_holdings,
     insert_filing_text,
     insert_insider_rows,
@@ -34,6 +35,7 @@ from data.universe.loader import get_universe
 DOCUMENT_FORMS = {"10-K", "10-Q", "8-K", "20-F", "6-K"}
 OWNERSHIP_FORMS = {"3", "4", "5"}
 COVERED_FORMS = DOCUMENT_FORMS | OWNERSHIP_FORMS | {"13F-HR", "13F-HR/A", "DEF 14A"}
+INITIAL_LOOKBACK_DAYS = 7
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ProgressCallback = Callable[[int, int, dict[str, int]], None]
 
@@ -192,7 +194,28 @@ async def run_daily_fetch(
     universe: pl.DataFrame,
     progress: ProgressCallback | None = None,
 ) -> dict[str, int]:
-    """Fetch new SEC filings for the universe into PostgreSQL."""
+    """Fetch new SEC filings for the universe into PostgreSQL.
+
+    Each ticker overlaps its last completed date so late same-day filings are
+    still discovered. A fresh database scans only the previous seven days;
+    historical coverage belongs to the explicit backfill command.
+
+    Args:
+        conn: An open PostgreSQL connection.
+        client: SEC archive and submissions client.
+        run_date: Inclusive fetch cutoff in YYYY-MM-DD format.
+        root: Root directory for immutable filing archives.
+        universe: Frame containing at least a ticker column.
+        progress: Optional callback receiving completed tickers, total tickers,
+            and the current counters.
+
+    Returns:
+        Filing, parse, skip, insider-row, and 13F-row counters.
+
+    Raises:
+        ValueError: If run_date or a source filing date is invalid.
+    """
+    run_date_value = dt.date.fromisoformat(run_date)
     tickers = sorted(universe["ticker"].unique().to_list())
     await ensure_cik_map(conn, client, tickers)
     counts = {
@@ -202,7 +225,7 @@ async def run_daily_fetch(
         "insider_rows": 0,
         "form13f_rows": 0,
     }
-    run_id = await start_run(conn, run_date=dt.date.fromisoformat(run_date), job_type="filings")
+    run_id = await start_run(conn, run_date=run_date_value, job_type="filings")
     try:
         for done, ticker in enumerate(tickers, start=1):
             cik = await cik_for_ticker(conn, ticker)
@@ -210,7 +233,13 @@ async def run_daily_fetch(
             if cik is None:
                 counts["filings_skipped"] += 1
                 continue
+            checkpoint = await get_checkpoint_date(conn, source="submissions", key=ticker)
+            filed_from = checkpoint or (run_date_value - dt.timedelta(days=INITIAL_LOOKBACK_DAYS))
+            ticker_failed = False
             for sub in client.submissions(cik):
+                filed_at = dt.date.fromisoformat(sub.filed_at)
+                if filed_at < filed_from or filed_at > run_date_value:
+                    continue
                 if sub.form_type not in COVERED_FORMS or await filing_exists(
                     conn, accession=sub.accession
                 ):
@@ -248,7 +277,14 @@ async def run_daily_fetch(
                 except Exception:
                     logger.exception(f"filing {sub.accession} for {ticker} failed; skipped")
                     counts["filings_skipped"] += 1
-            await mark_checkpoint(conn, source=f"submissions:{ticker}", key=run_date)
+                    ticker_failed = True
+            if not ticker_failed:
+                await mark_checkpoint(
+                    conn,
+                    source="submissions",
+                    key=ticker,
+                    last_date=run_date_value,
+                )
             if progress is not None:
                 progress(done, len(tickers), counts)
     except Exception as exc:

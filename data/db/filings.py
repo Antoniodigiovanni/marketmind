@@ -399,6 +399,28 @@ async def has_checkpoint(conn: psycopg.AsyncConnection, *, source: str, key: str
     return row is not None
 
 
+async def get_checkpoint_date(
+    conn: psycopg.AsyncConnection, *, source: str, key: str
+) -> dt.date | None:
+    """Return the last completed date for a checkpoint, if present.
+
+    Args:
+        conn: An open connection.
+        source: Checkpoint namespace.
+        key: Checkpoint key within that namespace.
+
+    Returns:
+        The stored last_date, or None when the checkpoint is absent or has no date.
+    """
+    row = await (
+        await conn.execute(
+            "SELECT last_date FROM fetch_checkpoints WHERE source = %s AND key = %s",
+            (source, key),
+        )
+    ).fetchone()
+    return row[0] if row else None
+
+
 async def mark_checkpoint(
     conn: psycopg.AsyncConnection,
     *,

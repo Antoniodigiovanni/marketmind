@@ -14,6 +14,7 @@ from data.db.filings import (
     create_filing,
     filing_exists,
     get_13f_holdings,
+    get_checkpoint_date,
     get_filings,
     get_insider_holdings,
     get_insider_transactions,
@@ -218,6 +219,8 @@ async def test_mark_checkpoint_is_idempotent(pg_conn) -> None:
         )
     ).fetchone()
     assert row[0] == dt.date(2026, 2, 1)
+    assert await get_checkpoint_date(pg_conn, source="13f", key="ACC1") == dt.date(2026, 2, 1)
+    assert await get_checkpoint_date(pg_conn, source="13f", key="missing") is None
 
 
 async def test_ownership_and_13f_round_trip(pg_conn) -> None:
