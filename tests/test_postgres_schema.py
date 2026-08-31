@@ -31,6 +31,7 @@ async def test_schema_application_records_baseline_and_is_idempotent(pg_conn) ->
     assert [(version, name) for version, name, _checksum in rows] == [
         (1, "production_baseline"),
         (2, "complete_postgres_cutover"),
+        (3, "rss_ingest_efficiency"),
     ]
 
 

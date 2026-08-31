@@ -8,8 +8,15 @@ import json
 import polars as pl
 import pytest
 
-from agent.ingestion import IngestAborted, RawNewsArchive, run_daily_ingest
+from agent.ingestion import (
+    IngestAborted,
+    RawNewsArchive,
+    google_window_days,
+    pre_score,
+    run_daily_ingest,
+)
 from data.db.aggregate_facts import get_current_aggregate_facts
+from data.db.articles import get_feed_checkpoints, update_feed_checkpoints
 from data.db.companies import get_company
 from data.db.company_profiles import get_current_profile
 from data.db.facts import get_current_facts
@@ -251,6 +258,99 @@ async def test_run_daily_ingest_profiles_only_skips_news(pg_conn, tmp_path) -> N
     assert calls["news"] == 0
     assert summary["articles_fetched"] == 0
     assert summary["profiles_built"] == 2
+
+
+async def test_publisher_credibility_overrides_feed_credibility() -> None:
+    fallback = pre_score("google-news", "2026-08-04T09:00:00+00:00", DATE)
+    reuters = pre_score(
+        "google-news",
+        "2026-08-04T09:00:00+00:00",
+        DATE,
+        publisher="Reuters",
+    )
+
+    assert fallback == pytest.approx(0.55)
+    assert reuters == pytest.approx(0.95)
+
+
+async def test_google_window_is_derived_from_checkpoint_and_bounded() -> None:
+    assert google_window_days(DATE_D, None) == 7
+    assert google_window_days(DATE_D, dt.datetime(2026, 8, 4, tzinfo=dt.UTC)) == 1
+    assert google_window_days(DATE_D, dt.datetime(2026, 8, 2, tzinfo=dt.UTC)) == 3
+    assert google_window_days(DATE_D, dt.datetime(2026, 7, 1, tzinfo=dt.UTC)) == 7
+
+
+async def test_low_pre_score_is_filtered_without_extraction(pg_conn, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("agent.ingestion.MIN_PRE_SCORE", 0.5)
+    llm_calls = 0
+
+    def counting_llm(messages: list[dict[str, str]]) -> str:
+        nonlocal llm_calls
+        llm_calls += 1
+        return "REDUNDANT"
+
+    old_article = Article(
+        ticker="AAPL",
+        url="https://example.com/old",
+        title="Old low-value headline",
+        summary="Old summary.",
+        source="google-news",
+        published_at="2026-07-01T09:00:00+00:00",
+    )
+    summary = await run_daily_ingest(
+        pg_conn,
+        DATE,
+        universe=UNIVERSE.head(1),
+        news_fetcher=lambda ticker, name: [old_article],
+        description_fetcher=lambda name: "",
+        profile_builder=_fake_profile_builder,
+        llm=counting_llm,
+        raw_news_dir=tmp_path,
+    )
+
+    assert summary["articles_filtered"] == 1
+    assert summary["articles_redundant"] == 0
+    assert llm_calls == 0
+    status = await (await pg_conn.execute("SELECT status FROM article_companies")).fetchone()
+    assert status == ("filtered",)
+
+    company_id = await _company_id(pg_conn, "AAPL", "Apple Inc", "US", "Technology")
+    assert await get_feed_checkpoints(pg_conn, company_id=company_id) == {
+        "google-news": dt.datetime(2026, 7, 1, 9, tzinfo=dt.UTC)
+    }
+
+
+async def test_default_fetch_uses_checkpoint_window_high_water_and_cap(
+    pg_conn, monkeypatch, tmp_path
+) -> None:
+    company_id = await _company_id(pg_conn, "AAPL", "Apple Inc", "US", "Technology")
+    checkpoint = dt.datetime(2026, 8, 2, 9, tzinfo=dt.UTC)
+    await update_feed_checkpoints(
+        pg_conn,
+        company_id=company_id,
+        run_date=DATE_D,
+        published_by_source={"google-news": checkpoint},
+    )
+    captured: dict[str, object] = {}
+
+    def fake_fetch(ticker: str, name: str, **kwargs: object) -> list[Article]:
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("agent.ingestion.fetch_company_news", fake_fetch)
+    await run_daily_ingest(
+        pg_conn,
+        DATE,
+        universe=UNIVERSE.head(1),
+        description_fetcher=lambda name: "",
+        profile_builder=_fake_profile_builder,
+        llm=_fake_llm,
+        raw_news_dir=tmp_path,
+    )
+
+    assert captured["google_window_days"] == 3
+    assert captured["max_per_feed"] == 30
+    assert captured["published_after"] == {"google-news": checkpoint}
 
 
 async def test_run_daily_ingest_backfill_supersedes_existing_profile(pg_conn, tmp_path) -> None:
