@@ -27,9 +27,10 @@ def _refresh_dir(tmp_path: Path, monkeypatch) -> Path:
 def test_refresh_commands_are_ordered_and_date_bounded() -> None:
     commands = refresh.refresh_commands(DATE)
 
-    assert commands[0][1:] == ["data/fetch.py", "--as-of", DATE]
-    assert commands[1][1:] == ["-m", "agent.ingestion", DATE]
-    assert commands[2][1:] == ["-m", "agent.views", DATE]
+    assert commands[0][1:] == ["-m", "data.universe.resolve"]
+    assert commands[1][1:] == ["data/fetch.py", "--as-of", DATE]
+    assert commands[2][1:] == ["-m", "agent.ingestion", DATE]
+    assert commands[3][1:] == ["-m", "agent.views", DATE]
     with pytest.raises(ValueError):
         refresh.refresh_commands("31-08-2026")
 

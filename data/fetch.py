@@ -11,7 +11,8 @@ import polars as pl
 from loguru import logger
 
 from data.db.companies import create_company
-from data.db.listings import get_current_listing, upsert_listing
+from data.db.identifiers import resolve_identifier
+from data.db.listings import get_current_listing, get_current_listing_for_company, upsert_listing
 from data.db.pool import close_pool, dsn_from_env, open_pool
 from data.db.prices import (
     get_last_fx_date,
@@ -21,9 +22,9 @@ from data.db.prices import (
     upsert_prices,
 )
 from data.dividends.fetch import sync_dividends
-from data.macro.fetch import run_daily_macro_sync
+from data.macro.fetch import run_daily_macro_sync_postgres
 from data.processed.volatility import compute_realized_vol
-from data.short_interest.fetch import sync_short_interest
+from data.short_interest.fetch import sync_short_interest_postgres
 from data.sources.calendars import (
     CURRENCY_BY_SUFFIX,
     exchange_for_suffix,
@@ -61,6 +62,19 @@ async def resolve_symbol_listing(conn, symbol: str) -> uuid.UUID | None:
     """
     listing = await get_current_listing(conn, provider="yahoo", symbol=symbol)
     return listing["listing_id"] if listing else None
+
+
+async def resolve_ticker_listing(
+    conn, *, ticker: str, as_of: dt.date
+) -> tuple[str, uuid.UUID] | None:
+    """Resolve a point-in-time universe ticker to its current Yahoo listing."""
+    company_id = await resolve_identifier(conn, id_type="ticker", id_value=ticker, as_of=as_of)
+    if company_id is None:
+        return None
+    listing = await get_current_listing_for_company(conn, company_id=company_id, provider="yahoo")
+    if listing is None or listing["status"] != "valid":
+        return None
+    return str(listing["symbol"]), listing["listing_id"]
 
 
 async def ensure_index_listing(conn, *, symbol: str, name: str) -> uuid.UUID:
@@ -155,11 +169,11 @@ async def fetch_daily_prices(
     skipped: list[str] = []
     for row in members.to_dicts():
         ticker = row["ticker"]
-        symbol = ticker
-        listing_id = await resolve_symbol_listing(conn, symbol)
-        if listing_id is None:
+        listing = await resolve_ticker_listing(conn, ticker=ticker, as_of=as_of_date)
+        if listing is None:
             skipped.append(ticker)
             continue
+        symbol, listing_id = listing
         last_date = await get_last_price_date(conn, listing_id=listing_id)
         start = (last_date + dt.timedelta(days=1)).isoformat() if last_date else HISTORY_START
         resolved[ticker] = (symbol, listing_id, start)
@@ -311,10 +325,14 @@ async def _run(as_of: str) -> None:
             await fetch_volatility_indices(conn, dt.date.fromisoformat(as_of))
             fx_summary = await sync_fx_rates(conn, as_of=as_of)
             vol_written = await refresh_volatility(conn)
+            macro_summary = await run_daily_macro_sync_postgres(conn, today=as_of)
+            dividend_summary = await sync_dividends(conn, as_of=as_of)
+            short_summary = await sync_short_interest_postgres(conn, as_of=as_of)
             logger.info(
                 f"prices fetched={len(summary['fetched'])} "
                 f"skipped={len(summary['skipped_unresolved'])} "
-                f"fx={fx_summary} volatility_rows={vol_written}"
+                f"fx={fx_summary} volatility_rows={vol_written} "
+                f"macro={macro_summary} dividends={dividend_summary} short_interest={short_summary}"
             )
     finally:
         await close_pool(pool)
@@ -323,20 +341,14 @@ async def _run(as_of: str) -> None:
 def main() -> None:
     """Run the daily price/FX/volatility/macro/dividends/short-interest refresh.
 
-    Prices, FX, and volatility are Postgres-backed and run through the
-    async `_run` bridge. Macro, dividends, and short interest stay on their
-    existing Parquet/DuckDB pipeline for now -- their Postgres cutover is a
-    separate follow-up phase (see the phase-5 design doc §7) -- so they run
-    synchronously, unchanged, after the async block completes.
+    Raw files remain as source archives; all queryable observations are
+    upserted into PostgreSQL by the async `_run` bridge.
     """
     parser = argparse.ArgumentParser(description="Daily price + FX + volatility refresh")
     parser.add_argument("--as-of", default=dt.date.today().isoformat(), help="YYYY-MM-DD")
     args = parser.parse_args()
 
     asyncio.run(_run(args.as_of))
-    run_daily_macro_sync(today=args.as_of)
-    sync_dividends(as_of=args.as_of)
-    sync_short_interest(as_of=args.as_of)
 
 
 if __name__ == "__main__":

@@ -2,10 +2,6 @@
 # never baked into the image. Mirrors .gitignore's data/ rules.
 data/raw/
 data/processed/*.parquet
-data/db/*.duckdb
-data/db/*.duckdb.wal
-data/db/*.duckdb.tmp
-data/db/vectors/
 state/
 
 .venv/

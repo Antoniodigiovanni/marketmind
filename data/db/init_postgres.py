@@ -91,6 +91,13 @@ async def _apply_pending_migrations(conn: psycopg.AsyncConnection) -> None:
     migrations = _migration_files()
     applied = await _applied_migrations(conn)
 
+    # Test and disaster-recovery workflows may recreate `public` while the
+    # migration ledger (kept in marketmind_meta) survives. Recreate the
+    # canonical tables before applying any newly discovered transition.
+    if applied and not await _application_schema_exists(conn):
+        await conn.execute(schema_sql)
+        await conn.commit()
+
     if not applied:
         existing_schema = await _application_schema_exists(conn)
         if not existing_schema:

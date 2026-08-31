@@ -57,9 +57,7 @@ async def update_company_attributes(
 
     name is always overwritten; country/sector are only overwritten when the
     new value is non-NULL, preserving a previously known value when a later
-    sync can't determine it -- matching the original DuckDB upsert_company's
-    `COALESCE(excluded.country, companies.country)` behavior for these two
-    columns specifically.
+    sync can't determine it. This uses `COALESCE` for those two columns.
 
     Args:
         conn: An open connection.
@@ -90,8 +88,7 @@ async def update_company_description(
 
     Unlike update_company_attributes' country/sector, description and
     description_source always overwrite -- there is no NULL-preservation
-    behavior here, matching the original DuckDB upsert_company's treatment
-    of these two columns specifically.
+    behavior here; callers explicitly control both values.
 
     Args:
         conn: An open connection.

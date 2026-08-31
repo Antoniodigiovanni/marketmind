@@ -175,8 +175,7 @@ async def test_run_daily_ingest_writes_facts_and_profiles(pg_conn, tmp_path) -> 
 
 
 async def test_run_daily_ingest_creates_companies_on_demand(pg_conn, tmp_path) -> None:
-    """No pre-seeding: the pipeline must create AAPL/MSFT itself, matching
-    the old DuckDB upsert_company behavior."""
+    """The pipeline must create AAPL/MSFT itself without pre-seeding."""
     summary = await run_daily_ingest(
         pg_conn,
         DATE,

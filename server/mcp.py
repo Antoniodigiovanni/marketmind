@@ -10,7 +10,6 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-import duckdb
 import polars as pl
 import uvicorn
 from mcp.server.fastmcp import FastMCP
@@ -25,20 +24,26 @@ from agent.refresh import launch_refresh, refresh_status
 from agent.views import get_market_views as get_views
 from agent.views import save_market_view as save_view
 from data.db import prices as prices_db
+from data.db.articles import get_news as articles_get_news
+from data.db.articles import search_news as articles_search_news
 from data.db.companies import get_company
 from data.db.company_profiles import get_current_profile
 from data.db.esef import get_european_filings as filings_get_european_filings
 from data.db.facts import create_fact as facts_create_fact
 from data.db.facts import get_current_facts as facts_get_current_facts
+from data.db.filings import get_13f_holdings as filings_get_13f_holdings
 from data.db.filings import get_filings as filings_get_filings
+from data.db.filings import get_insider_holdings as filings_get_insider_holdings
+from data.db.filings import get_insider_transactions as filings_get_insider_transactions
 from data.db.filings import search_filing_text as filings_search_filing_text
 from data.db.identifiers import get_current_company_id, resolve_identifier
-from data.db.init import DEFAULT_DB_PATH, init_db
 from data.db.init_postgres import apply_schema
 from data.db.listings import get_current_listing
+from data.db.market_data import get_dividends as market_get_dividends
+from data.db.market_data import get_macro as market_get_macro
+from data.db.market_data import get_short_interest as market_get_short_interest
 from data.db.pool import dsn_from_env, open_pool
 from data.db.runs import list_recent_runs
-from data.sources.rss import NEWS_RECORD_FIELDS
 from data.universe.loader import get_universe
 
 MCP_PORT = int(os.getenv("MARKETMIND_MCP_PORT", "8000"))
@@ -63,45 +68,10 @@ mcp = FastMCP(
 )
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = DEFAULT_DB_PATH
-# PRICES_DIR and PROCESSED_VOL_PATH (per-ticker OHLCV / realized-vol Parquet)
-# are retired -- get_prices/get_volatility read PostgreSQL now (see
-# data/db/prices.py). MACRO_DIR stays: get_macro is still Parquet-backed.
-MACRO_DIR = ROOT_DIR / "data" / "raw" / "macro"
-DIVIDENDS_DIR = ROOT_DIR / "data" / "raw" / "dividends"
-SHORT_INTEREST_GLOB = str(ROOT_DIR / "data" / "raw" / "short_interest" / "*.parquet")
-NEWS_GLOB = str(ROOT_DIR / "data" / "raw" / "news" / "*.ndjson")
-FILINGS_13F_GLOB = str(ROOT_DIR / "data" / "raw" / "13f" / "**" / "*.parquet")
-
-# Columns returned by the news tools. Every entry must exist in the on-disk
-# record written by data.sources.rss.article_to_record — asserted in tests, so
-# a producer/consumer drift fails the suite instead of the live tool.
-NEWS_COLUMNS = ["url", "source", "ticker", "published_at", "title", "summary"]
-assert set(NEWS_COLUMNS) <= set(NEWS_RECORD_FIELDS)
-
-
-def _13f_partitions_exist() -> bool:
-    """Return True if any 13F Parquet partition files exist."""
-    import glob
-
-    return bool(glob.glob(FILINGS_13F_GLOB))
-
-
-def _connect() -> duckdb.DuckDBPyConnection:
-    """Open a DuckDB connection, creating nothing.
-
-    Raises:
-        FileNotFoundError: If research.duckdb has not been initialised.
-    """
-    if not DB_PATH.exists():
-        raise FileNotFoundError(
-            f"Database not initialised: {DB_PATH}. Run `uv run python -m data.db.init` first."
-        )
-    return duckdb.connect(str(DB_PATH))
 
 
 def _rows_to_dicts(rows: list[tuple[object, ...]], columns: list[str]) -> list[dict[str, object]]:
-    """Convert DuckDB rows + column names into JSON-friendly dicts."""
+    """Convert positional rows into JSON-friendly dictionaries."""
     result: list[dict[str, object]] = []
     for row in rows:
         record: dict[str, object] = {}
@@ -239,8 +209,10 @@ async def get_volatility(
 
 
 @mcp.tool()
-def get_news(ticker: str, since: str | None = None, limit: int = 50) -> list[dict[str, object]]:
-    """Return news articles for a ticker from the raw ingest files.
+async def get_news(
+    ticker: str, since: str | None = None, limit: int = 50
+) -> list[dict[str, object]]:
+    """Return news articles for a ticker from PostgreSQL.
 
     Args:
         ticker: Ticker symbol.
@@ -250,33 +222,22 @@ def get_news(ticker: str, since: str | None = None, limit: int = 50) -> list[dic
     Returns:
         List of {url, source, ticker, published_at, title, summary}.
     """
-    import glob
-
-    files = glob.glob(NEWS_GLOB)
-    if not files:
-        return []
-
-    conn = duckdb.connect()
-    try:
-        query = f"""
-            SELECT {", ".join(NEWS_COLUMNS)}
-            FROM read_ndjson(?, union_by_name = true)
-            WHERE ticker = ?
-        """
-        params: list[object] = [files, ticker]
-        if since:
-            query += " AND published_at >= ?"
-            params.append(since)
-        query += " ORDER BY published_at DESC LIMIT ?"
-        params.append(limit)
-        rows = conn.execute(query, params).fetchall()
-    finally:
-        conn.close()
-    return _rows_to_dicts(rows, NEWS_COLUMNS)
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        company_id = await get_current_company_id(conn, id_type="ticker", id_value=ticker)
+        if company_id is None:
+            return []
+        since_at = (
+            dt.datetime.combine(dt.date.fromisoformat(since), dt.time.min, tzinfo=dt.UTC)
+            if since
+            else None
+        )
+        rows = await articles_get_news(conn, company_id=company_id, since=since_at, limit=limit)
+    return [_jsonify_pg_row(row) for row in rows]
 
 
 @mcp.tool()
-def search_news(query: str, limit: int = 50) -> list[dict[str, object]]:
+async def search_news(query: str, limit: int = 50) -> list[dict[str, object]]:
     """Full-text search across ingested news articles.
 
     Args:
@@ -288,26 +249,10 @@ def search_news(query: str, limit: int = 50) -> list[dict[str, object]]:
         by recency. Only the stored title and summary are searched — RSS
         never gives us the article body.
     """
-    import glob
-
-    files = glob.glob(NEWS_GLOB)
-    if not files:
-        return []
-
-    conn = duckdb.connect()
-    try:
-        rows = conn.execute(
-            f"""
-            SELECT {", ".join(NEWS_COLUMNS)}
-            FROM read_ndjson(?, union_by_name = true)
-            WHERE title ILIKE ? OR summary ILIKE ?
-            ORDER BY published_at DESC LIMIT ?
-            """,
-            [files, f"%{query}%", f"%{query}%", limit],
-        ).fetchall()
-    finally:
-        conn.close()
-    return _rows_to_dicts(rows, NEWS_COLUMNS)
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        rows = await articles_search_news(conn, query=query, limit=limit)
+    return [_jsonify_pg_row(row) for row in rows]
 
 
 @mcp.tool()
@@ -453,7 +398,7 @@ async def search_filings(
 
 
 @mcp.tool()
-def get_insider_transactions(
+async def get_insider_transactions(
     ticker: str, since: str | None = None, limit: int = 100
 ) -> list[dict[str, object]]:
     """Return insider transaction rows (Form 4/5) for a ticker.
@@ -468,40 +413,22 @@ def get_insider_transactions(
         transaction_code, shares_transacted, price_per_share, shares_held_after,
         direct_or_indirect} ordered by transaction_date desc.
     """
-    with _connect() as conn:
-        query = """
-            SELECT id, owner_name, owner_title, security_title, transaction_date,
-                   transaction_code, shares_transacted, price_per_share,
-                   shares_held_after, direct_or_indirect
-            FROM insider_transactions
-            WHERE ticker = ?
-        """
-        params: list[object] = [ticker]
-        if since:
-            query += " AND transaction_date >= ?"
-            params.append(since)
-        query += " ORDER BY transaction_date DESC LIMIT ?"
-        params.append(limit)
-        rows = conn.execute(query, params).fetchall()
-    return _rows_to_dicts(
-        rows,
-        [
-            "id",
-            "owner_name",
-            "owner_title",
-            "security_title",
-            "transaction_date",
-            "transaction_code",
-            "shares_transacted",
-            "price_per_share",
-            "shares_held_after",
-            "direct_or_indirect",
-        ],
-    )
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        company_id = await get_current_company_id(conn, id_type="ticker", id_value=ticker)
+        if company_id is None:
+            return []
+        rows = await filings_get_insider_transactions(
+            conn,
+            company_id=company_id,
+            since=dt.date.fromisoformat(since) if since else None,
+            limit=limit,
+        )
+    return [_jsonify_pg_row(row) for row in rows]
 
 
 @mcp.tool()
-def get_insider_holdings(
+async def get_insider_holdings(
     ticker: str, as_of: str | None = None, limit: int = 100
 ) -> list[dict[str, object]]:
     """Return insider holdings snapshots (forms 3/4/5) for a ticker.
@@ -516,37 +443,22 @@ def get_insider_holdings(
         shares_held_after, direct_or_indirect, form_type} ordered by
         ref_date desc.
     """
-    with _connect() as conn:
-        query = """
-            SELECT id, owner_name, owner_title, security_title, ref_date,
-                   shares_held_after, direct_or_indirect, form_type
-            FROM insider_holdings
-            WHERE ticker = ?
-        """
-        params: list[object] = [ticker]
-        if as_of:
-            query += " AND ref_date <= ?"
-            params.append(as_of)
-        query += " ORDER BY ref_date DESC LIMIT ?"
-        params.append(limit)
-        rows = conn.execute(query, params).fetchall()
-    return _rows_to_dicts(
-        rows,
-        [
-            "id",
-            "owner_name",
-            "owner_title",
-            "security_title",
-            "ref_date",
-            "shares_held_after",
-            "direct_or_indirect",
-            "form_type",
-        ],
-    )
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        company_id = await get_current_company_id(conn, id_type="ticker", id_value=ticker)
+        if company_id is None:
+            return []
+        rows = await filings_get_insider_holdings(
+            conn,
+            company_id=company_id,
+            as_of=dt.date.fromisoformat(as_of) if as_of else None,
+            limit=limit,
+        )
+    return [_jsonify_pg_row(row) for row in rows]
 
 
 @mcp.tool()
-def get_13f_holdings(
+async def get_13f_holdings(
     cusip: str,
     as_of: str | None = None,
     min_value: float | None = None,
@@ -565,42 +477,20 @@ def get_13f_holdings(
         value_usd, shares, put_call} ordered by report_period desc then
         value_usd desc.
     """
-    if not _13f_partitions_exist():
-        return []
-    with _connect() as conn:
-        query = """
-            SELECT filer_name, filer_cik, report_period, issuer_name, class_title,
-                   value_usd, shares, put_call
-            FROM read_parquet(?, union_by_name = true)
-            WHERE cusip = ?
-        """
-        params: list[object] = [FILINGS_13F_GLOB, cusip]
-        if as_of:
-            query += " AND report_period <= ?"
-            params.append(as_of)
-        if min_value is not None:
-            query += " AND value_usd >= ?"
-            params.append(min_value)
-        query += " ORDER BY report_period DESC, value_usd DESC LIMIT ?"
-        params.append(limit)
-        rows = conn.execute(query, params).fetchall()
-    return _rows_to_dicts(
-        rows,
-        [
-            "filer_name",
-            "filer_cik",
-            "report_period",
-            "issuer_name",
-            "class_title",
-            "value_usd",
-            "shares",
-            "put_call",
-        ],
-    )
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        rows = await filings_get_13f_holdings(
+            conn,
+            cusip=cusip,
+            as_of=dt.date.fromisoformat(as_of) if as_of else None,
+            min_value=min_value,
+            limit=limit,
+        )
+    return [_jsonify_pg_row(row) for row in rows]
 
 
 @mcp.tool()
-def get_macro(
+async def get_macro(
     series: str,
     start: str | None = None,
     end: str | None = None,
@@ -618,43 +508,19 @@ def get_macro(
         List of {series, name, unit, frequency, date, value} ordered by date.
         Empty if the series is unknown or its parquet file is missing.
     """
-    from data.macro.series import get_series
-    from data.macro.store import series_path
-
-    meta = get_series(series)
-    if meta is None:
-        return []
-    path = series_path(series, MACRO_DIR)
-    if not path.exists():
-        return []
-
-    conn = duckdb.connect()
-    try:
-        query = "SELECT date, value FROM read_parquet(?)"
-        params: list[object] = [str(path)]
-        if start or end:
-            query += " WHERE date BETWEEN ? AND ?"
-            params += [start or "1900-01-01", end or "2999-12-31"]
-        query += " ORDER BY date"
-        rows = conn.execute(query, params).fetchall()
-    finally:
-        conn.close()
-
-    records = _rows_to_dicts(rows, ["date", "value"])
-    for record in records:
-        record.update(
-            {
-                "series": meta.id,
-                "name": meta.name,
-                "unit": meta.unit,
-                "frequency": meta.frequency,
-            }
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        rows = await market_get_macro(
+            conn,
+            series_id=series,
+            start=dt.date.fromisoformat(start) if start else None,
+            end=dt.date.fromisoformat(end) if end else None,
         )
-    return records
+    return [_jsonify_pg_row(row) for row in rows]
 
 
 @mcp.tool()
-def get_dividends(
+async def get_dividends(
     ticker: str,
     since: str | None = None,
     as_of: str | None = None,
@@ -672,31 +538,26 @@ def get_dividends(
     Returns:
         List of {symbol, ex_date, amount, currency} ordered by ex_date desc.
     """
-    from data.dividends.store import symbol_path
-
-    path = symbol_path(ticker, DIVIDENDS_DIR)
-    if not path.exists():
-        return []
-    conn = duckdb.connect()
-    try:
-        query = "SELECT ex_date, amount, currency FROM read_parquet(?)"
-        params: list[object] = [str(path)]
-        if since or as_of:
-            query += " WHERE ex_date BETWEEN ? AND ?"
-            params += [since or "1900-01-01", as_of or "2999-12-31"]
-        query += " ORDER BY ex_date DESC LIMIT ?"
-        params.append(limit)
-        rows = conn.execute(query, params).fetchall()
-    finally:
-        conn.close()
-    records = _rows_to_dicts(rows, ["ex_date", "amount", "currency"])
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        listing = await get_current_listing(conn, provider="yahoo", symbol=ticker)
+        if listing is None:
+            return []
+        rows = await market_get_dividends(
+            conn,
+            listing_id=listing["listing_id"],
+            since=dt.date.fromisoformat(since) if since else None,
+            as_of=dt.date.fromisoformat(as_of) if as_of else None,
+            limit=limit,
+        )
+    records = [_jsonify_pg_row(row) for row in rows]
     for record in records:
         record["symbol"] = ticker
     return records
 
 
 @mcp.tool()
-def get_short_interest(
+async def get_short_interest(
     ticker: str,
     as_of: str | None = None,
     limit: int = 50,
@@ -714,43 +575,22 @@ def get_short_interest(
         previous_short, avg_daily_volume, days_to_cover, change_pct,
         settlement_date} ordered by settlement_date desc.
     """
-    import glob
-
-    files = glob.glob(SHORT_INTEREST_GLOB)
-    if not files:
-        return []
-    conn = duckdb.connect()
-    try:
-        query = """
-            SELECT symbol, issue_name, market_class, current_short,
-                   previous_short, avg_daily_volume, days_to_cover, change_pct,
-                   settlement_date
-            FROM read_parquet(?, union_by_name = true)
-            WHERE symbol = ?
-        """
-        params: list[object] = [SHORT_INTEREST_GLOB, ticker.upper().replace(".", "-")]
-        if as_of:
-            query += " AND settlement_date <= ?"
-            params.append(as_of)
-        query += " ORDER BY settlement_date DESC LIMIT ?"
-        params.append(limit)
-        rows = conn.execute(query, params).fetchall()
-    finally:
-        conn.close()
-    return _rows_to_dicts(
-        rows,
-        [
-            "symbol",
-            "issue_name",
-            "market_class",
-            "current_short",
-            "previous_short",
-            "avg_daily_volume",
-            "days_to_cover",
-            "change_pct",
-            "settlement_date",
-        ],
-    )
+    symbol = ticker.upper().replace(".", "-")
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        listing = await get_current_listing(conn, provider="yahoo", symbol=symbol)
+        if listing is None:
+            return []
+        rows = await market_get_short_interest(
+            conn,
+            listing_id=listing["listing_id"],
+            as_of=dt.date.fromisoformat(as_of) if as_of else None,
+            limit=limit,
+        )
+    records = [_jsonify_pg_row(row) for row in rows]
+    for record in records:
+        record["symbol"] = symbol
+    return records
 
 
 @mcp.tool()
@@ -1119,25 +959,15 @@ def run_filings_refresh(run_date: str = "") -> str:
         return f"Cannot start filings refresh: {exc}"
 
     def work(progress: jobs.ProgressCallback) -> dict[str, int]:
-        # server/jobs.py runs `work` synchronously on a background thread;
-        # run_daily_fetch_with_pool is async (it awaits the Postgres
-        # document/metadata writes alongside the unchanged DuckDB ones),
-        # so asyncio.run() bridges the two here -- an acceptable bridge for
-        # now, per this cutover's scope (server/jobs.py itself is untouched).
-        conn = init_db(DB_PATH)
-        try:
-            return asyncio.run(
-                run_daily_fetch_with_pool(
-                    conn,
-                    client,
-                    run_date=date,
-                    root=ROOT_DIR,
-                    universe=universe,
-                    progress=progress,
-                )
+        return asyncio.run(
+            run_daily_fetch_with_pool(
+                client,
+                run_date=date,
+                root=ROOT_DIR,
+                universe=universe,
+                progress=progress,
             )
-        finally:
-            conn.close()
+        )
 
     try:
         run_id = jobs.start_run("filings", work)
@@ -1236,8 +1066,7 @@ async def get_ingest_status(limit: int = 5) -> dict[str, object]:
         from PostgreSQL, newest first — run_id, run_date, job_type, status,
         started_at, finished_at, counters (a nested dict of per-job counts,
         not flattened into fixed keys), error. All PostgreSQL-audited job
-        types appear; filings runs are still logged to a separate DuckDB
-        table pending their cutover.
+        types appear, including filings runs.
     """
     record = jobs.current_run()
     pool = await _pg_pool()
@@ -1292,15 +1121,10 @@ class _BearerAuthMiddleware:
 def main() -> None:
     """Run the MCP server over streamable-http.
 
-    On every start (including a restart: unless-stopped recovery): applies
-    pending Postgres migrations and ensures research.duckdb exists. Both are
-    idempotent, so running them unconditionally here is what replaces the
-    old deploy tooling's one-time `data.db.init`/`data.db.init_postgres`
-    steps — initialisation is the app's own responsibility now, not
-    something deploy scripting does once ahead of time.
+    On every start, apply pending PostgreSQL migrations before accepting
+    requests. Initialisation is the application's responsibility.
     """
     asyncio.run(apply_schema(dsn_from_env()))
-    init_db()
 
     token = os.getenv("MARKETMIND_MCP_TOKEN", "").strip()
     if not token:

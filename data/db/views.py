@@ -158,9 +158,9 @@ async def structure_views(
 
     Idempotent per (view_id, schema_version): a view already structured
     under a given schema_version is skipped for that version, but can still
-    be (re-)structured under a different schema_version — the DuckDB
-    version's bug (todo.md A1.9) of blocking all future re-structuring once
-    any row existed is fixed by the (view_id, schema_version) primary key.
+    be (re-)structured under a different schema_version. The
+    (view_id, schema_version) primary key prevents one version from blocking
+    future representations.
 
     Args:
         conn: An open connection.

@@ -1,10 +1,8 @@
 """Universe membership sync and point-in-time reads.
 
-Ports data/universe/resolve.py's ticker-to-Yahoo-symbol resolution onto the
-identity model (companies/company_identifiers/listings) and adds
-universe_members, which loader.get_universe's CSV read has no equivalent
-for. Not wired into any caller yet -- data/universe/resolve.py and
-data/fetch.py keep using the CSV/DuckDB path until their own phase.
+Synchronizes ticker-to-Yahoo-symbol resolution into the identity model
+(companies/company_identifiers/listings) and maintains point-in-time
+`universe_members` rows.
 """
 
 from __future__ import annotations
@@ -17,7 +15,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from data.db.identifiers import get_or_create_identifier
-from data.db.listings import upsert_listing
+from data.db.listings import get_current_listing_for_company, upsert_listing
 from data.universe.loader import UNIVERSE_DIR, load_all_members
 from data.universe.sources.ric import RIC_OVERRIDES, ric_variants
 from data.universe.sources.yahoo import search_by_id, symbol_has_data
@@ -46,6 +44,9 @@ async def _resolve_and_store_listing(
     check: object,
 ) -> str:
     """Resolve row's Yahoo symbol and upsert its listing. Returns the status."""
+    current = await get_current_listing_for_company(conn, company_id=company_id, provider="yahoo")
+    if current is not None and current["status"] == "valid":
+        return "valid"
     found = _resolve_symbol(row, search=search)
     if not found:
         status = "unresolved"

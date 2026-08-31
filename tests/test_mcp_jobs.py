@@ -13,7 +13,6 @@ import server.jobs as jobs
 import server.mcp as mcp_mod
 from data.db.facts import get_current_facts
 from data.db.identifiers import get_or_create_identifier
-from data.db.init import init_db
 from data.sources.rss import Article
 
 pytestmark = pytest.mark.asyncio
@@ -123,19 +122,15 @@ def _fake_news(ticker: str, name: str) -> list[Article]:
 
 @pytest.fixture()
 def wired(tmp_path, monkeypatch, postgres_pool):
-    """Point the tools at a temp DuckDB (still needed by filings) and stub
-    the news job's network calls. Depending on postgres_pool guarantees the
+    """Stub job network calls. Depending on postgres_pool guarantees the
     shared test schema exists before the news job's background thread opens
     its own pool against the same DSN (it can't share this test's event
     loop/connection)."""
-    db_path = tmp_path / "research.duckdb"
-    init_db(db_path).close()
-    monkeypatch.setattr(mcp_mod, "DB_PATH", db_path)
     monkeypatch.setattr(mcp_mod, "_build_llm", lambda: _fake_llm)
     monkeypatch.setattr("agent.ingestion.fetch_company_news", _fake_news)
     monkeypatch.setattr("agent.ingestion.fetch_company_description", lambda name: "")
     monkeypatch.setattr("agent.ingestion.RAW_NEWS_DIR", tmp_path / "news")
-    return db_path
+    return tmp_path
 
 
 def _join_run(timeout: float = 20.0) -> jobs.RunRecord:
@@ -348,7 +343,7 @@ async def test_status_is_readable_while_a_run_holds_the_database(wired) -> None:
         _join_run()
 
 
-# --- filings (unchanged by this cutover -- still DuckDB-audited) ---
+# --- PostgreSQL-backed filings ---
 
 
 class _EmptyEdgarClient:
@@ -375,12 +370,9 @@ async def test_run_filings_refresh_drives_the_real_fetch(
     assert record.state == "succeeded"
     assert record.counts["filings_fetched"] == 0
 
-    conn = init_db(wired)
-    try:
-        row = conn.execute("SELECT job_type FROM agent_runs").fetchone()
-        assert row == ("filings",)
-    finally:
-        conn.close()
+    async with postgres_pool.connection() as conn:
+        row = await (await conn.execute("SELECT job_type FROM agent_runs")).fetchone()
+    assert row == ("filings",)
 
 
 async def test_run_filings_refresh_defaults_to_today(

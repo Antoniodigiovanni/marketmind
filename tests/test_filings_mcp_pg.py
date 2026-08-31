@@ -1,21 +1,23 @@
-"""Tests for the Postgres-backed filings MCP tools.
-
-get_filings, get_european_filings, and search_filings were cut over from
-DuckDB to PostgreSQL. Insider transactions/holdings and 13F holdings stay
-on DuckDB (tests/test_filings_mcp.py) until a follow-up cutover.
-"""
+"""Tests for the PostgreSQL-backed filings MCP tools."""
 
 from __future__ import annotations
 
 import datetime as dt
 import uuid
 
+import polars as pl
 import pytest
 
 import server.mcp as mcp_mod
 from data.db.esef import create_esef_filing
-from data.db.filings import create_filing, insert_filing_text
+from data.db.filings import (
+    create_filing,
+    insert_13f_holdings,
+    insert_filing_text,
+    insert_insider_rows,
+)
 from data.db.identifiers import get_or_create_identifier
+from data.filings.parse.ownership import InsiderHolding, InsiderTransaction
 
 pytestmark = pytest.mark.asyncio
 
@@ -201,3 +203,71 @@ async def test_get_european_filings_empty(monkeypatch, pg_conn) -> None:
     _patch_pool(monkeypatch, pg_conn)
     assert await mcp_mod.get_european_filings() == []
     assert await mcp_mod.get_european_filings(ticker="NOPE") == []
+
+
+async def test_ownership_and_13f_tools(monkeypatch, pg_conn) -> None:
+    _patch_pool(monkeypatch, pg_conn)
+    company_id = await _company_with_ticker(pg_conn, "AAPL")
+    filing_id = await create_filing(
+        pg_conn,
+        company_id=company_id,
+        accession="own-1",
+        form_type="4",
+        filed_at=dt.date(2026, 5, 2),
+        period=dt.date(2026, 4, 30),
+        url="https://example.com/own",
+    )
+    await insert_insider_rows(
+        pg_conn,
+        filing_id=filing_id,
+        company_id=company_id,
+        transactions=[
+            InsiderTransaction(
+                "AAPL",
+                "TIM COOK",
+                None,
+                "CEO",
+                "Common",
+                "2026-04-30",
+                None,
+                "S",
+                500,
+                180,
+                9500,
+                "D",
+            )
+        ],
+        holdings=[
+            InsiderHolding("AAPL", "TIM COOK", None, "CEO", "Common", "2026-04-30", 9500, "D", "4")
+        ],
+    )
+    assert (await mcp_mod.get_insider_transactions("AAPL"))[0]["owner_name"] == "TIM COOK"
+    assert (await mcp_mod.get_insider_holdings("AAPL"))[0]["shares_held_after"] == 9500
+
+    filing_13f = await create_filing(
+        pg_conn,
+        company_id=None,
+        accession="13f-tool",
+        form_type="13F-HR",
+        filed_at=dt.date(2026, 5, 15),
+        period=dt.date(2026, 3, 31),
+        url="https://example.com/13f",
+    )
+    await insert_13f_holdings(
+        pg_conn,
+        filing_id=filing_13f,
+        frame=pl.DataFrame(
+            {
+                "filer_cik": ["0001"],
+                "filer_name": ["Fund"],
+                "cusip": ["037833100"],
+                "report_period": ["2026-03-31"],
+                "issuer_name": ["APPLE INC"],
+                "class_title": ["COM"],
+                "shares": [10.0],
+                "value_usd": [100000.0],
+                "put_call": [None],
+            }
+        ),
+    )
+    assert (await mcp_mod.get_13f_holdings("037833100"))[0]["filer_name"] == "Fund"

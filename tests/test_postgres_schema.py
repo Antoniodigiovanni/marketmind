@@ -28,7 +28,10 @@ async def test_schema_application_records_baseline_and_is_idempotent(pg_conn) ->
             "SELECT version, name, checksum FROM marketmind_meta.schema_migrations ORDER BY version"
         )
     ).fetchall()
-    assert rows == [(1, "production_baseline", "baseline")]
+    assert [(version, name) for version, name, _checksum in rows] == [
+        (1, "production_baseline"),
+        (2, "complete_postgres_cutover"),
+    ]
 
 
 async def test_vector_column_and_hnsw_index_exist(pg_conn) -> None:

@@ -6,6 +6,7 @@ import datetime as dt
 import uuid
 
 import psycopg
+from psycopg.rows import dict_row
 
 
 async def register_article(
@@ -19,6 +20,7 @@ async def register_article(
     title: str | None,
     published_at: dt.datetime,
     pre_score: float,
+    summary: str | None = None,
 ) -> uuid.UUID | None:
     """Register an article for a company.
 
@@ -57,9 +59,9 @@ async def register_article(
             row = await (
                 await conn.execute(
                     "INSERT INTO articles "
-                    "(url_hash, content_hash, url, source, title, published_at) "
-                    "VALUES (%s, %s, %s, %s, %s, %s) RETURNING article_id",
-                    (url_hash, content_hash, url, source, title, published_at),
+                    "(url_hash, content_hash, url, source, title, summary, published_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING article_id",
+                    (url_hash, content_hash, url, source, title, summary, published_at),
                 )
             ).fetchone()
             article_id = row[0]
@@ -105,3 +107,49 @@ async def set_article_status(
             "WHERE article_id = %s AND company_id = %s",
             (status, error, article_id, company_id),
         )
+
+
+async def get_news(
+    conn: psycopg.AsyncConnection,
+    *,
+    company_id: uuid.UUID,
+    since: dt.datetime | None = None,
+    limit: int = 50,
+) -> list[dict[str, object]]:
+    """Return articles attributed to a company, newest first."""
+    query = (
+        "SELECT a.url, a.source, i.id_value AS ticker, a.published_at, a.title, a.summary "
+        "FROM articles a JOIN article_companies ac USING (article_id) "
+        "LEFT JOIN company_identifiers i ON i.company_id = ac.company_id "
+        "AND i.id_type = 'ticker' AND i.valid_until IS NULL "
+        "WHERE ac.company_id = %s"
+    )
+    params: list[object] = [company_id]
+    if since is not None:
+        query += " AND a.published_at >= %s"
+        params.append(since)
+    query += " ORDER BY a.published_at DESC LIMIT %s"
+    params.append(limit)
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(query, params)
+        return await cur.fetchall()
+
+
+async def search_news(
+    conn: psycopg.AsyncConnection, *, query: str, limit: int = 50
+) -> list[dict[str, object]]:
+    """Search article titles and summaries, newest first."""
+    pattern = f"%{query}%"
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            "SELECT DISTINCT ON (a.article_id) a.url, a.source, i.id_value AS ticker, "
+            "a.published_at, a.title, a.summary FROM articles a "
+            "LEFT JOIN article_companies ac USING (article_id) "
+            "LEFT JOIN company_identifiers i ON i.company_id = ac.company_id "
+            "AND i.id_type = 'ticker' AND i.valid_until IS NULL "
+            "WHERE a.title ILIKE %s OR a.summary ILIKE %s "
+            "ORDER BY a.article_id, a.published_at DESC LIMIT %s",
+            (pattern, pattern, limit),
+        )
+        rows = await cur.fetchall()
+    return sorted(rows, key=lambda row: row["published_at"], reverse=True)

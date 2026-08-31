@@ -19,8 +19,6 @@ dependencies = [
     "anthropic>=0.25",
     "tenacity>=8.2",
     # Storage
-    "duckdb>=0.10",
-    # PostgreSQL (migration in progress; DuckDB still in use)
     "psycopg[binary,pool]>=3.2",
     "pgvector>=0.4",
     # News (RSS-first)
