@@ -790,6 +790,7 @@ async def get_market_views(
     as_of: str,
     ticker: str | None = None,
     scope: str | None = None,
+    schema_version: int | None = None,
     limit: int = 50,
 ) -> list[dict[str, object]]:
     """Return historical market views as of a date.
@@ -799,16 +800,26 @@ async def get_market_views(
         ticker: Optional ticker filter; a ticker with no matching company
             as of `as_of` yields an empty result rather than an error.
         scope: Optional scope filter ('market' | 'ticker' | 'theme').
+        schema_version: Optional derived-structure version. Defaults to the
+            newest version available for each view.
         limit: Maximum views to return.
 
     Returns:
         List of view dicts (view_id, as_of, scope, company_id, theme,
-        view_text, model, data_cutoff, used_fact_ids, created_at) ordered by
-        as_of descending.
+        view_text, model, data_cutoff, used_fact_ids, created_at, structure,
+        structure_schema_version, structured_by, structured_at) ordered by
+        as_of descending. Derived fields are null for unstructured views.
     """
     pool = await _pg_pool()
     async with pool.connection() as conn:
-        return await get_views(conn, as_of=as_of, ticker=ticker, scope=scope, limit=limit)
+        return await get_views(
+            conn,
+            as_of=as_of,
+            ticker=ticker,
+            scope=scope,
+            schema_version=schema_version,
+            limit=limit,
+        )
 
 
 @mcp.tool()

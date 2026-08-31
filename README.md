@@ -132,10 +132,9 @@ uv run python -m server.mcp                   # run the MCP server (streamable-h
 uv run ruff check . && uv run ruff format .   # lint + format
 ```
 
-The view-structuring extractor is still a stub (raises `NotImplementedError`
-until the corresponding roadmap item lands). The daily price/macro fetch,
-universe refresh, symbol resolution, news ingest, filings pipeline, company
-profiles, and MCP server are functional.
+The daily price/macro fetch, universe refresh, symbol resolution, news ingest,
+market-view structuring, filings pipeline, company profiles, and MCP server are
+functional.
 
 ## Deployment (generic VPS)
 
@@ -183,7 +182,7 @@ The MCP server (`server/mcp.py`) exposes the following tools:
 | `get_news` | `ticker`, `since?`, `limit?` | Recent articles `{url, source, ticker, published_at, title, description}` |
 | `search_news` | `query`, `limit?` | Full-text news search, recency-ranked |
 | `get_facts` | `ticker`, `as_of` | Point-in-time facts valid on `as_of` |
-| `get_market_views` | `as_of`, `ticker?`, `scope?`, `limit?` | Views for `as_of` or earlier, newest first |
+| `get_market_views` | `as_of`, `ticker?`, `scope?`, `schema_version?`, `limit?` | Views for `as_of` or earlier with derived structure, newest first |
 | `save_market_view_tool` | `as_of`, `view_text`, `model`, `scope`, `ticker?`, `theme?`, `data_cutoff?` | New immutable view ID |
 | `save_fact` | `ticker`, `statement`, `fact_type`, `confidence`, `valid_from`, `source_article_id`, `supersedes_id?` | New versioned fact ID |
 | `run_ingest` | `date`, `profiles_only?`, `backfill?`, `tickers?` | Starts the daily news + fact ingest in the background; returns a run id |

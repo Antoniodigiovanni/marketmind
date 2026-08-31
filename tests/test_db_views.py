@@ -48,6 +48,10 @@ async def test_get_market_views_returns_what_was_saved(pg_conn) -> None:
     assert views[0]["model"] == "hermes"
     assert views[0]["company_id"] is None
     assert views[0]["used_fact_ids"] is None
+    assert views[0]["structure"] is None
+    assert views[0]["structure_schema_version"] is None
+    assert views[0]["structured_by"] is None
+    assert views[0]["structured_at"] is None
 
 
 async def test_get_market_views_is_point_in_time(pg_conn) -> None:
@@ -192,6 +196,18 @@ async def test_get_market_views_respects_limit(pg_conn) -> None:
     assert len(views) == 2
 
 
+@pytest.mark.parametrize("schema_version", [0, True])
+async def test_get_market_views_rejects_invalid_schema_version(
+    pg_conn, schema_version: int
+) -> None:
+    with pytest.raises(ValueError, match="schema_version"):
+        await get_market_views(
+            pg_conn,
+            as_of=dt.date(2026, 8, 4),
+            schema_version=schema_version,
+        )
+
+
 async def test_structure_views_with_fake_extractor(pg_conn) -> None:
     view_id = await save_market_view(
         pg_conn,
@@ -202,10 +218,15 @@ async def test_structure_views_with_fake_extractor(pg_conn) -> None:
         data_cutoff=dt.date(2026, 8, 4),
     )
 
-    async def fake_extractor(view_id: uuid.UUID, view_text: str, model: str) -> dict[str, object]:
-        return {"stance": "bullish", "thesis": view_text}
+    async def fake_extractor(view: dict[str, object]) -> dict[str, object]:
+        assert view["view_id"] == view_id
+        assert view["as_of"] == dt.date(2026, 8, 4)
+        assert view["scope"] == "market"
+        return {"stance": "bullish", "thesis": view["view_text"]}
 
-    structured = await structure_views(pg_conn, extractor=fake_extractor)
+    structured = await structure_views(
+        pg_conn, extractor=fake_extractor, extraction_model="test-model"
+    )
     assert structured == 1
 
     row = await (
@@ -215,7 +236,7 @@ async def test_structure_views_with_fake_extractor(pg_conn) -> None:
         )
     ).fetchone()
     assert row[0]["stance"] == "bullish"
-    assert row[1] == "claude-sonnet-4-5"
+    assert row[1] == "test-model"
 
 
 async def test_structure_views_is_idempotent_per_schema_version(pg_conn) -> None:
@@ -228,23 +249,122 @@ async def test_structure_views_is_idempotent_per_schema_version(pg_conn) -> None
         data_cutoff=dt.date(2026, 8, 4),
     )
 
-    async def fake_extractor(view_id: uuid.UUID, view_text: str, model: str) -> dict[str, object]:
-        return {"stance": "neutral"}
+    async def v1_extractor(view: dict[str, object]) -> dict[str, object]:
+        return {"stance": "neutral", "version": 1}
 
-    assert await structure_views(pg_conn, extractor=fake_extractor, schema_version=1) == 1
-    assert await structure_views(pg_conn, extractor=fake_extractor, schema_version=1) == 0
+    async def v2_extractor(view: dict[str, object]) -> dict[str, object]:
+        return {"stance": "bullish", "version": 2}
+
+    assert (
+        await structure_views(
+            pg_conn,
+            extractor=v1_extractor,
+            extraction_model="test-model",
+            schema_version=1,
+        )
+        == 1
+    )
+    assert (
+        await structure_views(
+            pg_conn,
+            extractor=v1_extractor,
+            extraction_model="test-model",
+            schema_version=1,
+        )
+        == 0
+    )
     # A different schema_version is not blocked by the v1 row (todo.md A1.9).
-    assert await structure_views(pg_conn, extractor=fake_extractor, schema_version=2) == 1
+    assert (
+        await structure_views(
+            pg_conn,
+            extractor=v2_extractor,
+            extraction_model="test-model",
+            schema_version=2,
+        )
+        == 1
+    )
+
+    latest = await get_market_views(pg_conn, as_of=dt.date(2026, 8, 4))
+    assert latest[0]["structure"] == {"stance": "bullish", "version": 2}
+    assert latest[0]["structure_schema_version"] == 2
+    assert latest[0]["structured_by"] == "test-model"
+    assert latest[0]["structured_at"] is not None
+
+    version_one = await get_market_views(
+        pg_conn,
+        as_of=dt.date(2026, 8, 4),
+        schema_version=1,
+    )
+    assert version_one[0]["structure"] == {"stance": "neutral", "version": 1}
+    assert version_one[0]["structure_schema_version"] == 1
 
 
-async def test_default_extractor_raises_not_implemented(pg_conn) -> None:
+async def test_structure_views_respects_as_of_and_limit(pg_conn) -> None:
     await save_market_view(
         pg_conn,
         as_of=dt.date(2026, 8, 4),
         scope="market",
-        view_text="x",
+        view_text="eligible one",
         model="hermes",
         data_cutoff=dt.date(2026, 8, 4),
     )
-    with pytest.raises(NotImplementedError):
-        await structure_views(pg_conn)
+    await save_market_view(
+        pg_conn,
+        as_of=dt.date(2026, 8, 4),
+        scope="market",
+        view_text="eligible two",
+        model="hermes",
+        data_cutoff=dt.date(2026, 8, 4),
+    )
+    await save_market_view(
+        pg_conn,
+        as_of=dt.date(2026, 8, 6),
+        scope="market",
+        view_text="future",
+        model="hermes",
+        data_cutoff=dt.date(2026, 8, 6),
+    )
+
+    seen: list[str] = []
+
+    async def fake_extractor(view: dict[str, object]) -> dict[str, object]:
+        seen.append(str(view["view_text"]))
+        return {"stance": "neutral"}
+
+    assert (
+        await structure_views(
+            pg_conn,
+            extractor=fake_extractor,
+            extraction_model="test-model",
+            as_of=dt.date(2026, 8, 5),
+            limit=1,
+        )
+        == 1
+    )
+    assert len(seen) == 1
+
+
+@pytest.mark.parametrize(
+    ("extraction_model", "schema_version", "limit", "message"),
+    [
+        (" ", 1, 1, "extraction_model"),
+        ("test-model", 0, 1, "schema_version"),
+        ("test-model", True, 1, "schema_version"),
+        ("test-model", 1, 0, "limit"),
+        ("test-model", 1, True, "limit"),
+    ],
+)
+async def test_structure_views_rejects_nonpositive_bounds(
+    pg_conn, extraction_model: str, schema_version: int, limit: int, message: str
+) -> None:
+    async def fake_extractor(view: dict[str, object]) -> dict[str, object]:
+        return {}
+
+    with pytest.raises(ValueError, match=message):
+        await structure_views(
+            pg_conn,
+            extractor=fake_extractor,
+            extraction_model=extraction_model,
+            schema_version=schema_version,
+            limit=limit,
+        )

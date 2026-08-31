@@ -16,8 +16,8 @@
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# Daily 06:10 — price/macro fetch + news ingest
-10 6 * * * root flock -n /run/lock/marketmind-data.lock sh -c 'cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python data/fetch.py && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.ingestion "$(date -I)"' >> /var/log/marketmind/daily.log 2>&1
+# Daily 06:10 — price/macro fetch + news ingest + market-view structuring
+10 6 * * * root flock -n /run/lock/marketmind-data.lock sh -c 'cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python data/fetch.py && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.ingestion "$(date -I)" && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.views "$(date -I)"' >> /var/log/marketmind/daily.log 2>&1
 
 # Mondays 06:00 — universe (S&P 500 / STOXX 600 membership) refresh
 0 6 * * 1 root flock -n /run/lock/marketmind-data.lock sh -c 'cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m data.universe.update && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m data.universe.resolve' >> /var/log/marketmind/universe.log 2>&1

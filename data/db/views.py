@@ -71,6 +71,7 @@ async def get_market_views(
     as_of: dt.date,
     company_id: uuid.UUID | None = None,
     scope: str | None = None,
+    schema_version: int | None = None,
     limit: int = 50,
 ) -> list[dict[str, object]]:
     """Return market views as of a date (as_of <= :as_of), newest first.
@@ -80,31 +81,60 @@ async def get_market_views(
         as_of: Views referring to this date or earlier are returned.
         company_id: Optional filter, scope == 'ticker' rows for this company.
         scope: Optional scope filter ('market' | 'ticker' | 'theme').
+        schema_version: Optional derived-structure version. When omitted, the
+            newest available version is returned for each view.
         limit: Maximum number of views to return.
 
     Returns:
         One dict per view: view_id, as_of, scope, company_id, theme,
-        view_text, model, data_cutoff, used_fact_ids, created_at. Ordered
-        by as_of descending, then created_at descending.
+        view_text, model, data_cutoff, used_fact_ids, created_at, structure,
+        structure_schema_version, structured_by, and structured_at. Derived
+        fields are None when the view has not been structured. Ordered by
+        as_of descending, then created_at descending.
+
+    Raises:
+        ValueError: If schema_version is not positive.
     """
-    clauses = ["as_of <= %s"]
+    if schema_version is not None and (isinstance(schema_version, bool) or schema_version < 1):
+        raise ValueError("schema_version must be positive")
+
+    clauses = ["mv.as_of <= %s"]
     params: list[object] = [as_of]
     if company_id is not None:
-        clauses.append("company_id = %s")
+        clauses.append("mv.company_id = %s")
         params.append(company_id)
     if scope is not None:
-        clauses.append("scope = %s")
+        clauses.append("mv.scope = %s")
         params.append(scope)
+    structure_version_clause = ""
+    if schema_version is not None:
+        structure_version_clause = "AND candidate.schema_version = %s"
+        # The lateral subquery appears before the outer WHERE placeholders.
+        params.insert(0, schema_version)
     params.append(limit)
 
     async with conn.cursor(row_factory=dict_row) as cur:
         await cur.execute(
             f"""
-            SELECT view_id, as_of, scope, company_id, theme, view_text,
-                   written_by AS model, data_cutoff, used_fact_ids, created_at
-            FROM market_views
+            SELECT mv.view_id, mv.as_of, mv.scope, mv.company_id, mv.theme,
+                   mv.view_text, mv.written_by AS model, mv.data_cutoff,
+                   mv.used_fact_ids, mv.created_at,
+                   derived.structure,
+                   derived.schema_version AS structure_schema_version,
+                   derived.extracted_by AS structured_by,
+                   derived.created_at AS structured_at
+            FROM market_views mv
+            LEFT JOIN LATERAL (
+                SELECT candidate.schema_version, candidate.structure,
+                       candidate.extracted_by, candidate.created_at
+                FROM market_view_structures candidate
+                WHERE candidate.view_id = mv.view_id
+                  {structure_version_clause}
+                ORDER BY candidate.schema_version DESC
+                LIMIT 1
+            ) derived ON TRUE
             WHERE {" AND ".join(clauses)}
-            ORDER BY as_of DESC, created_at DESC
+            ORDER BY mv.as_of DESC, mv.created_at DESC
             LIMIT %s
             """,
             params,
@@ -112,22 +142,17 @@ async def get_market_views(
         return await cur.fetchall()
 
 
-Extractor = Callable[[uuid.UUID, str, str], Awaitable[dict[str, object]]]
-
-
-async def _default_extractor(view_id: uuid.UUID, view_text: str, model: str) -> dict[str, object]:
-    """Placeholder extractor — LLM wiring is unfinished roadmap work."""
-    raise NotImplementedError(
-        f"LLM extractor not wired yet (view {view_id}); see agent/prompts/view_structuring.md"
-    )
+Extractor = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
 
 
 async def structure_views(
     conn: psycopg.AsyncConnection,
     *,
-    extractor: Extractor | None = None,
+    extractor: Extractor,
+    extraction_model: str,
     schema_version: int = 1,
-    extraction_model: str = "claude-sonnet-4-5",
+    as_of: dt.date | None = None,
+    limit: int = 100,
 ) -> int:
     """Structure free-text views with no row for this schema_version yet.
 
@@ -139,44 +164,65 @@ async def structure_views(
 
     Args:
         conn: An open connection.
-        extractor: Async callable(view_id, view_text, model) ->
-            JSON-serialisable dict. Defaults to a stub that raises
-            NotImplementedError.
+        extractor: Async callable(view row) -> JSON-serialisable dict. The row
+            contains view_id, as_of, scope, company_id, theme, view_text, and
+            the model that wrote the source view.
         schema_version: Schema version stored with each extraction.
         extraction_model: Model identifier recorded for provenance.
+        as_of: Optional upper bound on the source view's market date.
+        limit: Maximum pending views to structure in this run.
 
     Returns:
         Number of views structured in this run.
 
     Raises:
-        NotImplementedError: If no extractor is supplied and the default is used.
+        ValueError: If extraction_model is blank or numeric bounds are invalid.
     """
-    extract = extractor or _default_extractor
+    if not extraction_model.strip():
+        raise ValueError("extraction_model must be nonblank")
+    if isinstance(schema_version, bool) or schema_version < 1:
+        raise ValueError("schema_version must be positive")
+    if isinstance(limit, bool) or limit < 1:
+        raise ValueError("limit must be positive")
+
+    clauses = ["mvs.view_id IS NULL"]
+    params: list[object] = [schema_version]
+    if as_of is not None:
+        clauses.append("mv.as_of <= %s")
+        params.append(as_of)
+    params.append(limit)
 
     async with conn.cursor(row_factory=dict_row) as cur:
         await cur.execute(
-            """
-            SELECT mv.view_id, mv.view_text, mv.written_by AS model
+            f"""
+            SELECT mv.view_id, mv.as_of, mv.scope, mv.company_id, mv.theme,
+                   mv.view_text, mv.written_by AS model
             FROM market_views mv
             LEFT JOIN market_view_structures mvs
               ON mvs.view_id = mv.view_id AND mvs.schema_version = %s
-            WHERE mvs.view_id IS NULL
+            WHERE {" AND ".join(clauses)}
             ORDER BY mv.created_at
+            LIMIT %s
             """,
-            (schema_version,),
+            params,
         )
         pending = await cur.fetchall()
 
-    structured = 0
+    extracted: list[tuple[dict[str, object], dict[str, object]]] = []
     for row in pending:
-        payload = await extract(row["view_id"], row["view_text"], row["model"])
-        async with conn.transaction():
-            await conn.execute(
+        payload = await extractor(row)
+        extracted.append((row, payload))
+
+    structured = 0
+    async with conn.transaction():
+        for row, payload in extracted:
+            result = await conn.execute(
                 "INSERT INTO market_view_structures "
                 "(view_id, schema_version, structure, extracted_by) "
-                "VALUES (%s, %s, %s, %s)",
+                "VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (view_id, schema_version) DO NOTHING",
                 (row["view_id"], schema_version, Jsonb(payload), extraction_model),
             )
-        structured += 1
+            structured += result.rowcount
 
     return structured
