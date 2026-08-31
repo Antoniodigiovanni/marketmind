@@ -9,7 +9,7 @@ import polars as pl
 import pytest
 
 import data.fetch as fetch_mod
-from data.db.companies import create_company
+from data.db.identifiers import create_identifier
 from data.db.listings import get_current_listing, upsert_listing
 from data.db.prices import get_last_fx_date, get_prices, get_volatility, upsert_prices
 
@@ -17,8 +17,15 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _listing(pg_conn, symbol: str = "AAPL") -> uuid.UUID:
-    company_id = await create_company(
-        pg_conn, name="Apple", country="US", sector="Technology", first_seen=dt.date(2000, 1, 1)
+    company_id = await create_identifier(
+        pg_conn,
+        id_type="ticker",
+        id_value=symbol,
+        valid_from=dt.date(2000, 1, 1),
+        source="test",
+        name=symbol,
+        country="US",
+        sector="Technology",
     )
     return await upsert_listing(
         pg_conn,

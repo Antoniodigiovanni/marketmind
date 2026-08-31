@@ -1,9 +1,8 @@
 """ESEF/UKSEF filings repository — European annual reports from filings.xbrl.org.
 
 Kept separate from data/db/filings.py because the provider, keys, and
-entity identity all differ: EDGAR is CIK/accession-keyed, ESEF is
-LEI/fxo_id-keyed (same split as data/filings/store.py vs data/filings/esef.py
-on the DuckDB side).
+entity identity all differ: EDGAR is CIK/accession-keyed, while ESEF is
+LEI/fxo_id-keyed.
 """
 
 from __future__ import annotations

@@ -32,7 +32,6 @@ services:
       MARKETMIND_DATABASE_DSN: ${MARKETMIND_DATABASE_DSN:?set MARKETMIND_DATABASE_DSN in .env}
       PGPASSWORD: ${MARKETMIND_DB_PASSWORD:?set MARKETMIND_DB_PASSWORD in .env}
       MARKETMIND_MCP_TOKEN: ${MARKETMIND_MCP_TOKEN:?set MARKETMIND_MCP_TOKEN in .env}
-      MARKETMIND_DUCKDB_PATH: /var/lib/marketmind/research.duckdb
       MARKETMIND_PROCESSED_DIR: /var/lib/marketmind/processed
       MARKETMIND_UNIVERSE_DIR: /var/lib/marketmind/universe
       MARKETMIND_REFRESH_DIR: /var/lib/marketmind/refresh
@@ -58,7 +57,7 @@ services:
       # Raw downloads retain their existing on-host layout without replacing
       # the image's `data.*` application modules.
       - ./data/raw:/app/data/raw
-      # DuckDB, derived files, and mutable universe CSVs live outside tracked
+      # Derived files and mutable universe CSVs live outside tracked
       # source. The entrypoint seeds universe baselines on first start.
       - ./state:/var/lib/marketmind
 

@@ -3,8 +3,7 @@
 -- Fresh databases are created from this file. Existing databases are advanced
 -- by immutable files in data/db/postgres_migrations/; every in-place change
 -- made here must have a corresponding migration.
--- DuckDB remains authoritative only for stores whose PostgreSQL cutover is
--- incomplete (currently ownership/13F data and related checkpoints).
+-- PostgreSQL is the only structured, queryable datastore.
 --
 -- Identity model
 -- ──────────────
@@ -213,6 +212,10 @@ CREATE TABLE IF NOT EXISTS short_interest (
     short_volume   BIGINT,
     total_volume   BIGINT,
     days_to_cover  DOUBLE PRECISION,
+    issue_name     TEXT,
+    market_class   TEXT,
+    previous_short BIGINT,
+    change_pct     DOUBLE PRECISION,
     PRIMARY KEY (listing_id, settlement_date)
 );
 
@@ -439,10 +442,13 @@ CREATE TABLE IF NOT EXISTS insider_transactions (
     company_id     UUID NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
     insider_name   TEXT NOT NULL,
     insider_title  TEXT,
+    security_title TEXT,
     transaction_date DATE NOT NULL,
     transaction_code TEXT,
     shares         DOUBLE PRECISION,
     price          DOUBLE PRECISION,
+    shares_held_after DOUBLE PRECISION,
+    direct_or_indirect TEXT,
     is_derivative  BOOLEAN NOT NULL DEFAULT FALSE
 );
 
@@ -453,8 +459,12 @@ CREATE TABLE IF NOT EXISTS insider_holdings (
     filing_id    UUID NOT NULL REFERENCES filings(filing_id) ON DELETE CASCADE,
     company_id   UUID NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
     insider_name TEXT NOT NULL,
+    insider_title TEXT,
+    security_title TEXT,
     as_of        DATE NOT NULL,
     shares       DOUBLE PRECISION,
+    direct_or_indirect TEXT,
+    form_type    TEXT,
     is_derivative BOOLEAN NOT NULL DEFAULT FALSE
 );
 
@@ -468,8 +478,11 @@ CREATE TABLE IF NOT EXISTS form13f_holdings (
     company_id    UUID REFERENCES companies(company_id) ON DELETE SET NULL,
     cusip         TEXT NOT NULL,
     report_period DATE NOT NULL,
+    issuer_name   TEXT,
+    class_title   TEXT,
     shares        DOUBLE PRECISION,
-    value_usd     DOUBLE PRECISION
+    value_usd     DOUBLE PRECISION,
+    put_call      TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_13f_period  ON form13f_holdings (report_period DESC);

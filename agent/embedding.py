@@ -4,8 +4,8 @@ Not a port of agent/embeddings.py's ChromaVectorStore/HashEmbeddingFunction
 -- those are deleted in the ingestion-pipeline cutover (sub-phase B). This
 is a plain async function matching data/db/facts.py's and
 data/db/aggregate_facts.py's `embed: Callable[[str], Awaitable[list[float]]]`
-contract directly, at dim=1536 to match fact_embeddings.embedding's column
-type (the original DuckDB+Chroma default was 512).
+contract directly, at dim=1536 to match the `fact_embeddings.embedding`
+column type.
 """
 
 from __future__ import annotations

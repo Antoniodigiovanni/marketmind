@@ -1,9 +1,8 @@
 """Company facts repository — point-in-time facts and their pgvector embeddings.
 
 Every read is as-of dated (CLAUDE.md's fact-store convention: querying
-without a date is a look-ahead violation). Every write embeds -- there is no
-optional vector-store path here, unlike the DuckDB+Chroma predecessor;
-pgvector is the only vector store now.
+without a date is a look-ahead violation). Every write embeds; pgvector is the
+only vector store.
 """
 
 from __future__ import annotations

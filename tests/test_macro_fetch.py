@@ -8,6 +8,7 @@ from pathlib import Path
 import polars as pl
 
 import data.macro.fetch as fetch_mod
+from data.db.market_data import get_macro
 from data.macro.series import MACRO_SERIES
 from data.macro.store import append_series, read_series
 
@@ -145,17 +146,25 @@ def test_fetch_main_runs_all_daily_syncs(monkeypatch) -> None:
         called.append("market_data")
 
     monkeypatch.setattr(fetch_entry, "_run", fake_run)
-    monkeypatch.setattr(
-        fetch_entry, "run_daily_macro_sync", lambda **kwargs: called.append("macro")
-    )
-    monkeypatch.setattr(fetch_entry, "sync_dividends", lambda **kwargs: called.append("dividends"))
-    monkeypatch.setattr(
-        fetch_entry,
-        "sync_short_interest",
-        lambda **kwargs: called.append("short_interest"),
-    )
     monkeypatch.setattr("sys.argv", ["data/fetch.py", "--as-of", "2026-08-04"])
 
     fetch_entry.main()
 
-    assert called == ["market_data", "macro", "dividends", "short_interest"]
+    assert called == ["market_data"]
+
+
+async def test_postgres_sync_writes_archived_observations(pg_conn, monkeypatch) -> None:
+    """The PostgreSQL wrapper persists every archived series observation."""
+    frame = _frame([dt.date(2026, 8, 4)], [4.09])
+    monkeypatch.setattr(fetch_mod, "run_daily_macro_sync", lambda **_kwargs: {"DGS10": 1})
+    monkeypatch.setattr(
+        fetch_mod,
+        "read_series",
+        lambda series_id, _directory: frame if series_id == "DGS10" else None,
+    )
+
+    summary = await fetch_mod.run_daily_macro_sync_postgres(pg_conn, today="2026-08-04")
+
+    assert summary == {"DGS10": 1}
+    rows = await get_macro(pg_conn, series_id="DGS10")
+    assert rows[0]["value"] == 4.09

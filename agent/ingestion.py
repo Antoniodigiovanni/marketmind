@@ -180,8 +180,7 @@ async def _ensure_company(
 
     Refreshes the cached description (and, for a genuinely new identifier,
     name/country/sector) only the first time a company has no description
-    yet -- matching the old DuckDB pipeline's lazy upsert_company gate,
-    not a refresh on every run.
+    yet, rather than refreshing it on every run.
 
     When resolve_identifier finds no coverage for `as_of`, this always
     creates a fresh company rather than falling back to whichever company
@@ -523,6 +522,7 @@ async def run_daily_ingest(
                         url=article.url,
                         source=article.source,
                         title=article.title,
+                        summary=article.summary,
                         published_at=published,
                         pre_score=score,
                     )

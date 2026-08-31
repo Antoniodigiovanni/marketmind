@@ -223,6 +223,7 @@ def refresh_commands(as_of: str) -> list[list[str]]:
     """
     dt.date.fromisoformat(as_of)
     return [
+        [sys.executable, "-m", "data.universe.resolve"],
         [sys.executable, "data/fetch.py", "--as-of", as_of],
         [sys.executable, "-m", "agent.ingestion", as_of],
         [sys.executable, "-m", "agent.views", as_of],

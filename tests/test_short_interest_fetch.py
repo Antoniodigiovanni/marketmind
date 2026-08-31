@@ -7,6 +7,9 @@ import datetime as dt
 import polars as pl
 
 import data.short_interest.fetch as si_mod
+from data.db.identifiers import create_identifier
+from data.db.listings import upsert_listing
+from data.db.market_data import get_short_interest
 from data.short_interest.store import settlement_exists, write_settlement
 from data.sources.finra import COLUMNS
 
@@ -85,17 +88,42 @@ def test_fetch_main_includes_short_interest(monkeypatch) -> None:
         called.append("market_data")
 
     monkeypatch.setattr(fetch_entry, "_run", fake_run)
-    monkeypatch.setattr(
-        fetch_entry, "run_daily_macro_sync", lambda **kwargs: called.append("macro")
-    )
-    monkeypatch.setattr(fetch_entry, "sync_dividends", lambda **kwargs: called.append("dividends"))
-    monkeypatch.setattr(
-        fetch_entry,
-        "sync_short_interest",
-        lambda **kwargs: called.append("short_interest"),
-    )
     monkeypatch.setattr("sys.argv", ["data/fetch.py", "--as-of", "2026-07-31"])
 
     fetch_entry.main()
 
-    assert called == ["market_data", "macro", "dividends", "short_interest"]
+    assert called == ["market_data"]
+
+
+async def test_postgres_sync_resolves_listing_and_writes_rows(
+    pg_conn, tmp_path, monkeypatch
+) -> None:
+    """A downloaded settlement is archived and inserted for known listings."""
+    company_id = await create_identifier(
+        pg_conn,
+        id_type="ticker",
+        id_value="A",
+        valid_from=dt.date(2000, 1, 1),
+        source="test",
+        name="Agilent Technologies",
+        country="US",
+        sector="Healthcare",
+    )
+    listing_id = await upsert_listing(
+        pg_conn,
+        company_id=company_id,
+        provider="yahoo",
+        symbol="A",
+        status="valid",
+        valid_from=dt.date(2000, 1, 1),
+    )
+    monkeypatch.setattr(si_mod, "PROBE_DAYS", 0)
+    monkeypatch.setattr(si_mod, "fetch_short_interest_file", lambda _date: _frame())
+
+    summary = await si_mod.sync_short_interest_postgres(
+        pg_conn, as_of="2026-07-15", si_dir=tmp_path
+    )
+
+    assert summary == {"2026-07-15": 1}
+    rows = await get_short_interest(pg_conn, listing_id=listing_id)
+    assert rows[0]["current_short"] == 7_538_437.0

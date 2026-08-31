@@ -18,6 +18,8 @@ DOCKERFILE_PATH = ROOT / "Dockerfile"
 ENTRYPOINT_PATH = ROOT / "docker-entrypoint.sh"
 FILE_BACKUP_PATH = ROOT / "deploy" / "backup-files.sh"
 DOCKERIGNORE_PATH = ROOT / ".dockerignore"
+PYPROJECT_PATH = ROOT / "pyproject.toml"
+LOCK_PATH = ROOT / "uv.lock"
 
 
 def test_production_image_pins_python_and_uv() -> None:
@@ -37,6 +39,26 @@ def test_docker_context_excludes_secrets_and_local_artifacts() -> None:
     assert ".env*" in ignored
     assert "AGENTS.md" in ignored
     assert ".coverage" in ignored
+
+
+def test_postgres_is_the_only_structured_runtime_store() -> None:
+    """Prevent the removed embedded database path from being reintroduced."""
+    assert not (ROOT / "data" / "db" / "schema.sql").exists()
+    assert not (ROOT / "data" / "db" / "init.py").exists()
+
+    dependency_files = (PYPROJECT_PATH, LOCK_PATH, COMPOSE_PATH)
+    assert all(
+        "duckdb" not in path.read_text(encoding="utf-8").lower() for path in dependency_files
+    )
+
+    runtime_files = [
+        path
+        for directory in (ROOT / "agent", ROOT / "data", ROOT / "server")
+        for path in directory.rglob("*.py")
+    ]
+    assert all(
+        "import duckdb" not in path.read_text(encoding="utf-8").lower() for path in runtime_files
+    )
 
 
 def test_production_dsn_uses_the_compose_database_hostname() -> None:
@@ -60,7 +82,7 @@ def test_compose_requires_secrets_and_host_ownership_mapping() -> None:
     ):
         assert f"${{{variable}:?" in compose
     assert "PGPASSWORD:" in compose
-    assert "MARKETMIND_DUCKDB_PATH: /var/lib/marketmind/research.duckdb" in compose
+    assert "DUCKDB" not in compose.upper()
     assert "MARKETMIND_PROCESSED_DIR: /var/lib/marketmind/processed" in compose
     assert "MARKETMIND_UNIVERSE_DIR: /var/lib/marketmind/universe" in compose
     assert "MARKETMIND_REFRESH_DIR: /var/lib/marketmind/refresh" in compose
@@ -111,12 +133,11 @@ def test_cron_backups_create_the_destination_and_escape_percent_signs() -> None:
     assert all(">> /var/log/marketmind/" in line for line in commands if "docker" in line)
 
 
-def test_file_backup_stops_the_service_and_verifies_the_archive() -> None:
+def test_file_backup_does_not_interrupt_service_and_verifies_archive() -> None:
     script = FILE_BACKUP_PATH.read_text(encoding="utf-8")
 
-    assert "stop marketmind" in script
-    assert "start marketmind" in script
-    assert "trap restart_service EXIT" in script
+    assert "stop marketmind" not in script
+    assert "start marketmind" not in script
     assert "trap 'exit 1' HUP INT TERM" in script
     assert "data/raw state" in script
     assert "tar -tzf" in script

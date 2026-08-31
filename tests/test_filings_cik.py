@@ -1,35 +1,29 @@
-"""Tests for CIK mapping sync into symbol_map."""
+"""PostgreSQL CIK mapping tests."""
 
 from __future__ import annotations
 
-from data.db.init import init_db
+import datetime as dt
+
+from data.db.identifiers import get_or_create_identifier
 from data.filings.cik import cik_for_ticker, ensure_cik_map
 
 
 class FakeClient:
     def load_company_tickers(self) -> dict[str, dict[str, str]]:
-        return {
-            "AAPL": {"cik": "0000320193", "name": "Apple Inc."},
-            "MSFT": {"cik": "0000789019", "name": "MICROSOFT CORP"},
-        }
+        return {"AAPL": {"cik": "0000320193", "name": "Apple Inc."}}
 
 
-def test_ensure_cik_map_upserts_missing_tickers() -> None:
-    conn = init_db(":memory:")
-    try:
-        count = ensure_cik_map(conn, FakeClient(), ["AAPL", "MSFT", "NOPE"])
-        assert count == 2
-        assert cik_for_ticker(conn, "AAPL") == "0000320193"
-        assert cik_for_ticker(conn, "MSFT") == "0000789019"
-        assert cik_for_ticker(conn, "NOPE") is None
-    finally:
-        conn.close()
-
-
-def test_ensure_cik_map_is_idempotent() -> None:
-    conn = init_db(":memory:")
-    try:
-        assert ensure_cik_map(conn, FakeClient(), ["AAPL"]) == 1
-        assert ensure_cik_map(conn, FakeClient(), ["AAPL"]) == 0
-    finally:
-        conn.close()
+async def test_cik_mapping_round_trip(pg_conn) -> None:
+    await get_or_create_identifier(
+        pg_conn,
+        id_type="ticker",
+        id_value="AAPL",
+        valid_from=dt.date(2000, 1, 1),
+        source="test",
+        name="Apple",
+        country="US",
+        sector="Technology",
+    )
+    assert await ensure_cik_map(pg_conn, FakeClient(), ["AAPL", "NOPE"]) == 1
+    assert await cik_for_ticker(pg_conn, "AAPL") == "0000320193"
+    assert await ensure_cik_map(pg_conn, FakeClient(), ["AAPL"]) == 0

@@ -7,8 +7,10 @@ import os
 from pathlib import Path
 
 import polars as pl
+import psycopg
 from loguru import logger
 
+from data.db.market_data import upsert_macro_series
 from data.macro.series import MACRO_SERIES, MacroSeries
 from data.macro.store import (
     MACRO_DIR,
@@ -147,6 +149,31 @@ def run_daily_macro_sync(
 
     spread = refresh_credit_spreads(macro_dir, processed_dir)
     logger.info(f"credit_spreads: {len(spread)} rows")
+    return summary
+
+
+async def run_daily_macro_sync_postgres(
+    conn: psycopg.AsyncConnection,
+    *,
+    macro_dir: Path = MACRO_DIR,
+    processed_dir: Path = PROCESSED_DIR,
+    today: str | None = None,
+) -> dict[str, int]:
+    """Sync raw macro files and upsert the canonical observations to PostgreSQL."""
+    summary = run_daily_macro_sync(macro_dir=macro_dir, processed_dir=processed_dir, today=today)
+    for series in MACRO_SERIES:
+        frame = read_series(series.id, macro_dir)
+        if frame is None:
+            continue
+        await upsert_macro_series(
+            conn,
+            series_id=series.id,
+            source=series.provider,
+            title=series.name,
+            unit=series.unit,
+            frequency=series.frequency,
+            rows=frame.to_dicts(),
+        )
     return summary
 
 

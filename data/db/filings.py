@@ -1,9 +1,4 @@
-"""SEC filings repository — filing metadata, full text, and fetch checkpoints.
-
-Ownership (insider transactions/holdings) and 13F holdings are out of
-scope here — they stay on the DuckDB store (`data/filings/store.py`)
-until a follow-up cutover; see docs/superpowers/plans/
-2026-08-11-postgres-filings-cutover.md.
+"""PostgreSQL repository for SEC filings, ownership data, and checkpoints.
 
 `fetch_checkpoints` is a generic per-(source, key) resumability table
 (also used, in principle, by other daily-fetch subsystems); the
@@ -15,8 +10,11 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
+import polars as pl
 import psycopg
 from psycopg.rows import dict_row
+
+from data.filings.parse.ownership import InsiderHolding, InsiderTransaction
 
 
 async def create_filing(
@@ -99,6 +97,186 @@ async def insert_filing_text(
             "INSERT INTO filing_text (filing_id, section, body) VALUES (%s, %s, %s)",
             (filing_id, section, body),
         )
+
+
+async def insert_insider_rows(
+    conn: psycopg.AsyncConnection,
+    *,
+    filing_id: uuid.UUID,
+    company_id: uuid.UUID,
+    transactions: list[InsiderTransaction],
+    holdings: list[InsiderHolding],
+) -> tuple[int, int]:
+    """Insert parsed ownership rows and return transaction/holding counts."""
+    async with conn.transaction():
+        if transactions:
+            async with conn.cursor() as cur:
+                await cur.executemany(
+                    "INSERT INTO insider_transactions "
+                    "(filing_id, company_id, insider_name, insider_title, security_title, "
+                    "transaction_date, transaction_code, shares, price, shares_held_after, "
+                    "direct_or_indirect, is_derivative) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    [
+                        (
+                            filing_id,
+                            company_id,
+                            tx.owner_name,
+                            tx.owner_title,
+                            tx.security_title,
+                            dt.date.fromisoformat(tx.transaction_date),
+                            tx.transaction_code,
+                            tx.shares_transacted,
+                            tx.price_per_share,
+                            tx.shares_held_after,
+                            tx.direct_or_indirect,
+                            False,
+                        )
+                        for tx in transactions
+                        if tx.transaction_date
+                    ],
+                )
+        if holdings:
+            async with conn.cursor() as cur:
+                await cur.executemany(
+                    "INSERT INTO insider_holdings "
+                    "(filing_id, company_id, insider_name, insider_title, security_title, as_of, "
+                    "shares, direct_or_indirect, form_type, is_derivative) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    [
+                        (
+                            filing_id,
+                            company_id,
+                            holding.owner_name,
+                            holding.owner_title,
+                            holding.security_title,
+                            dt.date.fromisoformat(holding.ref_date),
+                            holding.shares_held_after,
+                            holding.direct_or_indirect,
+                            holding.form_type,
+                            False,
+                        )
+                        for holding in holdings
+                        if holding.ref_date
+                    ],
+                )
+    return (
+        sum(tx.transaction_date is not None for tx in transactions),
+        sum(holding.ref_date is not None for holding in holdings),
+    )
+
+
+async def insert_13f_holdings(
+    conn: psycopg.AsyncConnection,
+    *,
+    filing_id: uuid.UUID,
+    frame: pl.DataFrame,
+) -> int:
+    """Insert parsed 13F holdings and return the row count."""
+    rows = frame.to_dicts()
+    if not rows:
+        return 0
+    insert_rows = [row for row in rows if row["cusip"]]
+    async with conn.transaction(), conn.cursor() as cur:
+        await cur.executemany(
+            "INSERT INTO form13f_holdings "
+            "(filing_id, manager_cik, manager_name, cusip, report_period, issuer_name, "
+            "class_title, shares, value_usd, put_call) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            [
+                (
+                    filing_id,
+                    row["filer_cik"],
+                    row["filer_name"],
+                    row["cusip"],
+                    dt.date.fromisoformat(str(row["report_period"])),
+                    row["issuer_name"],
+                    row["class_title"],
+                    row["shares"],
+                    row["value_usd"],
+                    row["put_call"],
+                )
+                for row in insert_rows
+            ],
+        )
+    return len(insert_rows)
+
+
+async def get_insider_transactions(
+    conn: psycopg.AsyncConnection,
+    *,
+    company_id: uuid.UUID,
+    since: dt.date | None = None,
+    limit: int = 100,
+) -> list[dict[str, object]]:
+    """Return insider transactions for a company."""
+    query = (
+        "SELECT transaction_id AS id, insider_name AS owner_name, "
+        "insider_title AS owner_title, security_title, transaction_date, transaction_code, "
+        "shares AS shares_transacted, price AS price_per_share, shares_held_after, "
+        "direct_or_indirect FROM insider_transactions WHERE company_id = %s"
+    )
+    params: list[object] = [company_id]
+    if since is not None:
+        query += " AND transaction_date >= %s"
+        params.append(since)
+    query += " ORDER BY transaction_date DESC LIMIT %s"
+    params.append(limit)
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(query, params)
+        return await cur.fetchall()
+
+
+async def get_insider_holdings(
+    conn: psycopg.AsyncConnection,
+    *,
+    company_id: uuid.UUID,
+    as_of: dt.date | None = None,
+    limit: int = 100,
+) -> list[dict[str, object]]:
+    """Return insider holding snapshots for a company."""
+    query = (
+        "SELECT holding_id AS id, insider_name AS owner_name, insider_title AS owner_title, "
+        "security_title, as_of AS ref_date, shares AS shares_held_after, "
+        "direct_or_indirect, form_type FROM insider_holdings WHERE company_id = %s"
+    )
+    params: list[object] = [company_id]
+    if as_of is not None:
+        query += " AND as_of <= %s"
+        params.append(as_of)
+    query += " ORDER BY as_of DESC LIMIT %s"
+    params.append(limit)
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(query, params)
+        return await cur.fetchall()
+
+
+async def get_13f_holdings(
+    conn: psycopg.AsyncConnection,
+    *,
+    cusip: str,
+    as_of: dt.date | None = None,
+    min_value: float | None = None,
+    limit: int = 100,
+) -> list[dict[str, object]]:
+    """Return point-in-time 13F holdings for a CUSIP."""
+    query = (
+        "SELECT manager_name AS filer_name, manager_cik AS filer_cik, report_period, "
+        "issuer_name, class_title, value_usd, shares, put_call "
+        "FROM form13f_holdings WHERE cusip = %s"
+    )
+    params: list[object] = [cusip]
+    if as_of is not None:
+        query += " AND report_period <= %s"
+        params.append(as_of)
+    if min_value is not None:
+        query += " AND value_usd >= %s"
+        params.append(min_value)
+    query += " ORDER BY report_period DESC, value_usd DESC LIMIT %s"
+    params.append(limit)
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(query, params)
+        return await cur.fetchall()
 
 
 async def get_filings(

@@ -40,8 +40,8 @@ sudo install -o root -g root -m 0644 deploy/logrotate /etc/logrotate.d/marketmin
 
 `docker compose up -d --build` builds the image, starts Postgres, waits for
 it to be healthy, then starts the app. The app applies pending versioned
-Postgres migrations and initialises `state/research.duckdb` itself on every
-start. The UID/GID mapping lets the non-root container write `data/raw/` and
+Postgres migrations on every start. The UID/GID mapping lets the non-root
+container write `data/raw/` and
 `state/` without changing ownership behind the host operator's back. The rest
 of its filesystem is read-only; temporary files live on a restricted `tmpfs`,
 Linux capabilities are dropped, privilege escalation is disabled, and
@@ -72,27 +72,23 @@ scheduled job twice.
      marketmind-update.timer
    ```
 
-3. Stop the MCP client so it cannot spawn the old server while files are being
-   copied. Back up `/srv/marketmind/data`, then move the mutable DuckDB,
-   derived files, and current universe snapshots into `state/` before
+3. Stop the old service while files are being copied. Back up
+   `/srv/marketmind/data`, then move derived files and current universe
+   snapshots into `state/` before
    `git pull` can replace tracked snapshots:
 
    ```bash
    sudo -u marketmind install -d -m 0700 \
      /srv/marketmind/state /srv/marketmind/state/universe \
      /srv/marketmind/state/processed /srv/marketmind/state/refresh
-   sudo -u marketmind cp -a /srv/marketmind/data/db/research.duckdb \
-     /srv/marketmind/state/research.duckdb
    sudo -u marketmind cp -a /srv/marketmind/data/processed/. \
      /srv/marketmind/state/processed/
    sudo -u marketmind cp /srv/marketmind/data/universe/*.csv \
      /srv/marketmind/state/universe/
    ```
 
-   Omit the DuckDB or processed-data `cp` command if that source does not
-   exist. If the current installation already writes to Postgres, also take a
-   `pg_dump -Fc` from its current DSN. A DuckDB backup does not contain
-   Postgres-backed prices, facts, views, articles, or run history.
+   Omit the processed-data `cp` command if that source does not exist. Take a
+   `pg_dump -Fc` from the current PostgreSQL DSN before continuing.
 4. Update the checkout and `.env`. Add the database password, the
    container-reachable DSN, MCP bearer token, port if non-default, and the
    recorded UID/GID. Change `/srv/marketmind-backups` to root ownership and
@@ -113,10 +109,8 @@ scheduled job twice.
    docker compose -f docker-compose.prod.yml up -d --build marketmind
    ```
 
-   With no existing Postgres database, the new one starts empty. Historical
-   records that exist only in DuckDB are not automatically translated into
-   the newer company-identity model; schedule the relevant backfills or use a
-   separately reviewed data migration before treating the cutover as complete.
+   With no existing PostgreSQL database, the new one starts empty; run the
+   relevant historical backfills before treating it as production-ready.
 6. Change the MCP client from a spawned stdio process to the authenticated
    HTTP endpoint below, send an `initialize` request, and check both service
    logs. Install `/etc/cron.d/marketmind` only after that smoke test succeeds.
@@ -185,8 +179,8 @@ lock inside the container, while the other cron jobs use the same bind-mounted
 file from the host. MCP-triggered and scheduled runs therefore cannot overlap.
 Backups are written with mode `0600` to temporary names and renamed into place
 only after validation or `pg_dump` succeeds. The filesystem backup takes the
-shared data-job lock, briefly stops the MCP service so DuckDB closes cleanly,
-validates the archive, and restarts the service even if archiving fails.
+shared data-job lock and validates the archive without interrupting the MCP
+service; structured state is protected separately by `pg_dump`.
 Scheduled output is appended under `/var/log/marketmind/` and retained for 14
 daily rotations; it does not depend on a local cron-mail setup.
 
@@ -215,8 +209,9 @@ against Postgres.
 
 ## Rollback
 
-`data/raw/`, mutable state (DuckDB, derived files, universe snapshots), and the
-Postgres database are backed up together but restored separately from Postgres.
+`data/raw/`, derived files, universe snapshots, and the PostgreSQL database are
+backed up on the same schedule; filesystem state and PostgreSQL are restored
+separately.
 
 Filesystem backups are plain tarballs containing `data/raw/` and `state/`:
 

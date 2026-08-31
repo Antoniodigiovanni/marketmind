@@ -32,7 +32,6 @@ Hermes
    ├── daily jobs        universe refresh · price + macro fetch · news ingest · view structuring
    └── storage
        ├── PostgreSQL    identity, prices, news, facts, views, filings, audit
-       ├── DuckDB        transitional stores (state/research.duckdb in production)
        ├── Parquet       immutable raw data (data/raw/) and derived series (state/processed/)
        ├── NDJSON        raw news articles, one file per date (data/raw/news/)
        └── pgvector      fact embeddings inside PostgreSQL
@@ -59,10 +58,9 @@ marketmind/
 │   ├── processed/      derived series, e.g. volatility.parquet
 │   ├── universe/       point-in-time constituents: sp500.csv, eurostoxx600.csv, delisted.csv
 │   ├── db/
-│   │   ├── schema.sql  DuckDB schema for transitional stores
 │   │   ├── schema_postgres.sql  canonical PostgreSQL schema
 │   │   ├── postgres_migrations/ versioned PostgreSQL transitions
-│   │   ├── init.py     creates research.duckdb from schema.sql
+│   │   └── init_postgres.py  applies the schema and pending migrations
 │   └── sources/        yfinance.py, fred.py, ecb.py, sec.py, rss.py
 ├── agent/
 │   ├── ingestion.py    daily news → fact pipeline
@@ -72,7 +70,7 @@ marketmind/
 ├── server/
 │   └── mcp.py          the only client-facing interface
 ├── journal/            Obsidian-compatible daily notes
-├── state/              production DuckDB, derived files, universe snapshots (not committed)
+├── state/              derived files, universe snapshots, refresh state (not committed)
 └── docs/               design specs and implementation plans
 ```
 
@@ -88,10 +86,11 @@ uv sync
 # Configure secrets (see .env.example)
 cp .env.example .env
 
-# Create / verify the DuckDB database
-uv run python -m data.db.init
+# Start the disposable PostgreSQL database and apply the schema
+docker compose up -d
+uv run python -m data.db.init_postgres
 
-# Run the test suite (DuckDB fixtures, disposable PostgreSQL, mocked APIs)
+# Run the test suite (disposable PostgreSQL, mocked external APIs)
 uv run pytest tests/ -v --cov=. --cov-report=term-missing
 ```
 
@@ -123,7 +122,7 @@ locally, export the values in your shell or pass `--env-file .env` to
 ## Commands
 
 ```bash
-uv run python -m data.db.init                 # create/verify research.duckdb
+uv run python -m data.db.init_postgres        # apply PostgreSQL schema/migrations
 uv run python -m data.universe.update         # refresh S&P 500 / STOXX 600 lists
 uv run python -m data.universe.resolve        # resolve symbols into symbol_map
 uv run python data/fetch.py                   # daily price + macro refresh
@@ -165,8 +164,7 @@ sudo install -o root -g root -m 0644 deploy/logrotate /etc/logrotate.d/marketmin
 
 Updating pulls the checkout, rebuilds Compose, and reinstalls
 `/etc/cron.d/marketmind`; the app applies checksum-verified PostgreSQL
-migrations and initialises the DuckDB schema on startup. See the deployment
-guide for the exact commands.
+migrations on startup. See the deployment guide for the exact commands.
 
 Full operational detail — schedule table, MCP client wiring (the client
 now connects to `http://127.0.0.1:8000/mcp` as a streamable-http client
@@ -218,10 +216,10 @@ because interrupting immutable Parquet/NDJSON writes can leave partial files.
 
 ## Storage model
 
-Most structured, queryable data lives in PostgreSQL. The canonical fresh
+All structured, queryable data lives in PostgreSQL. The canonical fresh
 schema is `data/db/schema_postgres.sql`; immutable transitions for existing
-databases live in `data/db/postgres_migrations/`. DuckDB remains in use for
-stores whose cutover is not complete.
+databases live in `data/db/postgres_migrations/`. Parquet and NDJSON remain the
+immutable raw/derived archive formats; they are not competing databases.
 
 | Table | Purpose |
 |---|---|
@@ -230,7 +228,7 @@ stores whose cutover is not complete.
 | `agent_runs` | Audit log for every job execution (PostgreSQL) |
 | `market_views` | Immutable free-text market snapshots (PostgreSQL) |
 | `market_view_structures` | Structured JSON derived from free text (PostgreSQL) |
-| Ownership/13F stores | Transitional DuckDB-backed data pending a later cutover |
+| `filings`, ownership, 13F stores | Filing metadata, normalized text, and parsed disclosures (PostgreSQL) |
 
 ### Point-in-time queries
 
@@ -278,8 +276,9 @@ Conventions (full detail in [AGENTS.md](AGENTS.md)):
   length 100.
 - `polars` for ETL; all DataFrames use timezone-aware UTC `DatetimeIndex`;
   schemas are asserted explicitly on load.
-- Tests run in <60 s with **no network access**: in-memory DuckDB and mocked
-  API responses. `agent/tools.py` and `server/mcp.py` target 100% coverage.
+- Tests run in <60 s with **no external network access**: a disposable local
+  PostgreSQL database and mocked API responses. `agent/tools.py` and
+  `server/mcp.py` target 100% coverage.
 
 ## Further reading
 
