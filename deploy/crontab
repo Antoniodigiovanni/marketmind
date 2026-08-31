@@ -16,17 +16,18 @@
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# Daily 06:10 — price/macro fetch + news ingest + market-view structuring
-10 6 * * * root flock -n /run/lock/marketmind-data.lock sh -c 'cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python data/fetch.py && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.ingestion "$(date -I)" && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.views "$(date -I)"' >> /var/log/marketmind/daily.log 2>&1
+# Daily 06:10 — price/macro fetch + news ingest + market-view structuring.
+# agent.refresh owns the shared lock so MCP-triggered runs use the same guard.
+10 6 * * * root sh -c 'cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.refresh "$(date -I)"' >> /var/log/marketmind/daily.log 2>&1
 
 # Mondays 06:00 — universe (S&P 500 / STOXX 600 membership) refresh
-0 6 * * 1 root flock -n /run/lock/marketmind-data.lock sh -c 'cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m data.universe.update && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m data.universe.resolve' >> /var/log/marketmind/universe.log 2>&1
+0 6 * * 1 root flock -n /srv/marketmind/state/refresh/daily-refresh.lock sh -c 'cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m data.universe.update && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m data.universe.resolve' >> /var/log/marketmind/universe.log 2>&1
 
 # Annually, 5 Jan 06:30 — company profile refresh (new version for every company)
-30 6 5 1 * root flock -n /run/lock/marketmind-data.lock sh -c 'cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.ingestion "$(date -I)" --backfill --profiles-only' >> /var/log/marketmind/profiles.log 2>&1
+30 6 5 1 * root flock -n /srv/marketmind/state/refresh/daily-refresh.lock sh -c 'cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.ingestion "$(date -I)" --backfill --profiles-only' >> /var/log/marketmind/profiles.log 2>&1
 
 # Nightly 02:30 — raw data + mutable state tarball, 14-day retention
-30 2 * * * root flock -n /run/lock/marketmind-data.lock /srv/marketmind/deploy/backup-files.sh >> /var/log/marketmind/backup.log 2>&1
+30 2 * * * root flock -n /srv/marketmind/state/refresh/daily-refresh.lock /srv/marketmind/deploy/backup-files.sh >> /var/log/marketmind/backup.log 2>&1
 
 # Nightly 02:35 — Postgres backup (pg_dump), 14-day retention
 35 2 * * * root sh -c 'umask 077 && mkdir -p /srv/marketmind-backups && find /srv/marketmind-backups -name "marketmind-*.tmp" -mtime +1 -delete && cd /srv/marketmind && pg_backup=/srv/marketmind-backups/marketmind-postgres-$(date +\%F-\%H\%M).dump && docker compose -f docker-compose.prod.yml exec -T postgres pg_dump -U marketmind -Fc marketmind > "$pg_backup.tmp" && mv "$pg_backup.tmp" "$pg_backup" && find /srv/marketmind-backups -name "marketmind-postgres-*.dump" -mtime +14 -delete' >> /var/log/marketmind/backup.log 2>&1

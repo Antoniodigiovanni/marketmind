@@ -25,7 +25,7 @@ sudo install -d -m 0700 -o root -g root \
   /srv/marketmind-backups /var/log/marketmind
 git clone git@github.com:Antoniodigiovanni/marketmind.git /srv/marketmind
 cd /srv/marketmind
-install -d -m 0700 data/raw state state/universe state/processed
+install -d -m 0700 data/raw state state/universe state/processed state/refresh
 cp .env.example .env
 # edit .env: set real credentials and set MARKETMIND_UID/GID to the output
 # of `id -u` / `id -g`. Keep MARKETMIND_DATABASE_DSN pointed at
@@ -80,7 +80,7 @@ scheduled job twice.
    ```bash
    sudo -u marketmind install -d -m 0700 \
      /srv/marketmind/state /srv/marketmind/state/universe \
-     /srv/marketmind/state/processed
+     /srv/marketmind/state/processed /srv/marketmind/state/refresh
    sudo -u marketmind cp -a /srv/marketmind/data/db/research.duckdb \
      /srv/marketmind/state/research.duckdb
    sudo -u marketmind cp -a /srv/marketmind/data/processed/. \
@@ -179,9 +179,10 @@ Every job runs `docker compose run --rm marketmind <command>` against the
 same image the always-on services use — no separate job-runner tooling.
 `docker compose run` waits for Postgres to be healthy first (compose's own
 `depends_on`), so there's no extra readiness check in any cron line.
-Every data job and the filesystem backup take the same non-blocking lock under
-`/run/lock`; if one is still running, cron refuses to start another writer or
-an inconsistent backup.
+Every data job and the filesystem backup take the same non-blocking lock at
+`state/refresh/daily-refresh.lock`. The complete daily entry point owns that
+lock inside the container, while the other cron jobs use the same bind-mounted
+file from the host. MCP-triggered and scheduled runs therefore cannot overlap.
 Backups are written with mode `0600` to temporary names and renamed into place
 only after validation or `pg_dump` succeeds. The filesystem backup takes the
 shared data-job lock, briefly stops the MCP service so DuckDB closes cleanly,
@@ -205,6 +206,7 @@ docker compose -f docker-compose.prod.yml logs -f marketmind    # MCP server log
 docker compose -f docker-compose.prod.yml logs -f postgres      # Postgres logs
 cat /etc/cron.d/marketmind                                      # confirm the schedule is installed
 tail -f /var/log/marketmind/daily.log                            # scheduled-job output
+tail -f state/refresh/logs/daily-refresh-*.log                   # MCP-triggered refresh output
 ```
 
 Every ingest run also writes an audit row to `agent_runs` (counters +

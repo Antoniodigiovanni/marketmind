@@ -5,6 +5,10 @@ set -eu
 # the host or container runtime has a more permissive default.
 umask 077
 
+if [ -n "${MARKETMIND_REFRESH_DIR:-}" ]; then
+    mkdir -p "$MARKETMIND_REFRESH_DIR/logs"
+fi
+
 if [ -n "${MARKETMIND_UNIVERSE_DIR:-}" ]; then
     mkdir -p "$MARKETMIND_UNIVERSE_DIR"
     for universe_file in sp500.csv eurostoxx600.csv delisted.csv; do

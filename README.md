@@ -117,6 +117,7 @@ locally, export the values in your shell or pass `--env-file .env` to
 | `MARKETMIND_DB_PASSWORD` | Production Postgres password, supplied to libpq separately from the DSN |
 | `MARKETMIND_MCP_TOKEN` | Bearer token the MCP client must present on every request |
 | `MARKETMIND_MCP_PORT` | Port the MCP server listens on (default 8000) |
+| `MARKETMIND_REFRESH_DIR` | Shared refresh lock/status/log directory (production: `/var/lib/marketmind/refresh`) |
 | `MARKETMIND_UID` / `MARKETMIND_GID` | Numeric owner used by the production app container for its bind-mounted data tree |
 
 ## Commands
@@ -128,6 +129,7 @@ uv run python -m data.universe.resolve        # resolve symbols into symbol_map
 uv run python data/fetch.py                   # daily price + macro refresh
 uv run python -m agent.ingestion {YYYY-MM-DD} # daily news + fact ingest
 uv run python -m agent.views {YYYY-MM-DD}     # structure free-text market views
+uv run python -m agent.refresh {YYYY-MM-DD}   # complete lock-protected daily pipeline
 uv run python -m server.mcp                   # run the MCP server (streamable-http, 127.0.0.1:8000)
 uv run ruff check . && uv run ruff format .   # lint + format
 ```
@@ -152,7 +154,7 @@ sudo install -d -m 0700 -o root -g root \
   /srv/marketmind-backups /var/log/marketmind
 git clone git@github.com:Antoniodigiovanni/marketmind.git /srv/marketmind
 cd /srv/marketmind
-install -d -m 0700 data/raw state state/universe state/processed
+install -d -m 0700 data/raw state state/universe state/processed state/refresh
 cp .env.example .env   # edit: real secrets, database settings, MCP token, host UID/GID
 chmod 0600 .env
 
@@ -188,6 +190,8 @@ The MCP server (`server/mcp.py`) exposes the following tools:
 | `run_ingest` | `date`, `profiles_only?`, `backfill?`, `tickers?` | Starts the daily news + fact ingest in the background; returns a run id |
 | `run_filings_refresh` | `run_date?` | Starts the daily SEC filings fetch in the background; returns a run id |
 | `get_ingest_status` | `limit?` | The in-flight run (state, processed/total, counts) plus recent `agent_runs` rows |
+| `run_daily_refresh` | `as_of?` | Starts the complete daily pipeline in a detached process; returns `{started, run_id, log_path}` |
+| `get_refresh_status` | `limit?` | Shared-lock state, persisted refresh outcome, and recent `agent_runs` rows |
 
 ### Job tools
 
@@ -205,6 +209,12 @@ is recorded in `agent_runs` either way.
 `tickers` narrows the ingest to a subset of the point-in-time universe, which
 is the practical way to trigger a small run on demand; the scheduled timer
 still covers the full universe.
+
+`run_daily_refresh` runs the same ordered entry point as cron and returns
+immediately. Both paths use `state/refresh/daily-refresh.lock`, so a scheduled
+run, manual refresh, universe update, profile refresh, or filesystem backup
+cannot overlap. Poll `get_refresh_status`; there is deliberately no stop tool
+because interrupting immutable Parquet/NDJSON writes can leave partial files.
 
 ## Storage model
 

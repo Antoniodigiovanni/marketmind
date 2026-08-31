@@ -26,7 +26,9 @@ def test_production_image_pins_python_and_uv() -> None:
     assert "FROM python:3.12.14-slim" in dockerfile
     assert "uv==0.12.7" in dockerfile
     assert 'ENTRYPOINT ["/app/docker-entrypoint.sh"]' in dockerfile
-    assert "umask 077" in ENTRYPOINT_PATH.read_text(encoding="utf-8")
+    entrypoint = ENTRYPOINT_PATH.read_text(encoding="utf-8")
+    assert "umask 077" in entrypoint
+    assert 'mkdir -p "$MARKETMIND_REFRESH_DIR/logs"' in entrypoint
 
 
 def test_docker_context_excludes_secrets_and_local_artifacts() -> None:
@@ -61,6 +63,7 @@ def test_compose_requires_secrets_and_host_ownership_mapping() -> None:
     assert "MARKETMIND_DUCKDB_PATH: /var/lib/marketmind/research.duckdb" in compose
     assert "MARKETMIND_PROCESSED_DIR: /var/lib/marketmind/processed" in compose
     assert "MARKETMIND_UNIVERSE_DIR: /var/lib/marketmind/universe" in compose
+    assert "MARKETMIND_REFRESH_DIR: /var/lib/marketmind/refresh" in compose
     assert "./data/raw:/app/data/raw" in compose
     assert "./data:/app/data" not in compose
     assert "./state:/var/lib/marketmind" in compose
@@ -81,7 +84,9 @@ def test_cron_uv_invocations_never_resync_at_run_time() -> None:
     assert commands
     job_commands = [command for command in commands if "docker compose" in command][:3]
     assert len(job_commands) == 3
-    assert all("flock -n /run/lock/marketmind-data.lock" in command for command in job_commands)
+    assert "python -m agent.refresh" in job_commands[0]
+    shared_lock = "flock -n /srv/marketmind/state/refresh/daily-refresh.lock"
+    assert all(shared_lock in command for command in job_commands[1:])
 
     for command in commands:
         if "uv run" not in command:
