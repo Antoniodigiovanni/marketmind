@@ -430,6 +430,42 @@ CREATE TABLE IF NOT EXISTS filings (
 CREATE INDEX IF NOT EXISTS idx_filings_company_date ON filings (company_id, filed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_filings_form         ON filings (form_type, filed_at DESC);
 
+
+-- Structured SEC XBRL observations. A fiscal period is deliberately not
+-- unique: later filings can amend or restate the same period, and filed_at is
+-- the market-visibility axis used by point-in-time reads. period_start is NULL
+-- for instant concepts such as Assets and SharesOutstanding.
+CREATE TABLE IF NOT EXISTS financials (
+    financial_id    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id      UUID        NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+    taxonomy        TEXT        NOT NULL,   -- 'us-gaap' | 'dei' | issuer extension
+    concept         TEXT        NOT NULL,   -- XBRL local name, e.g. Revenues
+    unit            TEXT        NOT NULL,   -- 'USD', 'shares', 'USD/shares', ...
+    fiscal_year     INTEGER,
+    fiscal_period   TEXT,                   -- 'FY', 'Q1', 'Q2', 'Q3', ...
+    period_start    DATE,
+    period_end      DATE        NOT NULL,
+    filed_at        DATE        NOT NULL,   -- point-in-time availability anchor
+    accession_number TEXT       NOT NULL,   -- SEC filing provenance
+    form_type       TEXT,
+    frame           TEXT,
+    value           NUMERIC     NOT NULL,
+    source          TEXT        NOT NULL DEFAULT 'sec-companyfacts',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- PostgreSQL 16's NULLS NOT DISTINCT makes instant facts idempotent too.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_financials_observation
+    ON financials (
+        company_id, taxonomy, concept, unit, period_start, period_end,
+        filed_at, accession_number
+    ) NULLS NOT DISTINCT;
+
+CREATE INDEX IF NOT EXISTS idx_financials_pit
+    ON financials (company_id, concept, period_end, filed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_financials_accession
+    ON financials (accession_number);
+
 CREATE TABLE IF NOT EXISTS filing_text (
     filing_id UUID PRIMARY KEY REFERENCES filings(filing_id) ON DELETE CASCADE,
     section   TEXT,

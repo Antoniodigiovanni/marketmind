@@ -1,0 +1,54 @@
+{
+  "cik": 320193,
+  "entityName": "Apple Inc.",
+  "facts": {
+    "us-gaap": {
+      "Revenues": {
+        "label": "Revenue",
+        "description": "Revenue from goods and services.",
+        "units": {
+          "USD": [
+            {
+              "start": "2024-09-29",
+              "end": "2025-09-27",
+              "val": 100000000000,
+              "accn": "0000320193-25-000100",
+              "fy": 2025,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2025-10-31",
+              "frame": "CY2025"
+            },
+            {
+              "start": "2024-09-29",
+              "end": "2025-09-27",
+              "val": 101000000000,
+              "accn": "0000320193-26-000100",
+              "fy": 2026,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2026-10-30"
+            }
+          ]
+        }
+      },
+      "Assets": {
+        "label": "Assets",
+        "units": {
+          "USD": [
+            {
+              "end": "2025-09-27",
+              "val": 350000000000,
+              "accn": "0000320193-25-000100",
+              "fy": 2025,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2025-10-31",
+              "frame": "CY2025Q3I"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

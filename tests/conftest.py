@@ -58,8 +58,8 @@ async def postgres_pool():
     Skips (or fails, under MARKETMIND_REQUIRE_POSTGRES=1) when no reachable
     test database is configured. Refuses to run against a database whose
     name doesn't end in '_test', since this drops and recreates the
-    `public` schema before applying — safe only against a disposable
-    database.
+    `public` schema and the migration ledger before applying — safe only
+    against a disposable database.
     """
     if not await database_available():
         skip_or_fail_no_postgres("no PostgreSQL reachable; start it with `docker compose up -d`")
@@ -73,7 +73,10 @@ async def postgres_pool():
 
     reset_conn = await psycopg.AsyncConnection.connect(dsn, connect_timeout=3)
     try:
-        await reset_conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        await reset_conn.execute(
+            "DROP SCHEMA IF EXISTS marketmind_meta CASCADE; "
+            "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+        )
         await reset_conn.commit()
     finally:
         await reset_conn.close()

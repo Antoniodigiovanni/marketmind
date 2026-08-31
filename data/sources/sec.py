@@ -17,6 +17,7 @@ SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 ARCHIVES_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{doc}"
 INDEX_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/index.json"
 SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
+COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
@@ -115,6 +116,17 @@ class EdgardClient:
             page = self.get_json("https://data.sec.gov/submissions/" + entry["name"])
             submissions.extend(self._parse_recent(page))
         return submissions
+
+    def companyfacts(self, cik: str) -> dict[str, Any]:
+        """Return all XBRL company facts disclosed by one SEC registrant.
+
+        Args:
+            cik: Ten-digit, zero-padded SEC Central Index Key.
+
+        Returns:
+            The official Company Facts JSON document.
+        """
+        return self.get_json(COMPANYFACTS_URL.format(cik=cik))
 
     def download(self, cik: str, accession: str, doc: str) -> str:
         """Download a raw archive document."""

@@ -114,3 +114,16 @@ def test_migration_files_reject_invalid_sequences(
 
     with pytest.raises(ValueError):
         init_postgres._migration_files()
+
+
+def test_company_financials_migration_is_additive() -> None:
+    migration = (
+        Path(init_postgres.POSTGRES_MIGRATIONS_DIR) / "0004_sec_company_financials.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS financials" in migration
+    assert "ALTER TABLE" not in migration
+    assert "DROP " not in migration
+    assert "filed_at" in migration
+    assert "accession_number" in migration
+    assert "NULLS NOT DISTINCT" in migration

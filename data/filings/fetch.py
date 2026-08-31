@@ -26,6 +26,7 @@ from data.db.identifiers import get_current_company_id
 from data.db.pool import close_pool, open_pool
 from data.db.runs import finish_run, start_run
 from data.filings.cik import cik_for_ticker, ensure_cik_map
+from data.filings.companyfacts import ingest_companyfacts
 from data.filings.parse.form13f import parse_13f_infotable
 from data.filings.parse.html import html_to_text
 from data.filings.parse.ownership import parse_ownership_xml
@@ -200,6 +201,10 @@ async def run_daily_fetch(
     still discovered. A fresh database scans only the previous seven days;
     historical coverage belongs to the explicit backfill command.
 
+    Company facts are refreshed per ticker alongside the filings. They are a
+    separate concern from filing coverage, so a failed facts refresh is counted
+    and logged but does not hold back the submissions checkpoint.
+
     Args:
         conn: An open PostgreSQL connection.
         client: SEC archive and submissions client.
@@ -210,7 +215,7 @@ async def run_daily_fetch(
             and the current counters.
 
     Returns:
-        Filing, parse, skip, insider-row, and 13F-row counters.
+        Filing, parse, skip, insider-row, 13F-row, and company-facts counters.
 
     Raises:
         ValueError: If run_date or a source filing date is invalid.
@@ -224,6 +229,9 @@ async def run_daily_fetch(
         "filings_skipped": 0,
         "insider_rows": 0,
         "form13f_rows": 0,
+        "financial_facts": 0,
+        "financial_issuers": 0,
+        "financials_skipped": 0,
     }
     run_id = await start_run(conn, run_date=run_date_value, job_type="filings")
     try:
@@ -278,6 +286,15 @@ async def run_daily_fetch(
                     logger.exception(f"filing {sub.accession} for {ticker} failed; skipped")
                     counts["filings_skipped"] += 1
                     ticker_failed = True
+            if company_id is not None:
+                try:
+                    counts["financial_facts"] += await ingest_companyfacts(
+                        conn, client, company_id=company_id, cik=cik
+                    )
+                    counts["financial_issuers"] += 1
+                except Exception:
+                    logger.exception(f"company facts refresh for {ticker} failed; skipped")
+                    counts["financials_skipped"] += 1
             if not ticker_failed:
                 await mark_checkpoint(
                     conn,

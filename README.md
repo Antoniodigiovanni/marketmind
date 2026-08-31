@@ -32,7 +32,7 @@ Hermes
    ├── server/mcp.py     read/write tools over the database
    ├── daily jobs        universe refresh · equity/benchmark prices · macro · news · views
    └── storage
-       ├── PostgreSQL    identity, prices, news, facts, views, filings, audit
+       ├── PostgreSQL    identity, prices, news, facts, financials, views, filings, audit
        ├── Parquet       immutable raw data (data/raw/) and derived series (state/processed/)
        ├── NDJSON        raw news articles, one file per date (data/raw/news/)
        └── pgvector      fact embeddings inside PostgreSQL
@@ -131,6 +131,8 @@ uv run python -m data.universe.resolve        # resolve symbols into symbol_map
 uv run python data/fetch.py                   # daily price + macro refresh
 uv run python -m agent.ingestion {YYYY-MM-DD} # daily news + fact ingest
 uv run python -m agent.views {YYYY-MM-DD}     # structure free-text market views
+uv run python -m data.filings.fetch           # daily SEC filings + Company Facts refresh
+uv run python -m data.filings.backfill --financials  # historical Company Facts backfill
 uv run python -m agent.refresh {YYYY-MM-DD}   # complete lock-protected daily pipeline
 uv run python -m server.mcp                   # run the MCP server (streamable-http, 127.0.0.1:8000)
 uv run ruff check . && uv run ruff format .   # lint + format
@@ -186,6 +188,7 @@ The MCP server (`server/mcp.py`) exposes the following tools:
 | `get_news` | `ticker`, `since?`, `limit?` | Recent articles `{url, source, publisher, ticker, published_at, title, summary}` |
 | `search_news` | `query`, `limit?` | Full-text news search, recency-ranked |
 | `get_facts` | `ticker`, `as_of` | Point-in-time facts valid on `as_of` |
+| `get_financials` | `ticker`, `concepts`, `as_of` | Latest SEC XBRL value per concept/unit/fiscal period filed by `as_of` |
 | `get_market_views` | `as_of`, `ticker?`, `scope?`, `schema_version?`, `limit?` | Views for `as_of` or earlier with derived structure, newest first |
 | `save_market_view_tool` | `as_of`, `view_text`, `model`, `scope`, `ticker?`, `theme?`, `data_cutoff?` | New immutable view ID |
 | `save_fact` | `ticker`, `statement`, `fact_type`, `confidence`, `valid_from`, `source_article_id`, `supersedes_id?` | New versioned fact ID |
@@ -251,6 +254,7 @@ immutable raw/derived archive formats; they are not competing databases.
 |---|---|
 | `articles` | Deduplication registry and ingest audit trail (PostgreSQL) |
 | `company_facts` | Versioned company knowledge with pgvector embeddings (PostgreSQL) |
+| `financials` | SEC XBRL observations keyed by stable company identity, preserving filings and restatements |
 | `agent_runs` | Audit log for every job execution (PostgreSQL) |
 | `market_views` | Immutable free-text market snapshots (PostgreSQL) |
 | `market_view_structures` | Structured JSON derived from free text (PostgreSQL) |
@@ -271,6 +275,12 @@ Querying without `:as_of` is a look-ahead bias violation. Resolve the ticker
 point-in-time, then use `data.db.facts.get_current_facts()`; it requires the
 date explicitly. Do not bypass the repository with raw SQL.
 
+Structured financial observations use the same discipline on their filing-time
+axis. `data.db.financials.get_financials_as_of()` partitions by concept, unit,
+and fiscal period, excludes rows filed after `as_of`, and returns the newest
+remaining filing. The accession number on every row identifies its SEC source;
+later amendments and restatements append rows instead of replacing history.
+
 ## Daily jobs
 
 The daily batch runs in order:
@@ -282,7 +292,9 @@ The daily batch runs in order:
    (`^VIX`, `^VSTOXX`), FRED and ECB series → immutable Parquet in `data/raw/`.
 3. **News ingest** — fetch → level-1 dedup → pre-score (source credibility ×
    recency decay) → fact retrieval → LLM extraction → versioned writes → audit.
-4. **View structuring** — reads new free-text views and produces structured JSON
+4. **SEC filings** — stores metadata and normalized filing text, then refreshes
+   the free, keyless Company Facts endpoint into bitemporal financial rows.
+5. **View structuring** — reads new free-text views and produces structured JSON
    (`schema_version`-driven); free text is never replaced and re-runs are safe.
 
 Raw news is written to `data/raw/news/{date}.ndjson`; processed volatility
