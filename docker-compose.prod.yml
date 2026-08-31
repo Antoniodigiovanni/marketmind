@@ -35,6 +35,7 @@ services:
       MARKETMIND_DUCKDB_PATH: /var/lib/marketmind/research.duckdb
       MARKETMIND_PROCESSED_DIR: /var/lib/marketmind/processed
       MARKETMIND_UNIVERSE_DIR: /var/lib/marketmind/universe
+      MARKETMIND_REFRESH_DIR: /var/lib/marketmind/refresh
       HOME: /tmp/marketmind
       UV_CACHE_DIR: /tmp/uv-cache
       PYTHONDONTWRITEBYTECODE: "1"

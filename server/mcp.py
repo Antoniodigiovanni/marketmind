@@ -21,6 +21,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 import server.jobs as jobs
 from agent.embedding import hash_embed
+from agent.refresh import launch_refresh, refresh_status
 from agent.views import get_market_views as get_views
 from agent.views import save_market_view as save_view
 from data.db import prices as prices_db
@@ -1150,6 +1151,76 @@ def run_filings_refresh(run_date: str = "") -> str:
 
 
 @mcp.tool()
+def run_daily_refresh(as_of: str = "") -> dict[str, object]:
+    """Start the complete daily data pipeline in a detached subprocess.
+
+    The job runs price/macro/dividend/short-interest refresh, news/fact
+    ingestion, then market-view structuring. It returns immediately and
+    cannot be stopped through MCP because interruption could leave a partial
+    immutable-data write. Poll get_refresh_status() for its outcome.
+
+    Args:
+        as_of: Market date in YYYY-MM-DD format; today when omitted.
+
+    Returns:
+        `{started, run_id, log_path}` when accepted. A refusal also includes
+        `reason`; invalid input or process-start errors are returned without
+        starting work.
+    """
+    date = as_of or dt.date.today().isoformat()
+    if not _valid_date(date):
+        return {
+            "started": False,
+            "run_id": None,
+            "log_path": None,
+            "reason": f"Invalid date '{date}': expected YYYY-MM-DD.",
+        }
+
+    current = jobs.current_run()
+    if current is not None and current.state == "running":
+        return {
+            "started": False,
+            "run_id": current.run_id,
+            "log_path": None,
+            "reason": f"Run {current.run_id} ({current.job_type}) is already in flight.",
+        }
+    try:
+        return launch_refresh(date)
+    except OSError as exc:
+        return {
+            "started": False,
+            "run_id": None,
+            "log_path": None,
+            "reason": f"Cannot start daily refresh: {exc}",
+        }
+
+
+@mcp.tool()
+async def get_refresh_status(limit: int = 10) -> dict[str, object]:
+    """Return the detached refresh state and recent database audit rows.
+
+    Args:
+        limit: Number of recent audit rows to return, from 1 through 100.
+
+    Returns:
+        A dict with `refresh` (`active` plus persisted run metadata) and
+        `history` (recent PostgreSQL agent_runs rows, newest first).
+
+    Raises:
+        ValueError: If limit is outside 1..100.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100")
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        rows = await list_recent_runs(conn, limit=limit)
+    return {
+        "refresh": refresh_status(),
+        "history": [_jsonify_pg_row(row) for row in rows],
+    }
+
+
+@mcp.tool()
 async def get_ingest_status(limit: int = 5) -> dict[str, object]:
     """Report the in-flight job run, if any, and recent run history.
 
@@ -1164,10 +1235,9 @@ async def get_ingest_status(limit: int = 5) -> dict[str, object]:
         has started none. 'history' holds the most recent agent_runs rows
         from PostgreSQL, newest first — run_id, run_date, job_type, status,
         started_at, finished_at, counters (a nested dict of per-job counts,
-        not flattened into fixed keys), error. Only 'news'-job runs appear
-        here today; 'filings' runs are still logged to a separate DuckDB
-        table pending its own cutover, so they will not show up in this
-        history until that lands.
+        not flattened into fixed keys), error. All PostgreSQL-audited job
+        types appear; filings runs are still logged to a separate DuckDB
+        table pending their cutover.
     """
     record = jobs.current_run()
     pool = await _pg_pool()

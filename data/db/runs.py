@@ -26,7 +26,7 @@ async def start_run(
     Args:
         conn: An open connection.
         run_date: The market date this run processes.
-        job_type: 'news' | 'fetch' | 'views' | 'filings' | 'profiles'.
+        job_type: Job category such as 'news', 'views', or 'daily_refresh'.
 
     Returns:
         The new run_id.
