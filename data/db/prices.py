@@ -87,6 +87,28 @@ async def get_last_price_date(
     return row[0] if row else None
 
 
+async def get_price_bounds(
+    conn: psycopg.AsyncConnection,
+    *,
+    listing_id: uuid.UUID,
+) -> tuple[dt.date | None, dt.date | None]:
+    """Return the first and latest stored bar dates for a listing.
+
+    Args:
+        conn: An open connection.
+        listing_id: The listing to inspect.
+
+    Returns:
+        ``(first_date, last_date)``; both are None when no bars are stored.
+    """
+    row = await (
+        await conn.execute(
+            "SELECT MIN(date), MAX(date) FROM prices WHERE listing_id = %s", (listing_id,)
+        )
+    ).fetchone()
+    return (row[0], row[1]) if row else (None, None)
+
+
 async def get_prices(
     conn: psycopg.AsyncConnection,
     *,

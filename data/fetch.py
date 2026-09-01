@@ -10,6 +10,7 @@ import uuid
 import polars as pl
 from loguru import logger
 
+from data.benchmarks import BENCHMARKS, Benchmark
 from data.db.companies import create_company
 from data.db.identifiers import resolve_identifier
 from data.db.listings import get_current_listing, get_current_listing_for_company, upsert_listing
@@ -80,15 +81,15 @@ async def resolve_ticker_listing(
 async def ensure_index_listing(conn, *, symbol: str, name: str) -> uuid.UUID:
     """Get or create the synthetic company/listing for a non-equity index.
 
-    `^VIX`/`^VSTOXX` are not equities and will never be members of any
-    universe, so nothing in the identity-resolution pipeline will ever
-    create identity rows for them. This bootstraps exactly one company and
-    one listing per symbol, idempotently -- see the phase-5 design doc
-    §2.2.
+    Volatility, market, and sector indices are not equities and will never be
+    members of a company universe, so nothing in the identity-resolution
+    pipeline will create rows for them. This bootstraps exactly one synthetic
+    company and one listing per symbol, idempotently -- see the phase-5 design
+    doc §2.2.
 
     Args:
         conn: An open connection.
-        symbol: Yahoo symbol, e.g. '^VIX'.
+        symbol: Yahoo symbol, e.g. '^VIX' or '^GSPC'.
         name: Display name for the synthetic company row.
 
     Returns:
@@ -113,6 +114,64 @@ async def ensure_index_listing(conn, *, symbol: str, name: str) -> uuid.UUID:
         status="valid",
         valid_from=dt.date.fromisoformat(HISTORY_START),
     )
+
+
+async def fetch_benchmark_prices(conn, *, as_of: str) -> dict[str, list[str]]:
+    """Incrementally fetch the configured market and sector benchmarks.
+
+    Benchmark identities are bootstrapped through the same synthetic-company
+    and Yahoo-listing convention as volatility indices. Fetches are grouped by
+    incremental start date to keep the daily request count small.
+
+    Args:
+        conn: An open connection.
+        as_of: Date string (YYYY-MM-DD) to fetch through, inclusive.
+
+    Returns:
+        Registry keys grouped as ``fetched``, ``current``, ``no_data``, or
+        ``failed``. A failed group is logged and does not stop other refreshes.
+    """
+    as_of_date = dt.date.fromisoformat(as_of)
+    end = (as_of_date + dt.timedelta(days=1)).isoformat()
+    pending: dict[str, tuple[Benchmark, uuid.UUID, str]] = {}
+    summary: dict[str, list[str]] = {
+        "fetched": [],
+        "current": [],
+        "no_data": [],
+        "failed": [],
+    }
+
+    for benchmark in BENCHMARKS:
+        listing_id = await ensure_index_listing(conn, symbol=benchmark.symbol, name=benchmark.name)
+        last_date = await get_last_price_date(conn, listing_id=listing_id)
+        if last_date is not None and last_date >= as_of_date:
+            summary["current"].append(benchmark.key)
+            continue
+        start = (last_date + dt.timedelta(days=1)).isoformat() if last_date else HISTORY_START
+        pending[benchmark.key] = (benchmark, listing_id, start)
+
+    groups: dict[str, list[str]] = {}
+    for key, (_benchmark, _listing_id, start) in pending.items():
+        groups.setdefault(start, []).append(key)
+
+    for start, keys in groups.items():
+        symbols = [pending[key][0].symbol for key in keys]
+        try:
+            frame = fetch_ohlcv(symbols, start, end)
+        except Exception as exc:  # noqa: BLE001 - remaining refresh steps must still run
+            logger.warning(f"benchmark fetch failed for {symbols}: {exc}")
+            summary["failed"].extend(keys)
+            continue
+        for key in keys:
+            benchmark, listing_id, _start = pending[key]
+            rows = _rows_from_ohlcv(frame, benchmark.symbol, benchmark.currency)
+            if not rows:
+                summary["no_data"].append(key)
+                continue
+            await upsert_prices(conn, listing_id=listing_id, rows=rows)
+            summary["fetched"].append(key)
+
+    return summary
 
 
 def _rows_from_ohlcv(frame: pl.DataFrame, symbol: str, currency: str) -> list[dict[str, object]]:
@@ -323,6 +382,7 @@ async def _run(as_of: str) -> None:
         async with pool.connection() as conn:
             summary = await fetch_daily_prices(conn, as_of=as_of)
             await fetch_volatility_indices(conn, dt.date.fromisoformat(as_of))
+            benchmark_summary = await fetch_benchmark_prices(conn, as_of=as_of)
             fx_summary = await sync_fx_rates(conn, as_of=as_of)
             vol_written = await refresh_volatility(conn)
             macro_summary = await run_daily_macro_sync_postgres(conn, today=as_of)
@@ -332,7 +392,8 @@ async def _run(as_of: str) -> None:
                 f"prices fetched={len(summary['fetched'])} "
                 f"skipped={len(summary['skipped_unresolved'])} "
                 f"fx={fx_summary} volatility_rows={vol_written} "
-                f"macro={macro_summary} dividends={dividend_summary} short_interest={short_summary}"
+                f"benchmarks={benchmark_summary} macro={macro_summary} "
+                f"dividends={dividend_summary} short_interest={short_summary}"
             )
     finally:
         await close_pool(pool)

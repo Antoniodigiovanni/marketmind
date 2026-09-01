@@ -12,6 +12,7 @@ from data.db.listings import upsert_listing
 from data.db.prices import (
     get_last_fx_date,
     get_last_price_date,
+    get_price_bounds,
     get_prices,
     get_volatility,
     replace_all_volatility,
@@ -164,6 +165,15 @@ async def test_get_last_price_date_returns_max_date(pg_conn) -> None:
         ],
     )
     assert await get_last_price_date(pg_conn, listing_id=listing_id) == dt.date(2026, 8, 4)
+    assert await get_price_bounds(pg_conn, listing_id=listing_id) == (
+        dt.date(2026, 8, 3),
+        dt.date(2026, 8, 4),
+    )
+
+
+async def test_get_price_bounds_returns_none_pair_when_empty(pg_conn) -> None:
+    listing_id = await _listing(pg_conn)
+    assert await get_price_bounds(pg_conn, listing_id=listing_id) == (None, None)
 
 
 async def test_upsert_prices_empty_rows_is_a_noop(pg_conn) -> None:
