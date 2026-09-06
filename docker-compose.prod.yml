@@ -61,5 +61,42 @@ services:
       # source. The entrypoint seeds universe baselines on first start.
       - ./state:/var/lib/marketmind
 
+  # Read-only operations dashboard. Deliberately a separate service from the
+  # MCP server: it holds no write path, reads through a SELECT-only database
+  # role, and never becomes a second interface to the market-memory data.
+  dashboard:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    command: ["uv", "run", "--frozen", "--no-sync", "python", "-m", "dashboard.app"]
+    environment:
+      MARKETMIND_DASHBOARD_DSN: ${MARKETMIND_DASHBOARD_DSN:?set MARKETMIND_DASHBOARD_DSN in .env}
+      PGPASSWORD: ${MARKETMIND_DASHBOARD_DB_PASSWORD:?set MARKETMIND_DASHBOARD_DB_PASSWORD in .env}
+      MARKETMIND_DASHBOARD_TOKEN: ${MARKETMIND_DASHBOARD_TOKEN:?set MARKETMIND_DASHBOARD_TOKEN in .env}
+      MARKETMIND_DASHBOARD_PORT: ${MARKETMIND_DASHBOARD_PORT:-8001}
+      MARKETMIND_DASHBOARD_HOST: "0.0.0.0"
+      MARKETMIND_DASHBOARD_LOG_DIRS: /var/lib/marketmind/refresh/logs:/var/log/marketmind
+      HOME: /tmp/marketmind
+      UV_CACHE_DIR: /tmp/uv-cache
+      PYTHONDONTWRITEBYTECODE: "1"
+    user: "${MARKETMIND_UID:?set MARKETMIND_UID in .env}:${MARKETMIND_GID:?set MARKETMIND_GID in .env}"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Published on loopback only. Reaching it from another machine is an SSH
+    # port-forward unless a TLS-terminating reverse proxy is put in front.
+    ports:
+      - "127.0.0.1:${MARKETMIND_DASHBOARD_PORT:-8001}:${MARKETMIND_DASHBOARD_PORT:-8001}"
+    volumes:
+      - ./state:/var/lib/marketmind:ro
+      - /var/log/marketmind:/var/log/marketmind:ro
+
 volumes:
   marketmind_postgres_data:

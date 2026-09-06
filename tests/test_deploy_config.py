@@ -96,6 +96,43 @@ def test_compose_requires_secrets_and_host_ownership_mapping() -> None:
     assert '"127.0.0.1:5432:5432"' not in compose
 
 
+def test_dashboard_is_published_on_loopback_and_mounted_read_only() -> None:
+    """The dashboard may be reached by a tunnel or a proxy, never by an open port."""
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    dashboard = compose.split("  dashboard:", maxsplit=1)[1].split("\nvolumes:", maxsplit=1)[0]
+
+    assert '"127.0.0.1:${MARKETMIND_DASHBOARD_PORT:-8001}' in dashboard
+    assert "read_only: true" in dashboard
+    assert "no-new-privileges:true" in dashboard
+    assert "cap_drop:\n      - ALL" in dashboard
+    assert "./state:/var/lib/marketmind:ro" in dashboard
+    assert "/var/log/marketmind:/var/log/marketmind:ro" in dashboard
+    assert "MARKETMIND_DASHBOARD_DSN" in dashboard
+    assert "MARKETMIND_DASHBOARD_TOKEN" in dashboard
+    # The read-write application DSN must never reach the dashboard container.
+    assert "MARKETMIND_DATABASE_DSN" not in dashboard
+
+
+def test_dashboard_reads_only_the_run_audit_log() -> None:
+    """Widening it past agent_runs would make it a second data interface."""
+    sources = sorted((ROOT / "dashboard").rglob("*.py"))
+
+    assert sources
+    allowed = {"data.db.pool", "data.db.runs"}
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        imported = set(re.findall(r"^from (data\.[\w.]+) import", text, flags=re.MULTILINE))
+        assert imported <= allowed, f"{path.name} imports {imported - allowed}"
+        assert "SELECT" not in text.upper() or "SELECT-only" in text
+
+
+def test_dashboard_role_grant_is_documented_as_a_single_table() -> None:
+    runbook = DEPLOY_README_PATH.read_text(encoding="utf-8")
+
+    assert "GRANT SELECT ON agent_runs TO marketmind_ro" in runbook
+    assert "ssh -N -L 8001:127.0.0.1:8001" in runbook
+
+
 def test_cron_uv_invocations_never_resync_at_run_time() -> None:
     lines = CRONTAB_PATH.read_text(encoding="utf-8").splitlines()
     assert "SHELL=/bin/sh" in lines

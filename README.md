@@ -121,6 +121,12 @@ locally, export the values in your shell or pass `--env-file .env` to
 | `MARKETMIND_MCP_PORT` | Port the MCP server listens on (default 8000) |
 | `MARKETMIND_REFRESH_DIR` | Shared refresh lock/status/log directory (production: `/var/lib/marketmind/refresh`) |
 | `MARKETMIND_UID` / `MARKETMIND_GID` | Numeric owner used by the production app container for its bind-mounted data tree |
+| `MARKETMIND_DASHBOARD_TOKEN` | HTTP Basic password for the read-only operations dashboard |
+| `MARKETMIND_DASHBOARD_DSN` | SELECT-only Postgres DSN used by the dashboard |
+| `MARKETMIND_DASHBOARD_DB_PASSWORD` | Password for the dashboard's read-only role |
+| `MARKETMIND_DASHBOARD_PORT` | Dashboard listen port (default 8001) |
+| `MARKETMIND_DASHBOARD_HOST` | Dashboard bind address (default `127.0.0.1`) |
+| `MARKETMIND_DASHBOARD_LOG_DIRS` | Colon-separated directories whose `.log` files the dashboard may serve |
 
 ## Commands
 
@@ -135,6 +141,7 @@ uv run python -m data.filings.fetch           # daily SEC filings + Company Fact
 uv run python -m data.filings.backfill --financials  # Company Facts backfill / quarterly sweep
 uv run python -m agent.refresh {YYYY-MM-DD}   # complete lock-protected daily pipeline
 uv run python -m server.mcp                   # run the MCP server (streamable-http, 127.0.0.1:8000)
+uv run python -m dashboard.app                # run the read-only ops dashboard (127.0.0.1:8001)
 uv run ruff check . && uv run ruff format .   # lint + format
 ```
 
@@ -170,6 +177,16 @@ sudo install -o root -g root -m 0644 deploy/logrotate /etc/logrotate.d/marketmin
 Updating pulls the checkout, rebuilds Compose, and reinstalls
 `/etc/cron.d/marketmind`; the app applies checksum-verified PostgreSQL
 migrations on startup. See the deployment guide for the exact commands.
+
+### Operations dashboard
+
+A read-only web view of `agent_runs` and job logs, in its own container
+(`dashboard/`). It exists because MCP answers what the harness needs, not why
+a scheduled job failed at 06:10. It runs under a SELECT-only database role
+granted a single table, is HTTP Basic authenticated, and binds `127.0.0.1` —
+reach it with an SSH port-forward, or place a TLS-terminating reverse proxy
+in front of it. It serves no market data, holds no write path, and is not
+consumed by the harness.
 
 Full operational detail — schedule table, MCP client wiring (the client
 now connects to `http://127.0.0.1:8000/mcp` as a streamable-http client

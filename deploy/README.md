@@ -159,6 +159,66 @@ This is a change the client side must implement — out of scope for this
 repository. No ports beyond `127.0.0.1` are opened; nothing off-box can
 reach it.
 
+## Operations dashboard
+
+A read-only web view of run history and job logs, in its own container. It
+reads `agent_runs` and log files and nothing else: no market data, no write
+path, and no route the harness uses.
+
+Create its SELECT-only database role once, after the schema exists:
+
+```bash
+docker compose -f docker-compose.prod.yml exec -T postgres \
+  psql -U marketmind -d marketmind -v ON_ERROR_STOP=1 <<'SQL'
+CREATE ROLE marketmind_ro LOGIN PASSWORD 'replace-me';
+GRANT CONNECT ON DATABASE marketmind TO marketmind_ro;
+GRANT USAGE ON SCHEMA public TO marketmind_ro;
+GRANT SELECT ON agent_runs TO marketmind_ro;
+SQL
+```
+
+Put that password in `MARKETMIND_DASHBOARD_DB_PASSWORD` and a separate
+random secret in `MARKETMIND_DASHBOARD_TOKEN`, then start it:
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build dashboard
+```
+
+The grant is deliberately one table. Widening it turns a status page into a
+second read interface to the market-memory data, which is what MCP is for.
+
+### Reaching it
+
+The port is published on `127.0.0.1` only, so from your laptop:
+
+```bash
+ssh -N -L 8001:127.0.0.1:8001 <deploy-user>@<host>
+```
+
+Then open `http://127.0.0.1:8001` and enter any username with
+`MARKETMIND_DASHBOARD_TOKEN` as the password.
+
+Exposing it beyond loopback means putting a TLS-terminating reverse proxy in
+front and setting `MARKETMIND_DASHBOARD_HOST`. HTTP Basic sends the secret on
+every request, so it must not travel unencrypted off the box.
+
+### Cron logs
+
+The dashboard reads `state/refresh/logs` (written by the app user, always
+readable) and `/var/log/marketmind` (written by root cron). The latter is
+mode `0700` root-owned from the setup above, so the container cannot read it
+and the page reports the directory as unreadable rather than failing. To
+include scheduled-job logs, make that directory readable by the deploy group:
+
+```bash
+sudo chgrp "$(id -gn)" /var/log/marketmind
+sudo chmod 0750 /var/log/marketmind
+sudo sed -i 's/create 0600 root root/create 0640 root '"$(id -gn)"'/' \
+  /etc/logrotate.d/marketmind
+```
+
+Leave it root-only if you would rather read those logs over SSH.
+
 ## Schedule (`/etc/cron.d/marketmind`)
 
 | When | Job |
@@ -203,6 +263,7 @@ jitter). Accepted for a single-box deploy.
 
 ```bash
 docker compose -f docker-compose.prod.yml ps                    # service status
+docker compose -f docker-compose.prod.yml logs -f dashboard     # dashboard logs
 docker compose -f docker-compose.prod.yml logs -f marketmind    # MCP server logs
 docker compose -f docker-compose.prod.yml logs -f postgres      # Postgres logs
 cat /etc/cron.d/marketmind                                      # confirm the schedule is installed
