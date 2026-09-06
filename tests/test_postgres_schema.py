@@ -17,7 +17,7 @@ async def test_schema_applies_and_creates_the_expected_objects(pg_conn) -> None:
             "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"
         )
     ).fetchone()
-    assert tables[0] == 31
+    assert tables[0] == 32
 
 
 async def test_schema_application_records_baseline_and_is_idempotent(pg_conn) -> None:
@@ -32,6 +32,7 @@ async def test_schema_application_records_baseline_and_is_idempotent(pg_conn) ->
         (1, "production_baseline"),
         (2, "complete_postgres_cutover"),
         (3, "rss_ingest_efficiency"),
+        (4, "sec_company_financials"),
     ]
 
 
@@ -56,6 +57,29 @@ async def test_vector_column_and_hnsw_index_exist(pg_conn) -> None:
     ).fetchone()
     assert index is not None, "HNSW index missing"
     assert "hnsw" in index[0] and "vector_cosine_ops" in index[0]
+
+
+async def test_financials_schema_has_bitemporal_access_paths(pg_conn) -> None:
+    columns = await (
+        await pg_conn.execute(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_name='financials'"
+        )
+    ).fetchall()
+    column_types = dict(columns)
+    assert column_types["company_id"] == "uuid"
+    assert column_types["filed_at"] == "date"
+    assert column_types["accession_number"] == "text"
+    assert column_types["value"] == "numeric"
+
+    indexes = await (
+        await pg_conn.execute(
+            "SELECT indexname, indexdef FROM pg_indexes WHERE tablename='financials'"
+        )
+    ).fetchall()
+    definitions = dict(indexes)
+    assert "NULLS NOT DISTINCT" in definitions["uq_financials_observation"]
+    assert "filed_at DESC" in definitions["idx_financials_pit"]
 
 
 async def test_cosine_similarity_orders_by_closeness(pg_conn) -> None:

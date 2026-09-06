@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import os
+import re
 import secrets
 import uuid
 from collections.abc import Callable
+from decimal import Decimal
 from pathlib import Path
 
 import polars as pl
@@ -37,6 +39,7 @@ from data.db.filings import get_filings as filings_get_filings
 from data.db.filings import get_insider_holdings as filings_get_insider_holdings
 from data.db.filings import get_insider_transactions as filings_get_insider_transactions
 from data.db.filings import search_filing_text as filings_search_filing_text
+from data.db.financials import get_financials_as_of
 from data.db.identifiers import get_current_company_id, resolve_identifier
 from data.db.init_postgres import apply_schema
 from data.db.listings import get_current_listing
@@ -111,6 +114,8 @@ def _jsonify_pg_row(row: dict[str, object]) -> dict[str, object]:
     for key, value in row.items():
         if isinstance(value, uuid.UUID):
             result[key] = str(value)
+        elif isinstance(value, Decimal):
+            result[key] = int(value) if value == value.to_integral_value() else float(value)
         elif isinstance(value, dt.date):
             result[key] = value.isoformat()
         else:
@@ -336,6 +341,75 @@ async def get_filings(
             filed_from=dt.date.fromisoformat(filed_from) if filed_from else None,
             filed_to=dt.date.fromisoformat(filed_to) if filed_to else None,
             limit=limit,
+        )
+    return [_jsonify_pg_row(row) for row in rows]
+
+
+_TICKER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,31}")
+_CONCEPT_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,127}")
+
+
+@mcp.tool()
+async def get_financials(
+    ticker: str,
+    concepts: list[str],
+    as_of: str,
+) -> list[dict[str, object]]:
+    """Return SEC XBRL financial observations known by a point in time.
+
+    For every requested exact XBRL concept, unit, and fiscal period, the tool
+    returns the value from the latest filing whose SEC filing date is on or
+    before ``as_of``. A later amendment or restatement is therefore invisible
+    to an earlier read. The ticker is also resolved to its company as of that
+    date, preventing ticker reuse from crossing issuer histories.
+
+    Args:
+        ticker: Ticker symbol (1-32 ASCII letters, digits, dots, or hyphens).
+        concepts: One to 50 unique, case-sensitive XBRL local names, such as
+            ``Revenues`` or ``Assets``. Taxonomy prefixes are not accepted.
+        as_of: Required, exact calendar date in YYYY-MM-DD format; ``filed_at``
+            is compared inclusively.
+
+    Returns:
+        Rows ordered by concept then newest period, each containing
+        {taxonomy, concept, unit, fiscal_year, fiscal_period, period_start,
+        period_end, filed_at, accession_number, form_type, frame, value}.
+        ``period_start`` is null for instant concepts. Returns an empty list
+        when the ticker does not resolve or no requested observation was known.
+
+    Raises:
+        ValueError: If ticker, concepts, or as_of violates the schema above.
+    """
+    if not isinstance(ticker, str) or _TICKER_PATTERN.fullmatch(ticker) is None:
+        raise ValueError("ticker must be 1-32 ASCII letters, digits, dots, or hyphens")
+    if not isinstance(concepts, list) or not 1 <= len(concepts) <= 50:
+        raise ValueError("concepts must contain between 1 and 50 XBRL concept names")
+    if any(
+        not isinstance(concept, str) or _CONCEPT_PATTERN.fullmatch(concept) is None
+        for concept in concepts
+    ):
+        raise ValueError("each concept must be an unprefixed, case-sensitive XBRL local name")
+    if len(set(concepts)) != len(concepts):
+        raise ValueError("concepts must not contain duplicates")
+    if not isinstance(as_of, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", as_of):
+        raise ValueError("as_of must be an exact YYYY-MM-DD date")
+    try:
+        as_of_date = dt.date.fromisoformat(as_of)
+    except ValueError as exc:
+        raise ValueError("as_of must be a valid calendar date") from exc
+
+    pool = await _pg_pool()
+    async with pool.connection() as conn:
+        company_id = await resolve_identifier(
+            conn, id_type="ticker", id_value=ticker.upper(), as_of=as_of_date
+        )
+        if company_id is None:
+            return []
+        rows = await get_financials_as_of(
+            conn,
+            company_id=company_id,
+            concepts=concepts,
+            as_of=as_of_date,
         )
     return [_jsonify_pg_row(row) for row in rows]
 

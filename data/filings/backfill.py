@@ -15,6 +15,7 @@ from data.db.filings import create_filing, filing_exists, has_checkpoint, mark_c
 from data.db.identifiers import get_current_company_id
 from data.db.pool import close_pool, open_pool
 from data.filings.cik import cik_for_ticker, ensure_cik_map
+from data.filings.companyfacts import ingest_companyfacts
 from data.filings.fetch import (
     DOCUMENT_FORMS,
     OWNERSHIP_FORMS,
@@ -165,15 +166,52 @@ async def backfill_13f(
     return counts
 
 
+async def backfill_financials(
+    conn: psycopg.AsyncConnection,
+    client: EdgardClient,
+    *,
+    tickers: list[str],
+) -> dict[str, int]:
+    """Backfill complete Company Facts histories for tracked SEC issuers.
+
+    Args:
+        conn: An open PostgreSQL connection.
+        client: Courtesy-limited SEC client.
+        tickers: Current universe tickers to resolve to companies and CIKs.
+
+    Returns:
+        Counts of issuers processed, newly inserted facts, and skipped issuers.
+    """
+    await ensure_cik_map(conn, client, tickers)
+    counts = {"financial_issuers": 0, "financial_facts": 0, "financials_skipped": 0}
+    for ticker in tickers:
+        cik = await cik_for_ticker(conn, ticker)
+        company_id = await get_current_company_id(conn, id_type="ticker", id_value=ticker)
+        if cik is None or company_id is None:
+            counts["financials_skipped"] += 1
+            continue
+        try:
+            counts["financial_facts"] += await ingest_companyfacts(
+                conn, client, company_id=company_id, cik=cik
+            )
+            counts["financial_issuers"] += 1
+        except Exception:
+            logger.exception(f"backfill: company facts for {ticker} failed")
+            counts["financials_skipped"] += 1
+    return counts
+
+
 async def _run(args: argparse.Namespace) -> None:
     pool = await open_pool()
     try:
         async with pool.connection() as conn:
             client = EdgardClient()
-            if args.issuers:
+            tickers: list[str] = []
+            if args.issuers or args.financials:
                 today = dt.date.today().isoformat()
                 tickers = sorted(get_universe(today)["ticker"].unique().to_list())
                 await ensure_cik_map(conn, client, tickers)
+            if args.issuers:
                 full_text_since = str(
                     dt.date.today().replace(year=dt.date.today().year - FULL_TEXT_YEARS)
                 )
@@ -188,13 +226,17 @@ async def _run(args: argparse.Namespace) -> None:
                             cik=cik,
                             full_text_since=full_text_since,
                         )
-            await backfill_13f(
-                conn,
-                client,
-                ROOT_DIR,
-                start=args.backfill_13f_start,
-                end=args.backfill_13f_end,
-            )
+            if args.financials:
+                counts = await backfill_financials(conn, client, tickers=tickers)
+                logger.info(f"company facts backfill complete: {counts}")
+            if not args.financials:
+                await backfill_13f(
+                    conn,
+                    client,
+                    ROOT_DIR,
+                    start=args.backfill_13f_start,
+                    end=args.backfill_13f_end,
+                )
     finally:
         await close_pool(pool)
 
@@ -203,6 +245,9 @@ def main() -> None:
     """Run issuer and/or 13F backfill from the command line."""
     parser = argparse.ArgumentParser(description="SEC filings backfill")
     parser.add_argument("--issuers", action="store_true")
+    parser.add_argument(
+        "--financials", action="store_true", help="backfill SEC Company Facts histories"
+    )
     parser.add_argument("--13f-start", dest="backfill_13f_start", default="1998-01-01")
     parser.add_argument("--13f-end", dest="backfill_13f_end", default=dt.date.today().isoformat())
     asyncio.run(_run(parser.parse_args()))

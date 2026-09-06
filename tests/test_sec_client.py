@@ -144,6 +144,19 @@ def test_submissions_missing_cik_raises(monkeypatch) -> None:
         client.submissions("0000000000")
 
 
+def test_companyfacts_uses_official_xbrl_endpoint(monkeypatch) -> None:
+    raw = (FIXTURES / "companyfacts_aapl.json").read_text(encoding="utf-8")
+    url = "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json"
+    session = FakeSession({url: FakeResponse(raw)})
+    client = EdgardClient(session)  # type: ignore[arg-type]
+    monkeypatch.setattr(client._limiter, "wait", lambda: None)
+
+    payload = client.companyfacts("0000320193")
+
+    assert payload["entityName"] == "Apple Inc."
+    assert session.calls == [url]
+
+
 def test_all_submissions_follows_pagination_files(monkeypatch) -> None:
     first = {
         "filings": {
