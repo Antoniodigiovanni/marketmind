@@ -36,6 +36,11 @@ from data.universe.loader import get_universe
 DOCUMENT_FORMS = {"10-K", "10-Q", "8-K", "20-F", "6-K"}
 OWNERSHIP_FORMS = {"3", "4", "5"}
 COVERED_FORMS = DOCUMENT_FORMS | OWNERSHIP_FORMS | {"13F-HR", "13F-HR/A", "DEF 14A"}
+# Periodic reports whose XBRL exhibits feed the Company Facts endpoint. 8-K is
+# excluded: earnings releases are frequent and their exhibits are rarely tagged
+# into Company Facts, so triggering on them would refresh almost every day for
+# no new observations. The quarterly sweep covers anything this misses.
+FINANCIAL_REPORT_FORMS = {"10-K", "10-Q", "20-F", "6-K"}
 INITIAL_LOOKBACK_DAYS = 7
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ProgressCallback = Callable[[int, int, dict[str, int]], None]
@@ -201,9 +206,12 @@ async def run_daily_fetch(
     still discovered. A fresh database scans only the previous seven days;
     historical coverage belongs to the explicit backfill command.
 
-    Company facts are refreshed per ticker alongside the filings. They are a
-    separate concern from filing coverage, so a failed facts refresh is counted
-    and logged but does not hold back the submissions checkpoint.
+    Company facts are refreshed only for tickers whose run ingested a periodic
+    report, since the endpoint returns an issuer's complete history on every
+    call and only those filings add to it. Amendments and XBRL published after
+    its filing are picked up by the periodic sweep in data.filings.backfill.
+    Facts are a separate concern from filing coverage, so a failed refresh is
+    counted and logged but does not hold back the submissions checkpoint.
 
     Args:
         conn: An open PostgreSQL connection.
@@ -244,6 +252,7 @@ async def run_daily_fetch(
             checkpoint = await get_checkpoint_date(conn, source="submissions", key=ticker)
             filed_from = checkpoint or (run_date_value - dt.timedelta(days=INITIAL_LOOKBACK_DAYS))
             ticker_failed = False
+            facts_due = False
             for sub in client.submissions(cik):
                 filed_at = dt.date.fromisoformat(sub.filed_at)
                 if filed_at < filed_from or filed_at > run_date_value:
@@ -282,11 +291,13 @@ async def run_daily_fetch(
                     else:
                         await _process_metadata_only(conn, cik=cik, company_id=company_id, sub=sub)
                     counts["filings_parsed"] += 1
+                    if sub.form_type in FINANCIAL_REPORT_FORMS:
+                        facts_due = True
                 except Exception:
                     logger.exception(f"filing {sub.accession} for {ticker} failed; skipped")
                     counts["filings_skipped"] += 1
                     ticker_failed = True
-            if company_id is not None:
+            if facts_due and company_id is not None:
                 try:
                     counts["financial_facts"] += await ingest_companyfacts(
                         conn, client, company_id=company_id, cik=cik

@@ -166,6 +166,7 @@ reach it.
 | daily 06:10 | equity/benchmark price + macro fetch, news ingest, market-view structuring |
 | Mondays 06:00 | universe refresh + symbol resolution |
 | annually, 5 Jan 06:30 | company profile refresh (`--backfill --profiles-only`) |
+| quarterly, 1 Feb/May/Aug/Nov 04:00 | SEC Company Facts sweep (`data.filings.backfill --financials`) |
 | nightly 02:30 | `data/raw/` + mutable state tarball → `/srv/marketmind-backups/` (14-day retention) |
 | nightly 02:35 | Postgres `pg_dump` → `/srv/marketmind-backups/` (14-day retention) |
 

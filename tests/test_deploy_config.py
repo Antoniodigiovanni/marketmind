@@ -117,6 +117,18 @@ def test_cron_uv_invocations_never_resync_at_run_time() -> None:
         assert "--no-sync" in command
 
 
+def test_company_facts_sweep_is_scheduled_quarterly_under_the_shared_lock() -> None:
+    """The daily job only refreshes issuers that filed; the sweep covers the rest."""
+    lines = CRONTAB_PATH.read_text(encoding="utf-8").splitlines()
+    sweep = [line for line in lines if "data.filings.backfill --financials" in line]
+
+    assert len(sweep) == 1
+    schedule, remainder = sweep[0].split(" root ", maxsplit=1)
+    assert schedule.split() == ["0", "4", "1", "2,5,8,11", "*"]
+    assert "flock -n /srv/marketmind/state/refresh/daily-refresh.lock" in remainder
+    assert ">> /var/log/marketmind/financials.log 2>&1" in remainder
+
+
 def test_cron_backups_create_the_destination_and_escape_percent_signs() -> None:
     commands = [
         line
@@ -151,7 +163,7 @@ def test_cron_command_quoting_is_valid_posix_shell() -> None:
         if line and not line.startswith("#") and not line.startswith(("SHELL=", "PATH="))
     ]
 
-    assert len(scheduled_commands) == 5
+    assert len(scheduled_commands) == 6
     for command in scheduled_commands:
         subprocess.run(["sh", "-n", "-c", command], check=True)
 
