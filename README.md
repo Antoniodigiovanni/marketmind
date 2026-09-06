@@ -254,7 +254,7 @@ immutable raw/derived archive formats; they are not competing databases.
 | `articles` | Deduplication registry and ingest audit trail (PostgreSQL) |
 | `company_facts` | Versioned company knowledge with pgvector embeddings (PostgreSQL) |
 | `financials` | SEC XBRL observations keyed by stable company identity, preserving filings and restatements |
-| `agent_runs` | Audit log for every job execution (PostgreSQL) |
+| `agent_runs` | Audit log for every job execution (PostgreSQL) — `daily_refresh`, `fetch`, `news`, `views`, `filings`, `profiles` |
 | `market_views` | Immutable free-text market snapshots (PostgreSQL) |
 | `market_view_structures` | Structured JSON derived from free text (PostgreSQL) |
 | `filings`, ownership, 13F stores | Filing metadata, normalized text, and parsed disclosures (PostgreSQL) |

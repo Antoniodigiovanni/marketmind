@@ -625,9 +625,29 @@ async def test_run_daily_ingest_records_failed_status_on_unhandled_error(pg_conn
             raw_news_dir=tmp_path,
         )
 
-    runs = await list_recent_runs(pg_conn, job_type="news", limit=5)
+    runs = await list_recent_runs(pg_conn, job_type="profiles", limit=5)
     assert runs[0]["status"] == "failed"
     assert runs[0]["error"]
+
+
+async def test_profiles_only_runs_are_audited_apart_from_news_runs(pg_conn, tmp_path) -> None:
+    """A profile refresh fetches no article; auditing it as news hid that."""
+    await run_daily_ingest(
+        pg_conn,
+        DATE,
+        universe=UNIVERSE,
+        news_fetcher=lambda ticker, name: [],
+        description_fetcher=lambda name: "",
+        profile_builder=_fake_profile_builder,
+        llm=_fake_llm,
+        profiles_only=True,
+        raw_news_dir=tmp_path,
+    )
+
+    assert await list_recent_runs(pg_conn, job_type="news", limit=5) == []
+    profiles = await list_recent_runs(pg_conn, job_type="profiles", limit=5)
+    assert len(profiles) == 1
+    assert profiles[0]["status"] == "succeeded"
 
 
 async def test_raw_news_archive_dedups_and_resumes(tmp_path) -> None:

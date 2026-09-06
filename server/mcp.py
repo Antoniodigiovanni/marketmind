@@ -1180,8 +1180,10 @@ async def get_ingest_status(limit: int = 5) -> dict[str, object]:
         has started none. 'history' holds the most recent agent_runs rows
         from PostgreSQL, newest first — run_id, run_date, job_type, status,
         started_at, finished_at, counters (a nested dict of per-job counts,
-        not flattened into fixed keys), error. All PostgreSQL-audited job
-        types appear, including filings runs.
+        not flattened into fixed keys), error. Every audited job type
+        appears: 'daily_refresh' (the umbrella run), 'fetch' (prices, FX,
+        macro, dividends, short interest), 'news', 'views', 'filings' and
+        'profiles'.
     """
     record = jobs.current_run()
     pool = await _pg_pool()
