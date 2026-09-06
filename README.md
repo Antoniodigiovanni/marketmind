@@ -132,7 +132,7 @@ uv run python data/fetch.py                   # daily price + macro refresh
 uv run python -m agent.ingestion {YYYY-MM-DD} # daily news + fact ingest
 uv run python -m agent.views {YYYY-MM-DD}     # structure free-text market views
 uv run python -m data.filings.fetch           # daily SEC filings + Company Facts refresh
-uv run python -m data.filings.backfill --financials  # historical Company Facts backfill
+uv run python -m data.filings.backfill --financials  # Company Facts backfill / quarterly sweep
 uv run python -m agent.refresh {YYYY-MM-DD}   # complete lock-protected daily pipeline
 uv run python -m server.mcp                   # run the MCP server (streamable-http, 127.0.0.1:8000)
 uv run ruff check . && uv run ruff format .   # lint + format
@@ -281,6 +281,12 @@ and fiscal period, excludes rows filed after `as_of`, and returns the newest
 remaining filing. The accession number on every row identifies its SEC source;
 later amendments and restatements append rows instead of replacing history.
 
+The endpoint returns an issuer's complete history on every call, so the daily
+job refreshes only issuers that filed a 10-K, 10-Q, 20-F or 6-K in that run.
+A quarterly sweep (`data.filings.backfill --financials`, scheduled in
+`deploy/crontab`) covers XBRL published after its filing and the amendments the
+daily job does not fetch.
+
 ## Daily jobs
 
 The daily batch runs in order:
@@ -292,8 +298,10 @@ The daily batch runs in order:
    (`^VIX`, `^VSTOXX`), FRED and ECB series → immutable Parquet in `data/raw/`.
 3. **News ingest** — fetch → level-1 dedup → pre-score (source credibility ×
    recency decay) → fact retrieval → LLM extraction → versioned writes → audit.
-4. **SEC filings** — stores metadata and normalized filing text, then refreshes
-   the free, keyless Company Facts endpoint into bitemporal financial rows.
+4. **SEC filings** — stores metadata and normalized filing text, and refreshes
+   the free, keyless Company Facts endpoint into bitemporal financial rows for
+   issuers that filed a periodic report in that run. Invoked explicitly; it is
+   not part of `agent.refresh` yet.
 5. **View structuring** — reads new free-text views and produces structured JSON
    (`schema_version`-driven); free text is never replaced and re-runs are safe.
 

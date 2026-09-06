@@ -26,6 +26,11 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Annually, 5 Jan 06:30 — company profile refresh (new version for every company)
 30 6 5 1 * root flock -n /srv/marketmind/state/refresh/daily-refresh.lock sh -c 'cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.ingestion "$(date -I)" --backfill --profiles-only' >> /var/log/marketmind/profiles.log 2>&1
 
+# Quarterly, 1st of Feb/May/Aug/Nov 04:00 — Company Facts sweep. The daily filings
+# job refreshes an issuer only when it files a periodic report; this catches XBRL
+# published after its filing and amendments the daily job does not cover.
+0 4 1 2,5,8,11 * root flock -n /srv/marketmind/state/refresh/daily-refresh.lock sh -c 'cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m data.filings.backfill --financials' >> /var/log/marketmind/financials.log 2>&1
+
 # Nightly 02:30 — raw data + mutable state tarball, 14-day retention
 30 2 * * * root flock -n /srv/marketmind/state/refresh/daily-refresh.lock /srv/marketmind/deploy/backup-files.sh >> /var/log/marketmind/backup.log 2>&1
 
