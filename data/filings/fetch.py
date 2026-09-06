@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import datetime as dt
 import hashlib
@@ -347,11 +348,24 @@ async def run_daily_fetch_with_pool(
 
 
 def main() -> None:
-    """Run the daily filings fetch for today's universe."""
-    today = dt.date.today().isoformat()
+    """Run the daily filings fetch for one market date.
+
+    Raises:
+        ValueError: If --run-date is not a valid YYYY-MM-DD calendar date.
+    """
+    parser = argparse.ArgumentParser(description="Daily SEC filings fetch")
+    parser.add_argument(
+        "--run-date",
+        default=dt.date.today().isoformat(),
+        help="Inclusive fetch cutoff as YYYY-MM-DD; today when omitted",
+    )
+    args = parser.parse_args()
+    # The universe is read at the same date the fetch is bounded by, so a
+    # backdated run resolves the membership of that date, not of today.
+    run_date = dt.date.fromisoformat(args.run_date).isoformat()
     counts = asyncio.run(
         run_daily_fetch_with_pool(
-            EdgardClient(), run_date=today, root=ROOT_DIR, universe=get_universe(today)
+            EdgardClient(), run_date=run_date, root=ROOT_DIR, universe=get_universe(run_date)
         )
     )
     logger.info(f"filings fetch complete: {counts}")

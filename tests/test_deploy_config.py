@@ -211,8 +211,9 @@ def test_timers_and_shared_job_runner() -> None:
     assert "flock -n" in runner
     assert "python -m agent.catchup" in runner
     assert "python -m data.filings.backfill --financials" in runner
+    assert "python -m data.filings.esef" in runner
     assert "--frozen --no-sync" in runner
-    for name in ("daily", "universe", "profiles", "financials", "backup"):
+    for name in ("daily", "universe", "profiles", "financials", "esef", "backup"):
         service = (SYSTEMD / f"marketmind-{name}.service").read_text(encoding="utf-8")
         timer = (SYSTEMD / f"marketmind-{name}.timer").read_text(encoding="utf-8")
         assert f"run-job.sh {name}" in service
@@ -221,6 +222,7 @@ def test_timers_and_shared_job_runner() -> None:
     assert "*-02,05,08,11-01 04:00:00" in (SYSTEMD / "marketmind-financials.timer").read_text(
         encoding="utf-8"
     )
+    assert "*-*-01 05:00:00" in (SYSTEMD / "marketmind-esef.timer").read_text(encoding="utf-8")
     assert "MARKETMIND_BACKUP_REMOTE" in (ROOT / "deploy/backup-set.sh").read_text(encoding="utf-8")
     for script in (
         "run-job.sh",
@@ -264,3 +266,11 @@ def test_dashboard_role_and_private_logs_documented() -> None:
     assert "tailscale serve --bg http://127.0.0.1:8001" in runbook
     logrotate = (ROOT / "deploy/logrotate").read_text(encoding="utf-8")
     assert "create 0600 root root" in logrotate
+
+
+def test_initial_filings_backfills_are_documented_before_timers() -> None:
+    runbook = RUNBOOK.read_text(encoding="utf-8")
+    schedule = runbook.index("## 6. Install the schedule")
+    assert runbook.index("data.filings.backfill --issuers") < schedule
+    assert runbook.index("data.filings.backfill --financials") < schedule
+    assert runbook.index("python -m data.filings.esef") < schedule

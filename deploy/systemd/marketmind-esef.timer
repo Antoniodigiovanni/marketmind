@@ -1,0 +1,10 @@
+[Unit]
+Description=marketmind monthly European filings schedule
+
+[Timer]
+OnCalendar=*-*-01 05:00:00
+Persistent=true
+Unit=marketmind-esef.service
+
+[Install]
+WantedBy=timers.target

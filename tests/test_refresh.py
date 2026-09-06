@@ -31,8 +31,29 @@ def test_refresh_commands_are_ordered_and_date_bounded() -> None:
     assert commands[1][1:] == ["data/fetch.py", "--as-of", DATE]
     assert commands[2][1:] == ["-m", "agent.ingestion", DATE]
     assert commands[3][1:] == ["-m", "agent.views", DATE]
+    assert commands[4][1:] == ["-m", "data.filings.fetch", "--run-date", DATE]
     with pytest.raises(ValueError):
         refresh.refresh_commands("31-08-2026")
+
+
+def test_filings_run_last_so_an_edgar_outage_spares_the_other_steps() -> None:
+    """EDGAR is the only step whose upstream fails independently of the rest."""
+    commands = refresh.refresh_commands(DATE)
+
+    assert commands[-1][1:] == ["-m", "data.filings.fetch", "--run-date", DATE]
+
+    completed: list[list[str]] = []
+
+    def runner(command, **kwargs):
+        completed.append(command)
+        if command[1:3] == ["-m", "data.filings.fetch"]:
+            raise subprocess.CalledProcessError(1, command)
+        return subprocess.CompletedProcess(command, 0)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        refresh.run_refresh_commands(DATE, runner=runner)
+
+    assert len(completed) == len(commands)
 
 
 def test_run_refresh_commands_stops_after_first_failure() -> None:

@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-job="${1:?usage: run-job.sh daily|universe|profiles|financials|backup}"
+job="${1:?usage: run-job.sh daily|universe|profiles|financials|esef|backup}"
 cd "${MARKETMIND_INSTALL_DIR:-/srv/marketmind}"
 compose='docker compose -f docker-compose.prod.yml'
 lock=state/refresh/daily-refresh.lock
@@ -19,6 +19,10 @@ case "$job" in
   financials)
     flock -n "$lock" $compose run --rm marketmind uv run --frozen --no-sync \
       python -m data.filings.backfill --financials
+    ;;
+  esef)
+    flock -n "$lock" $compose run --rm marketmind uv run --frozen --no-sync \
+      python -m data.filings.esef
     ;;
   backup)
     flock -n "$lock" ./deploy/backup-set.sh
