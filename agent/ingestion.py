@@ -21,7 +21,12 @@ from agent.company_profile import build_company_profile
 from agent.embedding import hash_embed
 from agent.llm import ChatClient, parse_json_response
 from data.db.aggregate_facts import create_aggregate_fact
-from data.db.articles import register_article, set_article_status
+from data.db.articles import (
+    get_feed_checkpoints,
+    register_article,
+    set_article_status,
+    update_feed_checkpoints,
+)
 from data.db.companies import get_company, update_company_description
 from data.db.company_profiles import create_profile, get_current_profile
 from data.db.facts import create_fact, get_current_facts, search_similar_facts
@@ -36,11 +41,20 @@ SOURCE_CREDIBILITY: dict[str, float] = {
     "google-news": 0.55,
     "yahoo-finance": 0.6,
 }
+PUBLISHER_CREDIBILITY: dict[str, float] = {
+    "associated press": 0.9,
+    "bloomberg": 0.9,
+    "reuters": 0.95,
+    "sec.gov": 1.0,
+}
 RECENCY_LAMBDA = 0.05
 
 # Consecutive extraction failures tolerated before the run gives up. A provider
 # outage otherwise burns the whole universe to 'error' over hours of dead calls.
 MAX_CONSECUTIVE_FAILURES = int(os.getenv("INGEST_MAX_CONSECUTIVE_FAILURES", "20"))
+MIN_PRE_SCORE = float(os.getenv("INGEST_PRE_SCORE_MIN", "0.30"))
+MAX_NEWS_PER_FEED = int(os.getenv("INGEST_MAX_NEWS_PER_FEED", "30"))
+MAX_GOOGLE_WINDOW_DAYS = 7
 
 RAW_NEWS_DIR = Path(__file__).resolve().parent.parent / "data" / "raw" / "news"
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -62,15 +76,24 @@ def _load_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8")
 
 
-def pre_score(source: str, published_at: str, as_of: str) -> float:
+def pre_score(source: str, published_at: str, as_of: str, *, publisher: str | None = None) -> float:
     """Compute source credibility × exponential recency decay."""
-    credibility = SOURCE_CREDIBILITY.get(source, 0.5)
+    publisher_key = publisher.casefold().strip() if publisher else ""
+    credibility = PUBLISHER_CREDIBILITY.get(publisher_key, SOURCE_CREDIBILITY.get(source, 0.5))
     published = dt.datetime.fromisoformat(published_at)
     if published.tzinfo is None:
         published = published.replace(tzinfo=dt.UTC)
     as_of_midnight = dt.datetime.combine(dt.date.fromisoformat(as_of), dt.time.min, tzinfo=dt.UTC)
     days_old = max((as_of_midnight - published).total_seconds() / 86_400.0, 0.0)
     return credibility * math.exp(-RECENCY_LAMBDA * days_old)
+
+
+def google_window_days(as_of: dt.date, last_published_at: dt.datetime | None) -> int:
+    """Return a 1–7 day Google query window derived from the feed checkpoint."""
+    if last_published_at is None:
+        return MAX_GOOGLE_WINDOW_DAYS
+    elapsed = (as_of - last_published_at.date()).days + 1
+    return max(1, min(elapsed, MAX_GOOGLE_WINDOW_DAYS))
 
 
 def parse_fact_list_response(text: str) -> list[dict[str, Any]] | None:
@@ -411,7 +434,7 @@ async def run_daily_ingest(
 
     Returns:
         Summary counts keyed by articles_fetched, articles_skipped,
-        articles_redundant, articles_errored, facts_written,
+        articles_filtered, articles_redundant, articles_errored, facts_written,
         facts_superseded, aggregate_written, profiles_built, profiles_failed.
 
     Raises:
@@ -422,6 +445,10 @@ async def run_daily_ingest(
     date_as_date = dt.date.fromisoformat(date)
     if llm is None:
         raise ValueError("llm callable is required")
+    if not 0.0 <= MIN_PRE_SCORE <= 1.0:
+        raise ValueError("INGEST_PRE_SCORE_MIN must be between 0 and 1")
+    if MAX_NEWS_PER_FEED <= 0:
+        raise ValueError("INGEST_MAX_NEWS_PER_FEED must be positive")
     description_fetcher = description_fetcher or fetch_company_description
 
     universe = universe if universe is not None else get_universe(date)
@@ -431,6 +458,7 @@ async def run_daily_ingest(
     summary = {
         "articles_fetched": 0,
         "articles_skipped": 0,
+        "articles_filtered": 0,
         "articles_redundant": 0,
         "articles_errored": 0,
         "facts_written": 0,
@@ -497,11 +525,20 @@ async def run_daily_ingest(
             )
 
             if not profiles_only:
+                feed_checkpoints = await get_feed_checkpoints(conn, company_id=company_id)
                 try:
                     articles = (
                         news_fetcher(ticker, name)
                         if news_fetcher is not None
-                        else fetch_company_news(ticker, name)
+                        else fetch_company_news(
+                            ticker,
+                            name,
+                            max_per_feed=MAX_NEWS_PER_FEED,
+                            google_window_days=google_window_days(
+                                date_as_date, feed_checkpoints.get("google-news")
+                            ),
+                            published_after=feed_checkpoints,
+                        )
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(f"news fetch failed for {ticker}: {exc}")
@@ -509,11 +546,21 @@ async def run_daily_ingest(
                 archive.append(articles)
                 summary["articles_fetched"] += len(articles)
 
+                published_by_source: dict[str, dt.datetime] = {}
+
                 for article in articles:
-                    score = pre_score(article.source, article.published_at, date)
+                    score = pre_score(
+                        article.source,
+                        article.published_at,
+                        date,
+                        publisher=article.publisher,
+                    )
                     published = dt.datetime.fromisoformat(article.published_at)
                     if published.tzinfo is None:
                         published = published.replace(tzinfo=dt.UTC)
+                    previous = published_by_source.get(article.source)
+                    if previous is None or published > previous:
+                        published_by_source[article.source] = published
                     article_id = await register_article(
                         conn,
                         company_id=company_id,
@@ -521,6 +568,7 @@ async def run_daily_ingest(
                         content_hash=article.content_hash,
                         url=article.url,
                         source=article.source,
+                        publisher=article.publisher,
                         title=article.title,
                         summary=article.summary,
                         published_at=published,
@@ -528,6 +576,15 @@ async def run_daily_ingest(
                     )
                     if article_id is None:
                         summary["articles_skipped"] += 1
+                        continue
+                    if score < MIN_PRE_SCORE:
+                        await set_article_status(
+                            conn,
+                            article_id=article_id,
+                            company_id=company_id,
+                            status="filtered",
+                        )
+                        summary["articles_filtered"] += 1
                         continue
 
                     current_facts = await get_current_facts(
@@ -625,6 +682,13 @@ async def run_daily_ingest(
                                 "country": country_str,
                             }
                         )
+
+                await update_feed_checkpoints(
+                    conn,
+                    company_id=company_id,
+                    run_date=date_as_date,
+                    published_by_source=published_by_source,
+                )
 
             tickers_done += 1
             if progress is not None:

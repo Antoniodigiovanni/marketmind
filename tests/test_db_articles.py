@@ -7,7 +7,12 @@ import uuid
 
 import pytest
 
-from data.db.articles import register_article, set_article_status
+from data.db.articles import (
+    get_feed_checkpoints,
+    register_article,
+    set_article_status,
+    update_feed_checkpoints,
+)
 from data.db.companies import create_company
 
 pytestmark = pytest.mark.asyncio
@@ -33,6 +38,51 @@ async def test_register_article_returns_id_for_a_new_article(pg_conn) -> None:
         pre_score=0.5,
     )
     assert isinstance(article_id, uuid.UUID)
+
+
+async def test_register_article_persists_publisher(pg_conn) -> None:
+    company_id = await _company(pg_conn)
+    article_id = await register_article(
+        pg_conn,
+        company_id=company_id,
+        url_hash="hash1",
+        content_hash="content1",
+        url="http://example.com/a",
+        source="google-news",
+        publisher="Reuters",
+        title="Headline",
+        published_at=dt.datetime(2020, 1, 1, tzinfo=dt.UTC),
+        pre_score=0.5,
+    )
+
+    row = await (
+        await pg_conn.execute("SELECT publisher FROM articles WHERE article_id = %s", (article_id,))
+    ).fetchone()
+    assert row == ("Reuters",)
+
+
+async def test_feed_checkpoints_only_move_forward(pg_conn) -> None:
+    company_id = await _company(pg_conn)
+    newest = dt.datetime(2026, 8, 4, 9, tzinfo=dt.UTC)
+    older = newest - dt.timedelta(days=1)
+
+    await update_feed_checkpoints(
+        pg_conn,
+        company_id=company_id,
+        run_date=dt.date(2026, 8, 4),
+        published_by_source={"google-news": newest, "yahoo-finance": older},
+    )
+    await update_feed_checkpoints(
+        pg_conn,
+        company_id=company_id,
+        run_date=dt.date(2026, 8, 5),
+        published_by_source={"google-news": older},
+    )
+
+    assert await get_feed_checkpoints(pg_conn, company_id=company_id) == {
+        "google-news": newest,
+        "yahoo-finance": older,
+    }
 
 
 async def test_register_article_returns_none_for_same_article_same_company(pg_conn) -> None:

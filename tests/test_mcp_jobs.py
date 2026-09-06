@@ -105,7 +105,7 @@ def _fake_llm(messages: list[dict[str, str]]) -> str:
     return "REDUNDANT"
 
 
-def _fake_news(ticker: str, name: str) -> list[Article]:
+def _fake_news(ticker: str, name: str, **kwargs: object) -> list[Article]:
     if ticker != "AAPL":
         return []
     return [

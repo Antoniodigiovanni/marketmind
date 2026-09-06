@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import datetime as dt
+
+import pytest
 import requests
 
 from data.sources.rss import (
     Article,
     fetch_company_news,
     google_news_url,
+    normalize_title,
     parse_feed,
     yahoo_finance_url,
 )
@@ -20,6 +24,7 @@ ITEM = """<item>
 <link>{link}</link>
 <description>{summary}</description>
 <pubDate>Tue, 04 Aug 2026 09:00:00 GMT</pubDate>
+<source url="https://publisher.example">Example Publisher</source>
 </item>"""
 
 
@@ -50,6 +55,12 @@ def test_google_news_url_quotes_ticker_and_name() -> None:
     assert "news.google.com/rss/search" in url
     assert "%22AAPL%22" in url
     assert "%22Apple%20Inc%22" in url
+    assert "when%3A1d" in url
+
+
+def test_google_news_url_rejects_an_unbounded_window() -> None:
+    with pytest.raises(ValueError, match="between 1 and 7"):
+        google_news_url("AAPL", "Apple Inc", window_days=8)
 
 
 def test_yahoo_finance_url_contains_symbol() -> None:
@@ -72,6 +83,7 @@ def test_parse_feed_extracts_article_fields() -> None:
     assert articles[0].source == "google-news"
     assert articles[0].url == "https://example.com/1"
     assert articles[0].title == "title-0"
+    assert articles[0].publisher == "Example Publisher"
     assert articles[0].published_at.endswith("+00:00")
 
 
@@ -86,6 +98,18 @@ def test_parse_feed_honours_limit() -> None:
     assert len(articles) == 1
 
 
+def test_parse_feed_drops_entries_at_or_below_high_water() -> None:
+    articles = parse_feed(
+        _feed_bytes("https://example.com/1"),
+        "google-news",
+        "AAPL",
+        limit=10,
+        published_after=dt.datetime(2026, 8, 4, 9, tzinfo=dt.UTC),
+    )
+
+    assert articles == []
+
+
 def test_fetch_company_news_combines_feeds_and_deduplicates_urls() -> None:
     shared = "https://example.com/shared"
     session = _FakeSession(
@@ -97,9 +121,9 @@ def test_fetch_company_news_combines_feeds_and_deduplicates_urls() -> None:
 
     articles = fetch_company_news("AAPL", "Apple Inc", session=session, max_per_feed=10)
 
-    assert len(articles) == 3
-    assert {a.url for a in articles} == {shared, "https://example.com/g1", "https://example.com/y1"}
-    assert {a.source for a in articles} == {"google-news", "yahoo-finance"}
+    assert len(articles) == 2
+    assert {a.url for a in articles} == {shared, "https://example.com/g1"}
+    assert {a.source for a in articles} == {"google-news"}
 
 
 def test_fetch_company_news_skips_failed_feed() -> None:
@@ -130,3 +154,16 @@ def test_article_hashes_are_deterministic() -> None:
 
     assert a.url_hash == b.url_hash
     assert a.content_hash == b.content_hash
+
+
+def test_normalized_title_removes_publisher_suffix_and_punctuation() -> None:
+    assert normalize_title(
+        "Apple raises guidance! - Reuters", publisher="Reuters"
+    ) == normalize_title("APPLE raises guidance", publisher="reuters.com")
+
+
+def test_google_wrapper_with_explicit_target_is_unwrapped() -> None:
+    wrapped = "https://news.google.com/rss/articles/x?url=https%3A%2F%2Fexample.com%2Fstory"
+    articles = parse_feed(_feed_bytes(wrapped), "google-news", "AAPL", limit=10)
+
+    assert articles[0].url == "https://example.com/story"

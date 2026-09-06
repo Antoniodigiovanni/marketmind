@@ -112,6 +112,8 @@ locally, export the values in your shell or pass `--env-file .env` to
 | `SEC_CONTACT_NAME` | Operator name sent to SEC EDGAR and filings.xbrl.org (required) |
 | `SEC_CONTACT_EMAIL` | Operator email sent with every EDGAR request (required) |
 | `INGEST_MAX_CONSECUTIVE_FAILURES` | Consecutive extraction failures before the ingest run aborts (default 20) |
+| `INGEST_PRE_SCORE_MIN` | Minimum credibility/recency score sent to extraction (default 0.30) |
+| `INGEST_MAX_NEWS_PER_FEED` | Maximum accepted articles from each company feed (default 30) |
 | `MARKETMIND_DATABASE_DSN` | Postgres connection string; unset falls back to the local docker-compose test database |
 | `MARKETMIND_DB_PASSWORD` | Production Postgres password, supplied to libpq separately from the DSN |
 | `MARKETMIND_MCP_TOKEN` | Bearer token the MCP client must present on every request |
@@ -179,7 +181,7 @@ The MCP server (`server/mcp.py`) exposes the following tools:
 |---|---|---|
 | `get_prices` | `ticker`, `start?`, `end?` | Daily `{date, open, high, low, close, volume}` |
 | `get_volatility` | `ticker`, `start?`, `end?` | `{date, ticker, rv_20d, rv_60d}` (annualised %) or vol-index close for `^VIX` / `^VSTOXX` |
-| `get_news` | `ticker`, `since?`, `limit?` | Recent articles `{url, source, ticker, published_at, title, description}` |
+| `get_news` | `ticker`, `since?`, `limit?` | Recent articles `{url, source, publisher, ticker, published_at, title, summary}` |
 | `search_news` | `query`, `limit?` | Full-text news search, recency-ranked |
 | `get_facts` | `ticker`, `as_of` | Point-in-time facts valid on `as_of` |
 | `get_market_views` | `as_of`, `ticker?`, `scope?`, `schema_version?`, `limit?` | Views for `as_of` or earlier with derived structure, newest first |

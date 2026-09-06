@@ -120,6 +120,7 @@ async def test_news_tools_read_postgres(pg_conn, monkeypatch) -> None:
         content_hash="content-1",
         url="https://example.com/apple",
         source="google-news",
+        publisher="Reuters",
         title="Apple unveils new chip",
         summary="A new M-series chip was announced.",
         published_at=dt.datetime(2026, 8, 4, 8, tzinfo=dt.UTC),
@@ -128,6 +129,7 @@ async def test_news_tools_read_postgres(pg_conn, monkeypatch) -> None:
     monkeypatch.setattr(mcp_mod, "_pg_pool", _pool_returning(pg_conn))
     rows = await mcp_mod.get_news("AAPL", since="2026-08-04")
     assert rows[0]["summary"] == "A new M-series chip was announced."
+    assert rows[0]["publisher"] == "Reuters"
     assert (await mcp_mod.search_news("M-series"))[0]["ticker"] == "AAPL"
     assert await mcp_mod.get_news("NOPE") == []
 

@@ -258,6 +258,7 @@ CREATE TABLE IF NOT EXISTS articles (
     content_hash TEXT        NOT NULL,
     url          TEXT        NOT NULL,
     source       TEXT        NOT NULL,    -- 'google-news' | 'yahoo-finance' | 'sec:8-K'
+    publisher    TEXT,
     title        TEXT,
     summary      TEXT,
     published_at TIMESTAMPTZ NOT NULL,
@@ -271,7 +272,6 @@ CREATE INDEX IF NOT EXISTS idx_articles_published ON articles (published_at DESC
 CREATE INDEX IF NOT EXISTS idx_articles_title_trgm   ON articles USING gin (title gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_articles_summary_trgm ON articles USING gin (summary gin_trgm_ops);
 
-
 -- Attribution and processing status are PER COMPANY, so one macro story can be
 -- processed for 400 companies instead of being dropped for 399 (audit A1.2).
 CREATE TABLE IF NOT EXISTS article_companies (
@@ -279,7 +279,7 @@ CREATE TABLE IF NOT EXISTS article_companies (
     company_id UUID NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
     pre_score  DOUBLE PRECISION NOT NULL,
     status     TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending','processed','redundant','error')),
+        CHECK (status IN ('pending','processed','redundant','filtered','error')),
     error      TEXT,                      -- last failure reason when status='error'
     attempts   INTEGER NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -548,8 +548,9 @@ CREATE INDEX IF NOT EXISTS idx_runs_recent ON agent_runs (job_type, started_at D
 CREATE TABLE IF NOT EXISTS ingest_checkpoints (
     run_date   DATE NOT NULL,
     company_id UUID NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
-    stage      TEXT NOT NULL,             -- 'profile' | 'fetch' | 'extract'
+    stage      TEXT NOT NULL,             -- 'profile' | 'fetch' | 'extract' | 'feed:<source>'
     status     TEXT NOT NULL,             -- 'done' | 'failed'
+    last_published_at TIMESTAMPTZ,        -- high-water mark for feed stages
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (run_date, company_id, stage)
 );

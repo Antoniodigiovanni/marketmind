@@ -220,7 +220,7 @@ async def get_news(
         limit: Maximum articles to return.
 
     Returns:
-        List of {url, source, ticker, published_at, title, summary}.
+        List of {url, source, publisher, ticker, published_at, title, summary}.
     """
     pool = await _pg_pool()
     async with pool.connection() as conn:
@@ -245,9 +245,9 @@ async def search_news(query: str, limit: int = 50) -> list[dict[str, object]]:
         limit: Maximum articles to return.
 
     Returns:
-        List of {url, source, ticker, published_at, title, summary} ranked
-        by recency. Only the stored title and summary are searched — RSS
-        never gives us the article body.
+        List of {url, source, publisher, ticker, published_at, title, summary}
+        ranked by recency. Only the stored title and summary are searched —
+        RSS never gives us the article body.
     """
     pool = await _pg_pool()
     async with pool.connection() as conn:
