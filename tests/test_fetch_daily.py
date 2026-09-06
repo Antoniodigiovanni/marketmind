@@ -198,6 +198,81 @@ async def test_fetch_volatility_indices_writes_prices(pg_conn, monkeypatch) -> N
     assert rows[0]["close"] == 14.2
 
 
+async def test_fetch_benchmark_prices_bootstraps_and_writes_all_series(
+    pg_conn, monkeypatch
+) -> None:
+    calls: list[tuple[list[str], str, str]] = []
+
+    def fake_ohlcv(symbols: list[str], start: str, end: str) -> pl.DataFrame:
+        calls.append((symbols, start, end))
+        return pl.DataFrame(
+            {
+                "date": [dt.datetime(2026, 8, 4, 20, 0, tzinfo=dt.UTC)] * len(symbols),
+                "ticker": symbols,
+                "open": [100.0] * len(symbols),
+                "high": [102.0] * len(symbols),
+                "low": [99.0] * len(symbols),
+                "close": [101.0] * len(symbols),
+                "volume": [0] * len(symbols),
+            }
+        )
+
+    monkeypatch.setattr(fetch_mod, "fetch_ohlcv", fake_ohlcv)
+    summary = await fetch_mod.fetch_benchmark_prices(pg_conn, as_of="2026-08-04")
+
+    assert len(calls) == 1
+    assert calls[0][1:] == (fetch_mod.HISTORY_START, "2026-08-05")
+    assert set(summary["fetched"]) == {benchmark.key for benchmark in fetch_mod.BENCHMARKS}
+    stoxx = await get_current_listing(pg_conn, provider="yahoo", symbol="^STOXX")
+    rows = await get_prices(pg_conn, listing_id=stoxx["listing_id"])
+    assert rows[0]["close"] == 101.0
+    assert rows[0]["date"] == dt.date(2026, 8, 4)
+
+
+async def test_fetch_benchmark_prices_is_incremental_and_reports_current(
+    pg_conn, monkeypatch
+) -> None:
+    benchmark = fetch_mod.BENCHMARKS[0]
+    listing_id = await fetch_mod.ensure_index_listing(
+        pg_conn, symbol=benchmark.symbol, name=benchmark.name
+    )
+    await upsert_prices(
+        pg_conn,
+        listing_id=listing_id,
+        rows=[
+            {
+                "date": dt.date(2026, 8, 4),
+                "open": 100.0,
+                "high": 102.0,
+                "low": 99.0,
+                "close": 101.0,
+                "volume": 0,
+                "currency": benchmark.currency,
+            }
+        ],
+    )
+
+    def fake_ohlcv(symbols: list[str], start: str, end: str) -> pl.DataFrame:
+        assert benchmark.symbol not in symbols
+        return pl.DataFrame()
+
+    monkeypatch.setattr(fetch_mod, "fetch_ohlcv", fake_ohlcv)
+    summary = await fetch_mod.fetch_benchmark_prices(pg_conn, as_of="2026-08-04")
+
+    assert summary["current"] == [benchmark.key]
+    assert len(summary["no_data"]) == len(fetch_mod.BENCHMARKS) - 1
+
+
+async def test_fetch_benchmark_prices_isolates_source_failure(pg_conn, monkeypatch) -> None:
+    def fail(*args: object, **kwargs: object) -> pl.DataFrame:
+        raise RuntimeError("source unavailable")
+
+    monkeypatch.setattr(fetch_mod, "fetch_ohlcv", fail)
+    summary = await fetch_mod.fetch_benchmark_prices(pg_conn, as_of="2026-08-04")
+
+    assert set(summary["failed"]) == {benchmark.key for benchmark in fetch_mod.BENCHMARKS}
+
+
 async def test_sync_fx_rates_writes_and_is_incremental(pg_conn, monkeypatch) -> None:
     def fake_fetch_series(series_key: str, start: str, end: str) -> pl.DataFrame:
         return pl.DataFrame({"date": [dt.date(2026, 8, 4)], "value": [1.1]})

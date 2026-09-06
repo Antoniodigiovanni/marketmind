@@ -3,8 +3,9 @@
 **Market-memory microservice for Hermes — S&P 500 + Eurostoxx 600.**
 
 marketmind owns a growing database of market data — daily closing prices for
-~1,100 US and European equities, news, extracted facts, and historical market
-views — and exposes that database to Hermes through **MCP**.
+~1,100 US and European equities, market and sector benchmarks, news, extracted
+facts, and historical market views — and exposes that database to Hermes
+through **MCP**.
 The MCP client is both a consumer and a writer: it reads prices, news, facts, and
 views through MCP tools, and writes free-text market snapshots back into the
 database, which a structuring job then turns into queryable JSON.
@@ -29,7 +30,7 @@ Hermes
         ▼
    marketmind
    ├── server/mcp.py     read/write tools over the database
-   ├── daily jobs        universe refresh · price + macro fetch · news ingest · view structuring
+   ├── daily jobs        universe refresh · equity/benchmark prices · macro · news · views
    └── storage
        ├── PostgreSQL    identity, prices, news, facts, views, filings, audit
        ├── Parquet       immutable raw data (data/raw/) and derived series (state/processed/)
@@ -179,7 +180,8 @@ The MCP server (`server/mcp.py`) exposes the following tools:
 
 | Tool | Args | Returns |
 |---|---|---|
-| `get_prices` | `ticker`, `start?`, `end?` | Daily `{date, open, high, low, close, volume}` |
+| `get_prices` | `ticker`, `start?`, `end?`, `to_currency?` | Daily `{date, open, high, low, close, volume}` for an equity or benchmark Yahoo symbol |
+| `get_benchmarks` | `kind?`, `region?` | Configured series metadata and stored date coverage |
 | `get_volatility` | `ticker`, `start?`, `end?` | `{date, ticker, rv_20d, rv_60d}` (annualised %) or vol-index close for `^VIX` / `^VSTOXX` |
 | `get_news` | `ticker`, `since?`, `limit?` | Recent articles `{url, source, publisher, ticker, published_at, title, summary}` |
 | `search_news` | `query`, `limit?` | Full-text news search, recency-ranked |
@@ -209,6 +211,28 @@ is recorded in `agent_runs` either way.
 `tickers` narrows the ingest to a subset of the point-in-time universe, which
 is the practical way to trigger a small run on demand; the scheduled timer
 still covers the full universe.
+
+### Benchmark prices
+
+The daily price refresh incrementally stores 13 free Yahoo series in the same
+PostgreSQL `listings` and `prices` tables as equity and volatility-index bars:
+
+- Market anchors: S&P 500 (`^GSPC`) and STOXX Europe 600 (`^STOXX`).
+- S&P 500 sectors: Energy (`^SP500-10`), Materials (`^SP500-15`), Industrials
+  (`^SP500-20`), Consumer Discretionary (`^SP500-25`), Consumer Staples
+  (`^SP500-30`), Health Care (`^SP500-35`), Financials (`^SP500-40`),
+  Information Technology (`^SP500-45`), Communication Services (`^SP500-50`),
+  Utilities (`^SP500-55`), and Real Estate (`^SP500-60`).
+
+Call `get_benchmarks()` to discover stable keys, Yahoo symbols, classification,
+native currency, and the first/last stored dates. Read a series with
+`get_prices(symbol, start=..., end=as_of)`; the inclusive `end` cutoff is the
+point-in-time boundary. On the first refresh, missing series backfill from
+2015-01-01. Later runs start at the last stored date plus one day. Source
+failures are isolated and reported in the price-refresh log; they do not stop
+the remaining daily steps. Yahoo's free delayed adjusted OHLCV is the only new
+source, so no key, paid subscription, schema migration, or separate schedule is
+required.
 
 `run_daily_refresh` runs the same ordered entry point as cron and returns
 immediately. Both paths use `state/refresh/daily-refresh.lock`, so a scheduled

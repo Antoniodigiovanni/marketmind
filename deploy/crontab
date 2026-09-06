@@ -16,7 +16,7 @@
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# Daily 06:10 — price/macro fetch + news ingest + market-view structuring.
+# Daily 06:10 — equity/benchmark price + macro fetch, news ingest, view structuring.
 # agent.refresh owns the shared lock so MCP-triggered runs use the same guard.
 10 6 * * * root sh -c 'cd /srv/marketmind && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m agent.refresh "$(date -I)"' >> /var/log/marketmind/daily.log 2>&1
 

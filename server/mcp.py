@@ -23,6 +23,7 @@ from agent.embedding import hash_embed
 from agent.refresh import launch_refresh, refresh_status
 from agent.views import get_market_views as get_views
 from agent.views import save_market_view as save_view
+from data.benchmarks import get_benchmarks as benchmark_registry
 from data.db import prices as prices_db
 from data.db.articles import get_news as articles_get_news
 from data.db.articles import search_news as articles_search_news
@@ -124,10 +125,10 @@ async def get_prices(
     end: str | None = None,
     to_currency: str | None = None,
 ) -> list[dict[str, object]]:
-    """Return daily OHLCV rows for a ticker.
+    """Return daily OHLCV rows for an equity or benchmark Yahoo symbol.
 
     Args:
-        ticker: Yahoo symbol, e.g. 'AAPL' or 'ASML.AS'.
+        ticker: Yahoo symbol, e.g. 'AAPL', 'ASML.AS', '^GSPC', or '^STOXX'.
         start: Optional start date (YYYY-MM-DD).
         end: Optional end date (YYYY-MM-DD).
         to_currency: Optional ISO 4217 code. When set, prices are converted
@@ -154,6 +155,45 @@ async def get_prices(
         [(r["date"], r["open"], r["high"], r["low"], r["close"], r["volume"]) for r in rows],
         ["date", "open", "high", "low", "close", "volume"],
     )
+
+
+@mcp.tool()
+async def get_benchmarks(
+    kind: str | None = None,
+    region: str | None = None,
+) -> list[dict[str, object]]:
+    """Discover configured market and sector benchmark price series.
+
+    Args:
+        kind: Optional exact filter: ``market`` or ``sector``.
+        region: Optional exact filter: ``US`` or ``Europe``.
+
+    Returns:
+        List of {key, symbol, name, kind, region, currency, sector,
+        first_date, last_date}. Dates describe stored coverage and are null
+        before the first refresh. Read a series with ``get_prices(symbol,
+        start?, end=as_of)`` for a point-in-time-safe cutoff.
+
+    Raises:
+        ValueError: If kind or region is not one of the documented values.
+    """
+    benchmarks = benchmark_registry(kind=kind, region=region)
+    pool = await _pg_pool()
+    records: list[dict[str, object]] = []
+    async with pool.connection() as conn:
+        for benchmark in benchmarks:
+            record = benchmark.as_dict()
+            listing = await get_current_listing(conn, provider="yahoo", symbol=benchmark.symbol)
+            first_date: dt.date | None = None
+            last_date: dt.date | None = None
+            if listing is not None:
+                first_date, last_date = await prices_db.get_price_bounds(
+                    conn, listing_id=listing["listing_id"]
+                )
+            record["first_date"] = first_date.isoformat() if first_date else None
+            record["last_date"] = last_date.isoformat() if last_date else None
+            records.append(record)
+    return records
 
 
 @mcp.tool()

@@ -163,7 +163,7 @@ reach it.
 
 | When | Job |
 |---|---|
-| daily 06:10 | price/macro fetch + news ingest + market-view structuring |
+| daily 06:10 | equity/benchmark price + macro fetch, news ingest, market-view structuring |
 | Mondays 06:00 | universe refresh + symbol resolution |
 | annually, 5 Jan 06:30 | company profile refresh (`--backfill --profiles-only`) |
 | nightly 02:30 | `data/raw/` + mutable state tarball → `/srv/marketmind-backups/` (14-day retention) |
@@ -186,6 +186,12 @@ daily rotations; it does not depend on a local cron-mail setup.
 
 Edit `deploy/crontab` and reinstall it with the `install` command from setup to
 change a schedule.
+
+Benchmark series use the existing daily entry and PostgreSQL price tables; no
+new cron entry or schema migration is required. The first daily run after
+deployment backfills missing benchmark history from 2015-01-01, and subsequent
+runs are incremental. Operators can inspect stored coverage with the
+`get_benchmarks` MCP tool before relying on a series.
 
 **Known trade-off:** plain cron has no equivalent of systemd's
 `Persistent=true` (a missed run — box was off at 06:10 — just doesn't

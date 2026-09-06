@@ -28,8 +28,9 @@ advance through checksum-verified files in `data/db/postgres_migrations/`.
 
 - [x] Point-in-time company identifiers and provider listings in PostgreSQL.
 - [x] S&P 500 and STOXX Europe 600 refresh with append-only membership history.
-- [x] Incremental prices, FX, volatility indices, macro data, dividends, and
-      short interest persisted in PostgreSQL with immutable filesystem archives.
+- [x] Incremental equity and benchmark prices, FX, volatility indices, macro
+      data, dividends, and short interest persisted in PostgreSQL with immutable
+      filesystem archives.
 - [x] RSS/news ingestion, deduplication, versioned facts, and pgvector retrieval.
 - [x] Immutable market views and versioned structured representations.
 - [x] SEC filings, normalized filing text, insider ownership, 13F holdings, and

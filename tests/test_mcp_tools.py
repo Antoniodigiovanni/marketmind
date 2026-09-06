@@ -111,6 +111,45 @@ async def test_volatility_index_tool(pg_conn, monkeypatch) -> None:
     assert (await mcp_mod.get_volatility("^VIX"))[0]["close"] == 14.2
 
 
+async def test_benchmark_discovery_and_point_in_time_price_read(pg_conn, monkeypatch) -> None:
+    listing_id = await ensure_index_listing(pg_conn, symbol="^GSPC", name="S&P 500")
+    await upsert_prices(
+        pg_conn,
+        listing_id=listing_id,
+        rows=[
+            {
+                "date": date,
+                "open": close - 1.0,
+                "high": close + 1.0,
+                "low": close - 2.0,
+                "close": close,
+                "volume": 100,
+                "currency": "USD",
+            }
+            for date, close in (
+                (dt.date(2026, 8, 3), 100.0),
+                (dt.date(2026, 8, 4), 105.0),
+            )
+        ],
+    )
+    monkeypatch.setattr(mcp_mod, "_pg_pool", _pool_returning(pg_conn))
+
+    markets = await mcp_mod.get_benchmarks(kind="market")
+    sp500 = next(row for row in markets if row["key"] == "sp500")
+    assert sp500["symbol"] == "^GSPC"
+    assert sp500["first_date"] == "2026-08-03"
+    assert sp500["last_date"] == "2026-08-04"
+    assert [row["date"] for row in await mcp_mod.get_prices("^GSPC", end="2026-08-03")] == [
+        "2026-08-03"
+    ]
+
+
+async def test_benchmark_discovery_validates_filters(pg_conn, monkeypatch) -> None:
+    monkeypatch.setattr(mcp_mod, "_pg_pool", _pool_returning(pg_conn))
+    with pytest.raises(ValueError, match="kind"):
+        await mcp_mod.get_benchmarks(kind="factor")
+
+
 async def test_news_tools_read_postgres(pg_conn, monkeypatch) -> None:
     company_id, _ = await _company_listing(pg_conn)
     await register_article(
