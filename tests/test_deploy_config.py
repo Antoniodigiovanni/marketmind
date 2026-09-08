@@ -227,3 +227,13 @@ def test_scheduled_logs_are_private_and_rotated() -> None:
     assert "create 0600 root root" in config
     assert "install -d -m 0700 -o root -g root" in runbook
     assert "/srv/marketmind-backups /var/log/marketmind" in runbook
+
+
+def test_dashboard_runbook_uses_tailnet_only_https_proxying() -> None:
+    runbook = DEPLOY_README_PATH.read_text(encoding="utf-8")
+
+    assert "tailscale serve --bg http://127.0.0.1:8001" in runbook
+    assert "tailscale serve status" in runbook
+    assert "tailscale serve off" in runbook
+    assert "tailscale funnel" in runbook
+    assert "Do not publish port 8001" in runbook

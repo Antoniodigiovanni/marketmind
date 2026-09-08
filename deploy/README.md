@@ -189,18 +189,41 @@ second read interface to the market-memory data, which is what MCP is for.
 
 ### Reaching it
 
-The port is published on `127.0.0.1` only, so from your laptop:
+The port is published on `127.0.0.1` only. On a production host already joined
+to the intended tailnet, expose that loopback listener through Tailscale Serve:
+
+```bash
+tailscale status
+tailscale serve --bg http://127.0.0.1:8001
+tailscale serve status
+```
+
+The first `serve` invocation may require an administrator to enable HTTPS for
+the tailnet. Its output reports the native HTTPS URL, normally
+`https://<machine>.<tailnet>.ts.net/`. Open that URL from another device in the
+same tailnet and enter any username with `MARKETMIND_DASHBOARD_TOKEN` as the
+password. Tailnet policy should limit HTTPS access to the operators who need
+the page.
+
+Keep the backend on loopback and use `tailscale serve`, not `tailscale funnel`:
+Serve is tailnet-only, while Funnel would make the endpoint public. The
+background Serve configuration persists across host and Tailscale restarts.
+To stop sharing the dashboard without stopping its container:
+
+```bash
+tailscale serve off
+```
+
+An SSH tunnel remains useful as a fallback when Tailscale Serve is unavailable:
 
 ```bash
 ssh -N -L 8001:127.0.0.1:8001 <deploy-user>@<host>
 ```
 
-Then open `http://127.0.0.1:8001` and enter any username with
-`MARKETMIND_DASHBOARD_TOKEN` as the password.
+Then open `http://127.0.0.1:8001` and use the same credentials.
 
-Exposing it beyond loopback means putting a TLS-terminating reverse proxy in
-front and setting `MARKETMIND_DASHBOARD_HOST`. HTTP Basic sends the secret on
-every request, so it must not travel unencrypted off the box.
+HTTP Basic sends the secret on every request, so any non-SSH remote path must
+terminate TLS. Do not publish port 8001 on a LAN or public interface.
 
 ### Cron logs
 
