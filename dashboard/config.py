@@ -1,0 +1,60 @@
+"""Environment configuration for the read-only operations dashboard."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+HOST_ENV = "MARKETMIND_DASHBOARD_HOST"
+PORT_ENV = "MARKETMIND_DASHBOARD_PORT"
+TOKEN_ENV = "MARKETMIND_DASHBOARD_TOKEN"
+DSN_ENV = "MARKETMIND_DASHBOARD_DSN"
+LOG_DIRS_ENV = "MARKETMIND_DASHBOARD_LOG_DIRS"
+
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8001
+MAX_TAIL_BYTES = 256 * 1024
+
+
+def host() -> str:
+    """Return the dashboard bind address, defaulting to loopback only."""
+    return os.getenv(HOST_ENV, DEFAULT_HOST).strip() or DEFAULT_HOST
+
+
+def port() -> int:
+    """Return the dashboard listen port."""
+    return int(os.getenv(PORT_ENV, str(DEFAULT_PORT)))
+
+
+def token() -> str:
+    """Return the shared secret required on every request.
+
+    Raises:
+        RuntimeError: If the token is unset or blank. The dashboard exposes
+            full run history and error text, so it never serves unauthenticated.
+    """
+    value = os.getenv(TOKEN_ENV, "").strip()
+    if not value:
+        raise RuntimeError(f"{TOKEN_ENV} must be set to a nonblank value")
+    return value
+
+
+def dsn() -> str | None:
+    """Return the read-only database DSN, or None to fall back to the app DSN."""
+    value = os.getenv(DSN_ENV, "").strip()
+    return value or None
+
+
+def log_dirs() -> list[Path]:
+    """Return the directories whose .log files the dashboard may serve.
+
+    Returns:
+        Configured directories in order, colon-separated in the environment.
+        Missing or unreadable directories are kept: the reader reports them
+        rather than failing at startup, since the cron log directory is
+        root-owned and may legitimately be unreadable.
+    """
+    configured = os.getenv(LOG_DIRS_ENV, "").strip()
+    if not configured:
+        return []
+    return [Path(part) for part in configured.split(":") if part]
