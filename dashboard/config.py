@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from data.secrets import credential
+
 HOST_ENV = "MARKETMIND_DASHBOARD_HOST"
 PORT_ENV = "MARKETMIND_DASHBOARD_PORT"
 TOKEN_ENV = "MARKETMIND_DASHBOARD_TOKEN"
@@ -33,16 +35,25 @@ def token() -> str:
         RuntimeError: If the token is unset or blank. The dashboard exposes
             full run history and error text, so it never serves unauthenticated.
     """
-    value = os.getenv(TOKEN_ENV, "").strip()
+    value = credential(TOKEN_ENV)
     if not value:
         raise RuntimeError(f"{TOKEN_ENV} must be set to a nonblank value")
     return value
 
 
-def dsn() -> str | None:
-    """Return the read-only database DSN, or None to fall back to the app DSN."""
+def dsn() -> str:
+    """Return the dashboard database DSN, refusing an absent configuration.
+
+    Returns:
+        The configured dashboard connection string.
+
+    Raises:
+        RuntimeError: If the connection string is unset or blank.
+    """
     value = os.getenv(DSN_ENV, "").strip()
-    return value or None
+    if not value:
+        raise RuntimeError(f"{DSN_ENV} must be set to a nonblank value")
+    return value
 
 
 def log_dirs() -> list[Path]:

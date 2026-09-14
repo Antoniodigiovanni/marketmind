@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+job="${1:?usage: run-job.sh daily|universe|profiles|financials|backup}"
+cd "${MARKETMIND_INSTALL_DIR:-/srv/marketmind}"
+compose='docker compose -f docker-compose.prod.yml'
+lock=state/refresh/daily-refresh.lock
+case "$job" in
+  daily)
+    $compose run --rm marketmind uv run --frozen --no-sync python -m agent.catchup
+    ;;
+  universe)
+    flock -n "$lock" sh -c \
+      'docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m data.universe.update && docker compose -f docker-compose.prod.yml run --rm marketmind uv run --frozen --no-sync python -m data.universe.resolve'
+    ;;
+  profiles)
+    flock -n "$lock" $compose run --rm marketmind uv run --frozen --no-sync \
+      python -m agent.ingestion "$(date -I)" --backfill --profiles-only
+    ;;
+  financials)
+    flock -n "$lock" $compose run --rm marketmind uv run --frozen --no-sync \
+      python -m data.filings.backfill --financials
+    ;;
+  backup)
+    flock -n "$lock" ./deploy/backup-set.sh
+    ;;
+  *)
+    echo "unknown job: $job" >&2
+    exit 2
+    ;;
+esac

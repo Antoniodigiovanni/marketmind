@@ -48,6 +48,7 @@ from data.db.market_data import get_macro as market_get_macro
 from data.db.market_data import get_short_interest as market_get_short_interest
 from data.db.pool import dsn_from_env, open_pool
 from data.db.runs import list_recent_runs
+from data.secrets import credential
 from data.universe.loader import get_universe
 
 MCP_PORT = int(os.getenv("MARKETMIND_MCP_PORT", "8000"))
@@ -1240,7 +1241,7 @@ def main() -> None:
     """
     asyncio.run(apply_schema(dsn_from_env()))
 
-    token = os.getenv("MARKETMIND_MCP_TOKEN", "").strip()
+    token = credential("MARKETMIND_MCP_TOKEN")
     if not token:
         raise RuntimeError("MARKETMIND_MCP_TOKEN must be set to a nonblank value")
     app = mcp.streamable_http_app()

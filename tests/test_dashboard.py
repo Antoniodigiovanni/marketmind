@@ -55,6 +55,15 @@ def test_the_dashboard_refuses_to_start_without_a_token(monkeypatch) -> None:
         config.token()
 
 
+def test_the_dashboard_refuses_to_use_an_unset_database_dsn(monkeypatch) -> None:
+    monkeypatch.delenv(config.DSN_ENV, raising=False)
+    with pytest.raises(RuntimeError, match=config.DSN_ENV):
+        config.dsn()
+    monkeypatch.setenv(config.DSN_ENV, "   ")
+    with pytest.raises(RuntimeError, match=config.DSN_ENV):
+        config.dsn()
+
+
 def test_it_binds_loopback_unless_told_otherwise(monkeypatch) -> None:
     monkeypatch.delenv(config.HOST_ENV, raising=False)
     assert config.host() == "127.0.0.1"

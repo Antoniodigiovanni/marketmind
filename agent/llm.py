@@ -10,6 +10,8 @@ from typing import Any
 import requests
 from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from data.secrets import credential
+
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-chat"
 DEFAULT_TIMEOUT_SECONDS = 60
@@ -58,7 +60,7 @@ class ChatClient:
         session: requests.Session | None = None,
     ) -> None:
         """Initialise the client from explicit args or environment variables."""
-        self.api_key = api_key or os.getenv("AI_API_KEY") or os.getenv("LLM_API_KEY")
+        self.api_key = api_key or credential("AI_API_KEY") or credential("LLM_API_KEY")
         if not self.api_key:
             raise LLMError("no API key: set AI_API_KEY or LLM_API_KEY")
         self.base_url = (base_url or os.getenv("LLM_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
