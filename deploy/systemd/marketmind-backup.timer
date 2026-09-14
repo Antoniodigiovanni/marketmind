@@ -1,0 +1,10 @@
+[Unit]
+Description=marketmind nightly backup schedule
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+Unit=marketmind-backup.service
+
+[Install]
+WantedBy=timers.target

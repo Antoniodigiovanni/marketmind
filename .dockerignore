@@ -18,9 +18,15 @@ __pycache__/
 .DS_Store
 
 .env*
+secrets/
+!.env.example
 AGENTS.md
 CLAUDE.md
 todo.md
 tests/
 docs/
-deploy/
+reports/
+journal/
+.claude/
+.superpowers/
+.worktrees/

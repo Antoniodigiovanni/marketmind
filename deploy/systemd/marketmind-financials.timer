@@ -1,0 +1,10 @@
+[Unit]
+Description=marketmind quarterly financials schedule
+
+[Timer]
+OnCalendar=*-02,05,08,11-01 04:00:00
+Persistent=true
+Unit=marketmind-financials.service
+
+[Install]
+WantedBy=timers.target

@@ -1,10 +1,10 @@
-# Local instruction files — never committed
-AGENTS.md
+# Local notes — never committed
 CLAUDE.md
 todo.md
 
 # Environment
 .env
+secrets/
 *.env.*
 !.env.example
 

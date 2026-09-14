@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import os
-
 import polars as pl
 import requests
+
+from data.secrets import credential
 
 FRED_OBSERVATIONS_URL = "https://api.stlouisfed.org/fred/series/observations"
 
@@ -26,7 +26,7 @@ def fetch_series(series_id: str, start: str, end: str) -> pl.DataFrame:
         ValueError: If FRED_API_KEY env var is not set.
         requests.HTTPError: On non-2xx response from FRED.
     """
-    api_key = os.environ.get("FRED_API_KEY")
+    api_key = credential("FRED_API_KEY")
     if not api_key:
         raise ValueError("FRED_API_KEY env var is not set")
 

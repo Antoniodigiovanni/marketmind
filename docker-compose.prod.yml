@@ -1,21 +1,18 @@
-# Production deploy: Postgres + the marketmind app, both always-on
-# (restart: unless-stopped). Distinct from docker-compose.yml (the
-# disposable local/CI test database only). Setup:
-#   git clone ... && cd marketmind
-#   cp .env.example .env && edit it
-#   docker compose -f docker-compose.prod.yml up -d --build
-#   sudo install -o root -g root -m 0644 deploy/crontab /etc/cron.d/marketmind
-# See deploy/README.md.
+# Production services run from a published image. The image also carries
+# this Compose file and the small host-configuration bundle under /app/deploy.
+# See deploy/README.md for extracting it without a source checkout.
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: ${MARKETMIND_POSTGRES_IMAGE:?set MARKETMIND_POSTGRES_IMAGE from release.env}
     restart: unless-stopped
     environment:
       POSTGRES_USER: marketmind
-      POSTGRES_PASSWORD: ${MARKETMIND_DB_PASSWORD:?set MARKETMIND_DB_PASSWORD in .env}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: marketmind
     volumes:
       - marketmind_postgres_data:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U marketmind -d marketmind"]
       interval: 5s
@@ -23,22 +20,33 @@ services:
       retries: 15
 
   marketmind:
-    build: .
+    image: ${MARKETMIND_IMAGE:?set MARKETMIND_IMAGE in .env}
     restart: unless-stopped
-    env_file: .env
     environment:
       # Compose networking resolves the `postgres` hostname in the DSN.
       # Supplying the password through libpq avoids URL-encoding problems.
       MARKETMIND_DATABASE_DSN: ${MARKETMIND_DATABASE_DSN:?set MARKETMIND_DATABASE_DSN in .env}
-      PGPASSWORD: ${MARKETMIND_DB_PASSWORD:?set MARKETMIND_DB_PASSWORD in .env}
-      MARKETMIND_MCP_TOKEN: ${MARKETMIND_MCP_TOKEN:?set MARKETMIND_MCP_TOKEN in .env}
+      PGPASSFILE: /run/secrets/app_pgpass
+      MARKETMIND_MCP_TOKEN_FILE: /run/secrets/mcp_token
+      AI_API_KEY_FILE: /run/secrets/llm_api_key
+      FRED_API_KEY_FILE: /run/secrets/fred_api_key
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
+      SEC_CONTACT_NAME: ${SEC_CONTACT_NAME:?set SEC_CONTACT_NAME in .env}
+      SEC_CONTACT_EMAIL: ${SEC_CONTACT_EMAIL:?set SEC_CONTACT_EMAIL in .env}
+      INGEST_MAX_CONSECUTIVE_FAILURES: ${INGEST_MAX_CONSECUTIVE_FAILURES:-20}
+      INGEST_PRE_SCORE_MIN: ${INGEST_PRE_SCORE_MIN:-0.30}
+      INGEST_MAX_NEWS_PER_FEED: ${INGEST_MAX_NEWS_PER_FEED:-30}
+      MARKETMIND_MCP_PORT: ${MARKETMIND_MCP_PORT:-8000}
       MARKETMIND_PROCESSED_DIR: /var/lib/marketmind/processed
       MARKETMIND_UNIVERSE_DIR: /var/lib/marketmind/universe
       MARKETMIND_REFRESH_DIR: /var/lib/marketmind/refresh
       HOME: /tmp/marketmind
       UV_CACHE_DIR: /tmp/uv-cache
       PYTHONDONTWRITEBYTECODE: "1"
-    # Match the checkout owner: numeric ownership is what Linux containers
+    # Match the data-directory owner: numeric ownership is what containers
     # see on the raw-data and mutable-state bind mounts below.
     user: "${MARKETMIND_UID:?set MARKETMIND_UID in .env}:${MARKETMIND_GID:?set MARKETMIND_GID in .env}"
     read_only: true
@@ -60,19 +68,26 @@ services:
       # Derived files and mutable universe CSVs live outside tracked
       # source. The entrypoint seeds universe baselines on first start.
       - ./state:/var/lib/marketmind
+    secrets:
+      - app_pgpass
+      - mcp_token
+      - llm_api_key
+      - fred_api_key
 
   # Read-only operations dashboard. Deliberately a separate service from the
   # MCP server: it holds no write path, reads through a SELECT-only database
   # role, and never becomes a second interface to the market-memory data.
   dashboard:
-    build: .
+    image: ${MARKETMIND_IMAGE:?set MARKETMIND_IMAGE in .env}
     restart: unless-stopped
-    env_file: .env
+    profiles: ["dashboard"]
     command: ["uv", "run", "--frozen", "--no-sync", "python", "-m", "dashboard.app"]
     environment:
-      MARKETMIND_DASHBOARD_DSN: ${MARKETMIND_DASHBOARD_DSN:?set MARKETMIND_DASHBOARD_DSN in .env}
-      PGPASSWORD: ${MARKETMIND_DASHBOARD_DB_PASSWORD:?set MARKETMIND_DASHBOARD_DB_PASSWORD in .env}
-      MARKETMIND_DASHBOARD_TOKEN: ${MARKETMIND_DASHBOARD_TOKEN:?set MARKETMIND_DASHBOARD_TOKEN in .env}
+      # Do not load the app's .env wholesale: it also holds the write-role
+      # database password and external-source credentials.
+      MARKETMIND_DASHBOARD_DSN: ${MARKETMIND_DASHBOARD_DSN:-}
+      PGPASSFILE: /run/secrets/dashboard_pgpass
+      MARKETMIND_DASHBOARD_TOKEN_FILE: /run/secrets/dashboard_token
       MARKETMIND_DASHBOARD_PORT: ${MARKETMIND_DASHBOARD_PORT:-8001}
       MARKETMIND_DASHBOARD_HOST: "0.0.0.0"
       MARKETMIND_DASHBOARD_LOG_DIRS: /var/lib/marketmind/refresh/logs:/var/log/marketmind
@@ -97,6 +112,25 @@ services:
     volumes:
       - ./state:/var/lib/marketmind:ro
       - /var/log/marketmind:/var/log/marketmind:ro
+    secrets:
+      - dashboard_pgpass
+      - dashboard_token
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  app_pgpass:
+    file: ./secrets/app_pgpass
+  mcp_token:
+    file: ./secrets/mcp_token
+  llm_api_key:
+    file: ./secrets/llm_api_key
+  fred_api_key:
+    file: ./secrets/fred_api_key
+  dashboard_pgpass:
+    file: ./secrets/dashboard_pgpass
+  dashboard_token:
+    file: ./secrets/dashboard_token
 
 volumes:
   marketmind_postgres_data:
