@@ -11,8 +11,10 @@ Production runs on one Linux host with Docker Compose and a published image;
 the VPS does not need a source checkout. A versioned GitHub release bundles
 Compose and host scripts with the application and optional PostgreSQL image
 digests. The normal deployment connects to a shared PostgreSQL instance using
-a dedicated database and role; an override can create a managed instance when
-none exists. PostgreSQL with pgvector is the only structured, queryable store. systemd
+a dedicated database and role; an override can bootstrap a shared instance when
+none exists. That instance uses a separate administrator role so later projects
+can receive their own databases and roles. PostgreSQL with pgvector is the only
+structured, queryable store. systemd
 timers invoke one-off jobs from the same image as the long-running MCP server.
 Local development and CI use a disposable PostgreSQL database.
 

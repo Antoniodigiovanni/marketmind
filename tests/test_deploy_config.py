@@ -83,8 +83,12 @@ def test_compose_uses_digest_inputs_and_file_secrets() -> None:
 def test_managed_database_is_an_explicit_override() -> None:
     managed = MANAGED_DATABASE.read_text(encoding="utf-8")
     assert "image: ${MARKETMIND_POSTGRES_IMAGE:?" in managed
-    assert "POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password" in managed
-    assert "marketmind_postgres_data:/var/lib/postgresql/data" in managed
+    assert "POSTGRES_USER: postgres" in managed
+    assert "POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password" in managed
+    assert "marketmind_database_password" in managed
+    assert "postgres_data:/var/lib/postgresql/data" in managed
+    assert "init-marketmind-db.sh:/docker-entrypoint-initdb.d/10-marketmind.sh:ro" in managed
+    assert "POSTGRES_USER: marketmind" not in managed
     assert managed.count("depends_on:") == 2
 
 
@@ -96,7 +100,7 @@ def test_resolved_compose_modes_select_one_database_path() -> None:
         "MARKETMIND_IMAGE": "ghcr.io/example/marketmind@sha256:" + "a" * 64,
         "MARKETMIND_POSTGRES_IMAGE": "pgvector/pgvector@sha256:" + "b" * 64,
         "MARKETMIND_DATABASE_DSN": "postgresql://marketmind@postgres-shared:5432/marketmind",
-        "MARKETMIND_DATABASE_NETWORK": "marketmind-database",
+        "MARKETMIND_DATABASE_NETWORK": "postgres-network",
         "MARKETMIND_UID": "1000",
         "MARKETMIND_GID": "1000",
         "SEC_CONTACT_NAME": "Test",
@@ -152,7 +156,7 @@ def test_resolved_dashboard_environment_excludes_write_credentials() -> None:
         **os.environ,
         "MARKETMIND_IMAGE": "ghcr.io/example/marketmind@sha256:" + "a" * 64,
         "MARKETMIND_DATABASE_DSN": "postgresql://marketmind@postgres-shared:5432/marketmind",
-        "MARKETMIND_DATABASE_NETWORK": "marketmind-database",
+        "MARKETMIND_DATABASE_NETWORK": "postgres-network",
         "MARKETMIND_UID": "1000",
         "MARKETMIND_GID": "1000",
         "SEC_CONTACT_NAME": "Test",
@@ -218,7 +222,12 @@ def test_timers_and_shared_job_runner() -> None:
         encoding="utf-8"
     )
     assert "MARKETMIND_BACKUP_REMOTE" in (ROOT / "deploy/backup-set.sh").read_text(encoding="utf-8")
-    for script in ("run-job.sh", "backup-set.sh", "restore-check.sh"):
+    for script in (
+        "run-job.sh",
+        "backup-set.sh",
+        "restore-check.sh",
+        "init-marketmind-db.sh",
+    ):
         subprocess.run(["sh", "-n", str(ROOT / "deploy" / script)], check=True)
 
 

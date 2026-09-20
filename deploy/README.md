@@ -16,7 +16,7 @@ The server does not need a source checkout or a local build.
 - Linux amd64 with Docker Engine, Compose, systemd, `flock`, `sha256sum`,
   `tar`, and `logrotate`.
 - An external Docker network shared with PostgreSQL. This guide calls it
-  `marketmind-database`; it publishes no port.
+  `postgres-network`; it publishes no port.
 - PostgreSQL 16 or later with pgvector installed. The managed image already
   includes pgvector.
 - A deployment account with Docker access and ownership of Marketmind's local
@@ -55,8 +55,8 @@ install -d -m 0700 data/raw state state/universe state/processed state/refresh s
 sudo install -d -m 0700 -o root -g root /var/log/marketmind
 cp -n .env.example .env
 chmod 0600 .env
-docker network inspect marketmind-database >/dev/null 2>&1 || \
-  docker network create marketmind-database
+docker network inspect postgres-network >/dev/null 2>&1 || \
+  docker network create postgres-network
 ```
 
 Copy `MARKETMIND_IMAGE` from `release.env` into `.env`. Set
@@ -90,16 +90,16 @@ services:
           - postgres-shared
 
 networks:
-  marketmind_database:
+  postgres_network:
     external: true
-    name: marketmind-database
+    name: postgres-network
 ```
 
 Recreate that PostgreSQL service after changing its Compose file. As a
 temporary test, the equivalent command is:
 
 ```bash
-docker network connect --alias postgres-shared marketmind-database <postgres-container>
+docker network connect --alias postgres-shared postgres-network <postgres-container>
 ```
 
 Use the database administrator account to create Marketmind's role, database,
@@ -122,7 +122,7 @@ already contains another project's tables.
 Set these values in `.env`:
 
 ```dotenv
-MARKETMIND_DATABASE_NETWORK=marketmind-database
+MARKETMIND_DATABASE_NETWORK=postgres-network
 MARKETMIND_DATABASE_DSN=postgresql://marketmind@postgres-shared:5432/marketmind
 MARKETMIND_DASHBOARD_DSN=postgresql://marketmind_ro@postgres-shared:5432/marketmind
 ```
@@ -133,27 +133,39 @@ Create `secrets/app_pgpass` using the exact DSN hostname and database password:
 postgres-shared:5432:marketmind:marketmind:<database-password>
 ```
 
-## 3B. Create a managed PostgreSQL instance
+## 3B. Bootstrap the first shared PostgreSQL instance
 
-Use this path only when no shared PostgreSQL instance exists. Copy both image
-references from `release.env` into `.env`, use `postgres` in both DSNs, and
-keep `MARKETMIND_DATABASE_NETWORK=marketmind-database`:
+Use this path when the homelab does not have PostgreSQL yet. It creates a
+neutral `postgres` administrator and a separate, non-administrative
+`marketmind` role and database. The container publishes the same
+`postgres-shared` network alias used in path 3A, so the DSNs remain:
 
 ```dotenv
-MARKETMIND_DATABASE_DSN=postgresql://marketmind@postgres:5432/marketmind
-MARKETMIND_DASHBOARD_DSN=postgresql://marketmind_ro@postgres:5432/marketmind
+MARKETMIND_DATABASE_NETWORK=postgres-network
+MARKETMIND_DATABASE_DSN=postgresql://marketmind@postgres-shared:5432/marketmind
+MARKETMIND_DASHBOARD_DSN=postgresql://marketmind_ro@postgres-shared:5432/marketmind
+POSTGRES_DATA_VOLUME=postgres-shared-data
 ```
 
-Generate one database password. Put the plain password in
-`secrets/postgres_password` and create `secrets/app_pgpass` as:
+Copy both image references from `release.env` into `.env`. Generate two
+different passwords with `openssl rand -hex 32`:
+
+- Put the cluster administrator password in
+  `secrets/postgres_admin_password`.
+- Put the Marketmind role password in
+  `secrets/marketmind_database_password` and use the same value in
+  `secrets/app_pgpass`:
 
 ```text
-postgres:5432:marketmind:marketmind:<database-password>
+postgres-shared:5432:marketmind:marketmind:<marketmind-database-password>
 ```
 
-The managed PostgreSQL volume persists across container replacement. Changing
-the secret later does not change the password inside an initialized database;
-alter the database role at the same time.
+The shared PostgreSQL volume persists across container replacement. Its
+initialization script enables `vector` and `pg_trgm` and creates only the
+Marketmind database. Later projects join `postgres-network`; create a separate
+database and non-administrative role for each one using the `postgres`
+administrator. Changing either secret later does not change a role password in
+an initialized cluster; alter that database role at the same time.
 
 ## 4. Create application secrets
 
@@ -174,10 +186,11 @@ with permissive permissions:
 chmod 0600 secrets/app_pgpass secrets/mcp_token secrets/llm_api_key secrets/fred_api_key
 ```
 
-For managed mode only, keep the `secrets/` directory at `0700` and make
-`secrets/postgres_password` mode `0644`. The PostgreSQL entrypoint changes to
-its internal UID before reading the mounted file, while the private parent
-directory prevents host users from traversing to it.
+For bootstrap mode only, keep the `secrets/` directory at `0700` and make
+`secrets/postgres_admin_password` and `secrets/marketmind_database_password`
+mode `0644`. The PostgreSQL entrypoint changes to its internal UID before
+reading the mounted files, while the private parent directory prevents host
+users from traversing to them. Keep `app_pgpass` at `0600` for libpq.
 
 ## 5. Start and verify Marketmind
 
@@ -189,7 +202,7 @@ docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-With the managed PostgreSQL instance:
+When bootstrapping the first shared PostgreSQL instance:
 
 ```bash
 docker compose -f docker-compose.prod.yml -f docker-compose.managed-db.yml config --quiet
@@ -258,9 +271,8 @@ Create `secrets/dashboard_pgpass` with the hostname selected above:
 postgres-shared:5432:marketmind:marketmind_ro:<read-only-password>
 ```
 
-For managed mode, replace `postgres-shared` with `postgres`. Put an independent
-browser password in `secrets/dashboard_token`, make both files mode `0600`, and
-start the profile:
+Put an independent browser password in `secrets/dashboard_token`, make both
+files mode `0600`, and start the profile:
 
 ```bash
 docker compose -f docker-compose.prod.yml --profile dashboard up -d dashboard

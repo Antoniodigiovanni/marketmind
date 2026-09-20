@@ -114,4 +114,4 @@ secrets:
 networks:
   database:
     external: true
-    name: ${MARKETMIND_DATABASE_NETWORK:-marketmind-database}
+    name: ${MARKETMIND_DATABASE_NETWORK:-postgres-network}

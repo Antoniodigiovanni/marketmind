@@ -6,19 +6,21 @@ services:
     image: ${MARKETMIND_POSTGRES_IMAGE:?set MARKETMIND_POSTGRES_IMAGE from release.env}
     restart: unless-stopped
     environment:
-      POSTGRES_USER: marketmind
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-      POSTGRES_DB: marketmind
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password
+      POSTGRES_DB: postgres
     volumes:
-      - marketmind_postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/init-marketmind-db.sh:/docker-entrypoint-initdb.d/10-marketmind.sh:ro
     secrets:
-      - postgres_password
+      - postgres_admin_password
+      - marketmind_database_password
     networks:
       database:
         aliases:
-          - postgres
+          - postgres-shared
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U marketmind -d marketmind"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 5s
       timeout: 3s
       retries: 15
@@ -34,8 +36,11 @@ services:
         condition: service_healthy
 
 secrets:
-  postgres_password:
-    file: ./secrets/postgres_password
+  postgres_admin_password:
+    file: ./secrets/postgres_admin_password
+  marketmind_database_password:
+    file: ./secrets/marketmind_database_password
 
 volumes:
-  marketmind_postgres_data:
+  postgres_data:
+    name: ${POSTGRES_DATA_VOLUME:-postgres-shared-data}
