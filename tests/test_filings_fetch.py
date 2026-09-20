@@ -260,3 +260,58 @@ async def test_company_facts_refresh_follows_a_periodic_report(pg_conn, tmp_path
     assert first["financial_facts"] == 3
     assert second["financial_issuers"] == 0
     assert client.companyfacts_calls == 1
+
+
+def test_main_bounds_the_run_and_the_universe_by_the_same_date(monkeypatch) -> None:
+    """A backdated run must resolve that date's membership, not today's."""
+    import sys
+
+    from data.filings import fetch as fetch_module
+
+    captured: dict[str, object] = {}
+
+    def fake_get_universe(as_of: str) -> pl.DataFrame:
+        captured["universe_as_of"] = as_of
+        return pl.DataFrame({"ticker": ["AAPL"]})
+
+    async def fake_run(client, *, run_date, root, universe, progress=None) -> dict[str, int]:
+        captured["run_date"] = run_date
+        return {"filings_fetched": 0}
+
+    monkeypatch.setattr(fetch_module, "get_universe", fake_get_universe)
+    monkeypatch.setattr(fetch_module, "run_daily_fetch_with_pool", fake_run)
+    monkeypatch.setattr(fetch_module, "EdgardClient", lambda: object())
+    monkeypatch.setattr(sys, "argv", ["fetch", "--run-date", "2026-08-31"])
+
+    fetch_module.main()
+
+    assert captured["run_date"] == "2026-08-31"
+    assert captured["universe_as_of"] == "2026-08-31"
+
+
+def test_main_defaults_to_today_and_rejects_a_malformed_date(monkeypatch) -> None:
+    import sys
+
+    from data.filings import fetch as fetch_module
+
+    captured: dict[str, object] = {}
+
+    async def fake_run(client, *, run_date, root, universe, progress=None) -> dict[str, int]:
+        captured["run_date"] = run_date
+        return {}
+
+    monkeypatch.setattr(fetch_module, "get_universe", lambda as_of: pl.DataFrame({"ticker": []}))
+    monkeypatch.setattr(fetch_module, "run_daily_fetch_with_pool", fake_run)
+    monkeypatch.setattr(fetch_module, "EdgardClient", lambda: object())
+
+    monkeypatch.setattr(sys, "argv", ["fetch"])
+    fetch_module.main()
+    assert captured["run_date"] == dt.date.today().isoformat()
+
+    monkeypatch.setattr(sys, "argv", ["fetch", "--run-date", "31-08-2026"])
+    try:
+        fetch_module.main()
+    except ValueError:
+        pass
+    else:  # pragma: no cover - the assertion below reports the failure
+        raise AssertionError("main() accepted a malformed --run-date")

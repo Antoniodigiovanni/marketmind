@@ -219,7 +219,14 @@ def refresh_commands(as_of: str) -> list[list[str]]:
         as_of: Market date in YYYY-MM-DD format.
 
     Returns:
-        Price/macro, news/fact, and view-structuring commands in order.
+        Identity, price/macro, news/fact, view-structuring, and filings
+        commands in order.
+
+        Filings run last on purpose: run_refresh_commands stops at the first
+        failing step, and SEC EDGAR is the one source that rate-limits and
+        goes down independently of everything else. Last means an EDGAR
+        outage costs filings only, instead of also blocking news ingest and
+        view structuring.
     """
     dt.date.fromisoformat(as_of)
     return [
@@ -227,6 +234,7 @@ def refresh_commands(as_of: str) -> list[list[str]]:
         [sys.executable, "data/fetch.py", "--as-of", as_of],
         [sys.executable, "-m", "agent.ingestion", as_of],
         [sys.executable, "-m", "agent.views", as_of],
+        [sys.executable, "-m", "data.filings.fetch", "--run-date", as_of],
     ]
 
 

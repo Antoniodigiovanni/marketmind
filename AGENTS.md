@@ -32,6 +32,7 @@ uv run python -m agent.ingestion {YYYY-MM-DD}
 uv run python -m agent.views {YYYY-MM-DD}
 uv run python -m data.filings.fetch
 uv run python -m data.filings.backfill --financials
+uv run python -m data.filings.esef
 uv run python -m agent.refresh {YYYY-MM-DD}          # complete daily job
 uv run python -m server.mcp                           # authenticated HTTP MCP
 docker compose -f docker-compose.prod.yml pull
@@ -94,6 +95,8 @@ Always use `uv run` for Python commands. In containers and systemd jobs, use
   through an encrypted, restricted tunnel.
 - Scheduled data jobs share `state/refresh/daily-refresh.lock`. Preserve
   `agent_runs` audit rows and terminal status for every run.
+- The daily refresh ends with the incremental SEC filings fetch. European ESEF
+  indexes run monthly because each pass re-scans country indexes.
 - `agent.catchup` processes missed daily dates from the last successful audit
   row, up to seven days. Longer gaps require an operator-selected backfill.
 - Keep credentials in untracked `secrets/` files, mounted only into the service

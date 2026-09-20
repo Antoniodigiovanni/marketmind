@@ -223,6 +223,27 @@ in its own database. Send an authenticated MCP `initialize` request to
 `http://127.0.0.1:8000/mcp` with `Authorization: Bearer <mcp_token>`. The port
 is bound to loopback.
 
+Before enabling timers on a new database, populate filing history. The daily
+SEC job starts from a short checkpoint window and cannot recover older filings
+that preceded the deployment. These resumable commands first resolve company
+identities, then load issuer filings and 13F history, complete Company Facts
+history, and European filings:
+
+```bash
+docker compose -f docker-compose.prod.yml run --rm marketmind \
+  uv run --frozen --no-sync python -m data.universe.resolve
+docker compose -f docker-compose.prod.yml run --rm marketmind \
+  uv run --frozen --no-sync python -m data.filings.backfill --issuers
+docker compose -f docker-compose.prod.yml run --rm marketmind \
+  uv run --frozen --no-sync python -m data.filings.backfill --financials
+docker compose -f docker-compose.prod.yml run --rm marketmind \
+  uv run --frozen --no-sync python -m data.filings.esef
+```
+
+The issuer and financial commands can take a long time for the complete
+universe. Re-run either command after an interruption; stored filings and
+checkpoints prevent completed work from being inserted again.
+
 ## 6. Install the schedule
 
 Install timers only after the MCP smoke test succeeds. On a host with an older
@@ -231,19 +252,21 @@ installation, remove its cron entry and disable old timers first:
 ```bash
 sudo rm -f /etc/cron.d/marketmind
 sudo systemctl disable --now marketmind-daily.timer marketmind-universe.timer \
-  marketmind-profiles.timer marketmind-financials.timer marketmind-backup.timer \
+  marketmind-profiles.timer marketmind-financials.timer marketmind-esef.timer \
+  marketmind-backup.timer \
   2>/dev/null || true
 sudo install -o root -g root -m 0644 deploy/systemd/* /etc/systemd/system/
 sudo install -o root -g root -m 0644 deploy/logrotate /etc/logrotate.d/marketmind
 sudo systemctl daemon-reload
 sudo systemctl enable --now marketmind-daily.timer marketmind-universe.timer \
-  marketmind-profiles.timer marketmind-financials.timer
+  marketmind-profiles.timer marketmind-financials.timer marketmind-esef.timer
 systemctl list-timers 'marketmind-*'
 ```
 
-Daily refresh runs at 06:10; universe refresh Monday at 06:00; profiles on
-5 January at 06:30; and financials on 1 February, May, August, and November at
-04:00, in the host timezone. Persistent timers start one missed activation
+Daily refresh, including SEC filings, runs at 06:10; universe refresh Monday at
+06:00; profiles on 5 January at 06:30; financials on 1 February, May, August,
+and November at 04:00; and European filings on the first of each month at
+05:00, in the host timezone. Persistent timers start one missed activation
 after reboot. Daily catch-up is ordered and capped at seven days.
 
 ```bash

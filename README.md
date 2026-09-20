@@ -138,8 +138,9 @@ uv run python -m data.universe.resolve        # resolve symbols into symbol_map
 uv run python data/fetch.py                   # daily price + macro refresh
 uv run python -m agent.ingestion {YYYY-MM-DD} # daily news + fact ingest
 uv run python -m agent.views {YYYY-MM-DD}     # structure free-text market views
-uv run python -m data.filings.fetch           # daily SEC filings + Company Facts refresh
+uv run python -m data.filings.fetch --run-date {YYYY-MM-DD}  # SEC filings + Company Facts (today when omitted)
 uv run python -m data.filings.backfill --financials  # Company Facts backfill / quarterly sweep
+uv run python -m data.filings.esef            # European ESEF filings (monthly)
 uv run python -m agent.refresh {YYYY-MM-DD}   # complete lock-protected daily pipeline
 uv run python -m server.mcp                   # run the MCP server (streamable-http, 127.0.0.1:8000)
 uv run python -m dashboard.app                # run the read-only ops dashboard (127.0.0.1:8001)
@@ -297,12 +298,16 @@ The daily batch runs in order:
    (`^VIX`, `^VSTOXX`), FRED and ECB series → immutable Parquet in `data/raw/`.
 3. **News ingest** — fetch → level-1 dedup → pre-score (source credibility ×
    recency decay) → fact retrieval → LLM extraction → versioned writes → audit.
-4. **SEC filings** — stores metadata and normalized filing text, and refreshes
-   the free, keyless Company Facts endpoint into bitemporal financial rows for
-   issuers that filed a periodic report in that run. Invoked explicitly; it is
-   not part of `agent.refresh` yet.
-5. **View structuring** — reads new free-text views and produces structured JSON
+4. **View structuring** — reads new free-text views and produces structured JSON
    (`schema_version`-driven); free text is never replaced and re-runs are safe.
+5. **SEC filings** — stores metadata and normalized filing text, and refreshes
+   the free, keyless Company Facts endpoint into bitemporal financial rows for
+   issuers that filed a periodic report in that run. Runs last so that an EDGAR
+   outage or rate limit cannot hold back the preceding steps.
+
+European ESEF filings (`data.filings.esef`) are **not** part of the daily
+pipeline. The job re-scans each country's filing index rather than reading
+forward from a checkpoint, so it runs monthly from `deploy/crontab` instead.
 
 Raw news is written to `data/raw/news/{date}.ndjson`; processed volatility
 derived from adjusted closes lives in `data/processed/volatility.parquet`.
