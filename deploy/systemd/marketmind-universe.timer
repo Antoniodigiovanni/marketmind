@@ -1,0 +1,10 @@
+[Unit]
+Description=marketmind weekly universe schedule
+
+[Timer]
+OnCalendar=Mon *-*-* 06:00:00
+Persistent=true
+Unit=marketmind-universe.service
+
+[Install]
+WantedBy=timers.target

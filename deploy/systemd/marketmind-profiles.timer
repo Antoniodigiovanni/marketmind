@@ -1,0 +1,10 @@
+[Unit]
+Description=marketmind annual company profile schedule
+
+[Timer]
+OnCalendar=*-01-05 06:30:00
+Persistent=true
+Unit=marketmind-profiles.service
+
+[Install]
+WantedBy=timers.target

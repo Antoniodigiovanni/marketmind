@@ -1,0 +1,10 @@
+[Unit]
+Description=marketmind daily refresh schedule
+
+[Timer]
+OnCalendar=*-*-* 06:10:00
+Persistent=true
+Unit=marketmind-daily.service
+
+[Install]
+WantedBy=timers.target

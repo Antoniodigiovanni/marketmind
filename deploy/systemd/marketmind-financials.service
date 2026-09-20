@@ -1,0 +1,8 @@
+[Unit]
+Description=marketmind company financials sweep
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/marketmind/deploy/run-job.sh financials

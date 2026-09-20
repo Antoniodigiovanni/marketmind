@@ -20,7 +20,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from dashboard import config, logs, render
-from data.db.pool import close_pool, dsn_from_env, open_pool
+from data.db.pool import close_pool, open_pool
 from data.db.runs import list_recent_runs
 
 # Job types the deployment is expected to produce, so one that never ran is
@@ -75,7 +75,7 @@ class BasicAuthMiddleware:
 
 async def _recent_runs() -> tuple[list[dict[str, object]], str | None]:
     """Return recent audit rows, or an empty list and a message on failure."""
-    pool = await open_pool(config.dsn() or dsn_from_env())
+    pool = await open_pool(config.dsn())
     try:
         async with pool.connection() as conn:
             return await list_recent_runs(conn, limit=RUN_HISTORY_LIMIT), None
@@ -140,6 +140,7 @@ def main() -> None:
     port-forward, not an open port. Set MARKETMIND_DASHBOARD_HOST only when
     a reverse proxy terminating TLS sits in front of it.
     """
+    config.dsn()
     app = build_app(config.token())
     uvicorn.run(app, host=config.host(), port=config.port(), log_level="info")
 

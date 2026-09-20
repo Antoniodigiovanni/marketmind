@@ -1,334 +1,331 @@
-# marketmind deployment
+# Marketmind deployment
 
-Docker-native: one image for the whole app, `docker compose` for the
-always-on services (Postgres, the MCP server), plain cron for scheduled
-jobs. No systemd and no install/update scripts.
+The normal homelab deployment runs only the Marketmind containers and connects
+them to an existing PostgreSQL instance. Marketmind gets its own database and
+roles; it does not share another application's database or tables. If the host
+has no PostgreSQL instance, the optional managed-database Compose file starts
+one for Marketmind.
+
+A `v*` Git tag publishes an amd64 application image to GHCR and attaches a
+matching deployment archive to the GitHub release. The archive contains both
+Compose files, `.env.example`, host scripts, systemd units, and `release.env`.
+The server does not need a source checkout or a local build.
 
 ## Requirements
 
-- Docker with the Compose plugin (`docker compose version` must succeed).
-- `cron` (present on essentially every Linux distro by default).
-- `flock` from util-linux (used to prevent overlapping scheduled runs).
-- `logrotate` for bounded scheduled-job logs.
-- Network access to GitHub for the initial clone.
-- A long-lived deployment account with permission to run Docker. Its numeric
-  UID/GID owns the checkout and is also used inside the app container.
+- Linux amd64 with Docker Engine, Compose, systemd, `flock`, `sha256sum`,
+  `tar`, and `logrotate`.
+- An external Docker network shared with PostgreSQL. This guide calls it
+  `postgres-network`; it publishes no port.
+- PostgreSQL 16 or later with pgvector installed. The managed image already
+  includes pgvector.
+- A deployment account with Docker access and ownership of Marketmind's local
+  state and secret files.
 
-## Fresh setup
+`jq`, `rclone`, and an off-host destination are needed only for Marketmind's
+optional backup job. Keep that timer disabled for the initial deployment.
+
+## 1. Download and verify a release
+
+Replace `vX.Y.Z` with a published release tag:
 
 ```bash
-deploy_user="$(id -un)"
-deploy_group="$(id -gn)"
-sudo install -d -m 0755 -o "$deploy_user" -g "$deploy_group" \
-  /srv/marketmind
-sudo install -d -m 0700 -o root -g root \
-  /srv/marketmind-backups /var/log/marketmind
-git clone git@github.com:Antoniodigiovanni/marketmind.git /srv/marketmind
+sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" /srv/marketmind
 cd /srv/marketmind
-install -d -m 0700 data/raw state state/universe state/processed state/refresh
-cp .env.example .env
-# edit .env: set real credentials and set MARKETMIND_UID/GID to the output
-# of `id -u` / `id -g`. Keep MARKETMIND_DATABASE_DSN pointed at
-# postgresql://marketmind@postgres:5432/marketmind inside Compose.
+release_tag=vX.Y.Z
+release_base="https://github.com/Antoniodigiovanni/marketmind/releases/download/$release_tag"
+curl -fLO "$release_base/marketmind-$release_tag-deploy.tar.gz"
+curl -fLO "$release_base/marketmind-$release_tag-deploy.tar.gz.sha256"
+sha256sum --check "marketmind-$release_tag-deploy.tar.gz.sha256"
+tar -tzf "marketmind-$release_tag-deploy.tar.gz"
+tar -xzf "marketmind-$release_tag-deploy.tar.gz"
+cat release.env
+```
+
+Confirm that `RELEASE_TAG` matches the requested tag. If the repository or
+package is private, authenticate the downloads and run `docker login ghcr.io`
+with read-package access. Updating the bundle leaves `.env`, `secrets/`,
+`data/raw/`, and `state/` alone.
+
+## 2. Prepare local directories
+
+```bash
+cd /srv/marketmind
+install -d -m 0700 data/raw state state/universe state/processed state/refresh secrets
+sudo install -d -m 0700 -o root -g root /var/log/marketmind
+cp -n .env.example .env
 chmod 0600 .env
-
-docker compose -f docker-compose.prod.yml up -d --build
-# Verify the MCP initialize request described below before enabling schedules.
-sudo install -o root -g root -m 0644 deploy/crontab /etc/cron.d/marketmind
-sudo install -o root -g root -m 0644 deploy/logrotate /etc/logrotate.d/marketmind
+docker network inspect postgres-network >/dev/null 2>&1 || \
+  docker network create postgres-network
 ```
 
-`docker compose up -d --build` builds the image, starts Postgres, waits for
-it to be healthy, then starts the app. The app applies pending versioned
-Postgres migrations on every start. The UID/GID mapping lets the non-root
-container write `data/raw/` and
-`state/` without changing ownership behind the host operator's back. The rest
-of its filesystem is read-only; temporary files live on a restricted `tmpfs`,
-Linux capabilities are dropped, privilege escalation is disabled, and
-generated files use a private `0077` umask.
+Copy `MARKETMIND_IMAGE` from `release.env` into `.env`. Set
+`MARKETMIND_UID=$(id -u)`, `MARKETMIND_GID=$(id -g)`, and the SEC contact
+values. `.env` contains non-secret configuration; passwords belong in files
+under `secrets/`.
 
-The root-owned `/etc/cron.d/marketmind` file installs the scheduled jobs
-(§"Schedule" below) without replacing or modifying other root cron entries.
-Install it only after the authenticated MCP smoke test succeeds; a running
-container is not by itself proof that schema initialization completed.
+Choose exactly one database path below.
 
-## Migrating an existing systemd install
+## 3A. Attach to an existing PostgreSQL instance
 
-Do not use the fresh-setup sequence over an existing installation. The old
-timers remain installed under `/etc/systemd/system` even after their source
-files disappear from the checkout, and enabling cron first would run every
-scheduled job twice.
+This is the recommended path when several projects share one PostgreSQL
+instance. Give each project a separate database and owner role:
 
-1. Record `id -u marketmind` and `id -g marketmind`; use those values for
-   `MARKETMIND_UID` and `MARKETMIND_GID` so the existing `data/` ownership is
-   preserved.
-2. Stop and disable all five old timers before taking the cutover backup or
-   installing cron:
+```text
+one PostgreSQL instance
+├── marketmind database / marketmind role
+├── project_b database / project_b role
+└── project_c database / project_c role
+```
 
-   ```bash
-   sudo systemctl disable --now \
-     marketmind-daily.timer marketmind-universe.timer \
-     marketmind-profiles.timer marketmind-backup.timer \
-     marketmind-update.timer
-   ```
+Add the existing PostgreSQL container to the external network in the Compose
+project that owns it. The persistent form is:
 
-3. Stop the old service while files are being copied. Back up
-   `/srv/marketmind/data`, then move derived files and current universe
-   snapshots into `state/` before
-   `git pull` can replace tracked snapshots:
+```yaml
+services:
+  postgres:
+    networks:
+      marketmind_database:
+        aliases:
+          - postgres-shared
 
-   ```bash
-   sudo -u marketmind install -d -m 0700 \
-     /srv/marketmind/state /srv/marketmind/state/universe \
-     /srv/marketmind/state/processed /srv/marketmind/state/refresh
-   sudo -u marketmind cp -a /srv/marketmind/data/processed/. \
-     /srv/marketmind/state/processed/
-   sudo -u marketmind cp /srv/marketmind/data/universe/*.csv \
-     /srv/marketmind/state/universe/
-   ```
+networks:
+  postgres_network:
+    external: true
+    name: postgres-network
+```
 
-   Omit the processed-data `cp` command if that source does not exist. Take a
-   `pg_dump -Fc` from the current PostgreSQL DSN before continuing.
-4. Update the checkout and `.env`. Add the database password, the
-   container-reachable DSN, MCP bearer token, port if non-default, and the
-   recorded UID/GID. Change `/srv/marketmind-backups` to root ownership and
-   mode `0700`; scheduled backups now run from the isolated root cron file.
-
-   ```bash
-   sudo chown root:root /srv/marketmind-backups
-   sudo chmod 0700 /srv/marketmind-backups
-   ```
-5. Start only the new database first. If step 3 produced a Postgres dump,
-   restore it into the named volume before starting the app:
-
-   ```bash
-   docker compose -f docker-compose.prod.yml up -d postgres
-   docker compose -f docker-compose.prod.yml exec -T postgres \
-     pg_restore -U marketmind -d marketmind --clean --if-exists \
-     < /srv/marketmind-backups/pre-compose-postgres.dump
-   docker compose -f docker-compose.prod.yml up -d --build marketmind
-   ```
-
-   With no existing PostgreSQL database, the new one starts empty; run the
-   relevant historical backfills before treating it as production-ready.
-6. Change the MCP client from a spawned stdio process to the authenticated
-   HTTP endpoint below, send an `initialize` request, and check both service
-   logs. Install `/etc/cron.d/marketmind` only after that smoke test succeeds.
-7. Once the new schedule has run successfully, remove the obsolete unit files:
-
-   ```bash
-   sudo rm -f \
-     /etc/systemd/system/marketmind-daily.{service,timer} \
-     /etc/systemd/system/marketmind-universe.{service,timer} \
-     /etc/systemd/system/marketmind-profiles.{service,timer} \
-     /etc/systemd/system/marketmind-backup.{service,timer} \
-     /etc/systemd/system/marketmind-update.{service,timer} \
-     /usr/local/sbin/marketmind-update
-   sudo systemctl daemon-reload
-   ```
-
-## Updating
+Recreate that PostgreSQL service after changing its Compose file. As a
+temporary test, the equivalent command is:
 
 ```bash
-cd /srv/marketmind
-git pull
-docker compose -f docker-compose.prod.yml up -d --build
-sudo install -o root -g root -m 0644 deploy/crontab /etc/cron.d/marketmind
-sudo install -o root -g root -m 0644 deploy/logrotate /etc/logrotate.d/marketmind
+docker network connect --alias postgres-shared postgres-network <postgres-container>
 ```
 
-Rebuilds the image from the pulled code and recreates services whose image or
-configuration changed. Pending versioned migrations apply on app startup under
-a database advisory lock.
-Migration files are immutable and checksum-verified; a database newer than
-the checked-out code refuses to start instead of attempting an unsafe rollback.
+Use the database administrator account to create Marketmind's role, database,
+and extensions. Generate a password with `openssl rand -hex 32`, save it in a
+password manager, and enter the same value at the `\password` prompt:
 
-## MCP client wiring
-
-The MCP server listens on `127.0.0.1:${MARKETMIND_MCP_PORT:-8000}`
-(streamable-http transport, not stdio — the client connects to it like it
-would connect to any remote MCP server, rather than spawning a subprocess).
-Every request must carry the shared secret from `.env` as a bearer token:
-
-```
-POST http://127.0.0.1:8000/mcp
-Authorization: Bearer <MARKETMIND_MCP_TOKEN>
+```sql
+CREATE ROLE marketmind LOGIN;
+\password marketmind
+CREATE DATABASE marketmind OWNER marketmind;
+\connect marketmind
+CREATE EXTENSION vector;
+CREATE EXTENSION pg_trgm;
 ```
 
-This is a change the client side must implement — out of scope for this
-repository. No ports beyond `127.0.0.1` are opened; nothing off-box can
-reach it.
+The server package must provide pgvector before `CREATE EXTENSION vector` can
+succeed. Marketmind owns only its database. Do not point it at a database that
+already contains another project's tables.
 
-## Operations dashboard
+Set these values in `.env`:
 
-A read-only web view of run history and job logs, in its own container. It
-reads `agent_runs` and log files and nothing else: no market data, no write
-path, and no route the harness uses.
+```dotenv
+MARKETMIND_DATABASE_NETWORK=postgres-network
+MARKETMIND_DATABASE_DSN=postgresql://marketmind@postgres-shared:5432/marketmind
+MARKETMIND_DASHBOARD_DSN=postgresql://marketmind_ro@postgres-shared:5432/marketmind
+```
 
-Create its SELECT-only database role once, after the schema exists:
+Create `secrets/app_pgpass` using the exact DSN hostname and database password:
+
+```text
+postgres-shared:5432:marketmind:marketmind:<database-password>
+```
+
+## 3B. Bootstrap the first shared PostgreSQL instance
+
+Use this path when the homelab does not have PostgreSQL yet. It creates a
+neutral `postgres` administrator and a separate, non-administrative
+`marketmind` role and database. The container publishes the same
+`postgres-shared` network alias used in path 3A, so the DSNs remain:
+
+```dotenv
+MARKETMIND_DATABASE_NETWORK=postgres-network
+MARKETMIND_DATABASE_DSN=postgresql://marketmind@postgres-shared:5432/marketmind
+MARKETMIND_DASHBOARD_DSN=postgresql://marketmind_ro@postgres-shared:5432/marketmind
+POSTGRES_DATA_VOLUME=postgres-shared-data
+```
+
+Copy both image references from `release.env` into `.env`. Generate two
+different passwords with `openssl rand -hex 32`:
+
+- Put the cluster administrator password in
+  `secrets/postgres_admin_password`.
+- Put the Marketmind role password in
+  `secrets/marketmind_database_password` and use the same value in
+  `secrets/app_pgpass`:
+
+```text
+postgres-shared:5432:marketmind:marketmind:<marketmind-database-password>
+```
+
+The shared PostgreSQL volume persists across container replacement. Its
+initialization script enables `vector` and `pg_trgm` and creates only the
+Marketmind database. Later projects join `postgres-network`; create a separate
+database and non-administrative role for each one using the `postgres`
+administrator. Changing either secret later does not change a role password in
+an initialized cluster; alter that database role at the same time.
+
+## 4. Create application secrets
+
+For either database path, create these files after running `umask 077`:
+
+| File | Content |
+|---|---|
+| `app_pgpass` | libpq password line shown in the selected database path |
+| `mcp_token` | independent random bearer token |
+| `llm_api_key` | model-provider key |
+| `fred_api_key` | FRED key |
+
+Generate random values with `openssl rand -hex 32`. Make the files readable
+only by the numeric UID configured in `.env`; libpq rejects an `.pgpass` file
+with permissive permissions:
 
 ```bash
-docker compose -f docker-compose.prod.yml exec -T postgres \
-  psql -U marketmind -d marketmind -v ON_ERROR_STOP=1 <<'SQL'
-CREATE ROLE marketmind_ro LOGIN PASSWORD 'replace-me';
+chmod 0600 secrets/app_pgpass secrets/mcp_token secrets/llm_api_key secrets/fred_api_key
+```
+
+For bootstrap mode only, keep the `secrets/` directory at `0700` and make
+`secrets/postgres_admin_password` and `secrets/marketmind_database_password`
+mode `0644`. The PostgreSQL entrypoint changes to its internal UID before
+reading the mounted files, while the private parent directory prevents host
+users from traversing to them. Keep `app_pgpass` at `0600` for libpq.
+
+## 5. Start and verify Marketmind
+
+With an existing shared PostgreSQL instance:
+
+```bash
+docker compose -f docker-compose.prod.yml config --quiet
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
+When bootstrapping the first shared PostgreSQL instance:
+
+```bash
+docker compose -f docker-compose.prod.yml -f docker-compose.managed-db.yml config --quiet
+docker compose -f docker-compose.prod.yml -f docker-compose.managed-db.yml pull
+docker compose -f docker-compose.prod.yml -f docker-compose.managed-db.yml up -d
+```
+
+Then inspect the application:
+
+```bash
+docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml logs --tail=100 marketmind
+```
+
+The MCP service applies versioned migrations on startup. It will fail if the
+database is unreachable, an extension is missing, or the role lacks DDL rights
+in its own database. Send an authenticated MCP `initialize` request to
+`http://127.0.0.1:8000/mcp` with `Authorization: Bearer <mcp_token>`. The port
+is bound to loopback.
+
+## 6. Install the schedule
+
+Install timers only after the MCP smoke test succeeds. On a host with an older
+installation, remove its cron entry and disable old timers first:
+
+```bash
+sudo rm -f /etc/cron.d/marketmind
+sudo systemctl disable --now marketmind-daily.timer marketmind-universe.timer \
+  marketmind-profiles.timer marketmind-financials.timer marketmind-backup.timer \
+  2>/dev/null || true
+sudo install -o root -g root -m 0644 deploy/systemd/* /etc/systemd/system/
+sudo install -o root -g root -m 0644 deploy/logrotate /etc/logrotate.d/marketmind
+sudo systemctl daemon-reload
+sudo systemctl enable --now marketmind-daily.timer marketmind-universe.timer \
+  marketmind-profiles.timer marketmind-financials.timer
+systemctl list-timers 'marketmind-*'
+```
+
+Daily refresh runs at 06:10; universe refresh Monday at 06:00; profiles on
+5 January at 06:30; and financials on 1 February, May, August, and November at
+04:00, in the host timezone. Persistent timers start one missed activation
+after reboot. Daily catch-up is ordered and capped at seven days.
+
+```bash
+systemctl status marketmind-daily.timer
+journalctl -u marketmind-daily.service -n 100 --no-pager
+```
+
+## Optional operations dashboard
+
+Create a separate read-only role through the shared instance's normal
+administration path. Use a different password from the application role:
+
+```sql
+CREATE ROLE marketmind_ro LOGIN;
+\password marketmind_ro
 GRANT CONNECT ON DATABASE marketmind TO marketmind_ro;
+\connect marketmind
 GRANT USAGE ON SCHEMA public TO marketmind_ro;
 GRANT SELECT ON agent_runs TO marketmind_ro;
-SQL
 ```
 
-Put that password in `MARKETMIND_DASHBOARD_DB_PASSWORD` and a separate
-random secret in `MARKETMIND_DASHBOARD_TOKEN`, then start it:
+Create `secrets/dashboard_pgpass` with the hostname selected above:
 
-```bash
-docker compose -f docker-compose.prod.yml up -d --build dashboard
+```text
+postgres-shared:5432:marketmind:marketmind_ro:<read-only-password>
 ```
 
-The grant is deliberately one table. Widening it turns a status page into a
-second read interface to the market-memory data, which is what MCP is for.
-
-### Reaching it
-
-The port is published on `127.0.0.1` only. On a production host already joined
-to the intended tailnet, expose that loopback listener through Tailscale Serve:
+Put an independent browser password in `secrets/dashboard_token`, make both
+files mode `0600`, and start the profile:
 
 ```bash
-tailscale status
+docker compose -f docker-compose.prod.yml --profile dashboard up -d dashboard
+```
+
+The dashboard binds to loopback. Reach it with
+`ssh -N -L 8001:127.0.0.1:8001 <deploy-user>@<host>` or an authorized tailnet.
+It receives only the read-only role and its browser token.
+
+```bash
 tailscale serve --bg http://127.0.0.1:8001
-tailscale serve status
 ```
 
-The first `serve` invocation may require an administrator to enable HTTPS for
-the tailnet. Its output reports the native HTTPS URL, normally
-`https://<machine>.<tailnet>.ts.net/`. Open that URL from another device in the
-same tailnet and enter any username with `MARKETMIND_DASHBOARD_TOKEN` as the
-password. Tailnet policy should limit HTTPS access to the operators who need
-the page.
+## Optional backups
 
-Keep the backend on loopback and use `tailscale serve`, not `tailscale funnel`:
-Serve is tailnet-only, while Funnel would make the endpoint public. The
-background Serve configuration persists across host and Tailscale restarts.
-To stop sharing the dashboard without stopping its container:
+Leave `marketmind-backup.timer` disabled for now. When PostgreSQL is shared,
+the preferred design is a centralized backup of every database plus a tested
+per-database restore. Marketmind's optional job also produces a coordinated
+set containing a custom-format dump of only the `marketmind` database and its
+local `data/raw` and `state` directories.
+
+To use that job, install `jq` and `rclone`, create `/srv/marketmind-backups`,
+configure root's rclone remote, and write:
 
 ```bash
-tailscale serve off
+sudo install -d -m 0700 /etc/marketmind /srv/marketmind-backups
+printf 'MARKETMIND_BACKUP_REMOTE=offsite:marketmind\n' | \
+  sudo tee /etc/marketmind/backup.conf >/dev/null
+sudo chmod 0600 /etc/marketmind/backup.conf
+sudo systemctl start marketmind-backup.service
 ```
 
-An SSH tunnel remains useful as a fallback when Tailscale Serve is unavailable:
+The backup script runs the pinned PostgreSQL image as a client on the shared
+database network; it does not assume Marketmind owns the server container.
+After fetching a `.ready` set, test it in an isolated temporary PostgreSQL
+container:
 
 ```bash
-ssh -N -L 8001:127.0.0.1:8001 <deploy-user>@<host>
+sudo /srv/marketmind/deploy/restore-check.sh \
+  /srv/marketmind-backups/marketmind-<stamp>.ready
 ```
 
-Then open `http://127.0.0.1:8001` and use the same credentials.
-
-HTTP Basic sends the secret on every request, so any non-SSH remote path must
-terminate TLS. Do not publish port 8001 on a LAN or public interface.
-
-### Cron logs
-
-The dashboard reads `state/refresh/logs` (written by the app user, always
-readable) and `/var/log/marketmind` (written by root cron). The latter is
-mode `0700` root-owned from the setup above, so the container cannot read it
-and the page reports the directory as unreadable rather than failing. To
-include scheduled-job logs, make that directory readable by the deploy group:
+Enable the timer only after that restore succeeds:
 
 ```bash
-sudo chgrp "$(id -gn)" /var/log/marketmind
-sudo chmod 0750 /var/log/marketmind
-sudo sed -i 's/create 0600 root root/create 0640 root '"$(id -gn)"'/' \
-  /etc/logrotate.d/marketmind
+sudo systemctl enable --now marketmind-backup.timer
 ```
 
-Leave it root-only if you would rather read those logs over SSH.
+## Updating and rollback
 
-## Schedule (`/etc/cron.d/marketmind`)
-
-| When | Job |
-|---|---|
-| daily 06:10 | equity/benchmark price + macro fetch, news ingest, market-view structuring |
-| Mondays 06:00 | universe refresh + symbol resolution |
-| annually, 5 Jan 06:30 | company profile refresh (`--backfill --profiles-only`) |
-| quarterly, 1 Feb/May/Aug/Nov 04:00 | SEC Company Facts sweep (`data.filings.backfill --financials`) |
-| nightly 02:30 | `data/raw/` + mutable state tarball → `/srv/marketmind-backups/` (14-day retention) |
-| nightly 02:35 | Postgres `pg_dump` → `/srv/marketmind-backups/` (14-day retention) |
-
-Every job runs `docker compose run --rm marketmind <command>` against the
-same image the always-on services use — no separate job-runner tooling.
-`docker compose run` waits for Postgres to be healthy first (compose's own
-`depends_on`), so there's no extra readiness check in any cron line.
-Every data job and the filesystem backup take the same non-blocking lock at
-`state/refresh/daily-refresh.lock`. The complete daily entry point owns that
-lock inside the container, while the other cron jobs use the same bind-mounted
-file from the host. MCP-triggered and scheduled runs therefore cannot overlap.
-Backups are written with mode `0600` to temporary names and renamed into place
-only after validation or `pg_dump` succeeds. The filesystem backup takes the
-shared data-job lock and validates the archive without interrupting the MCP
-service; structured state is protected separately by `pg_dump`.
-Scheduled output is appended under `/var/log/marketmind/` and retained for 14
-daily rotations; it does not depend on a local cron-mail setup.
-
-Edit `deploy/crontab` and reinstall it with the `install` command from setup to
-change a schedule.
-
-Benchmark series use the existing daily entry and PostgreSQL price tables; no
-new cron entry or schema migration is required. The first daily run after
-deployment backfills missing benchmark history from 2015-01-01, and subsequent
-runs are incremental. Operators can inspect stored coverage with the
-`get_benchmarks` MCP tool before relying on a series.
-
-**Known trade-off:** plain cron has no equivalent of systemd's
-`Persistent=true` (a missed run — box was off at 06:10 — just doesn't
-happen; cron doesn't catch it up later) or `RandomizedDelaySec` (startup
-jitter). Accepted for a single-box deploy.
-
-## Operations
-
-```bash
-docker compose -f docker-compose.prod.yml ps                    # service status
-docker compose -f docker-compose.prod.yml logs -f dashboard     # dashboard logs
-docker compose -f docker-compose.prod.yml logs -f marketmind    # MCP server logs
-docker compose -f docker-compose.prod.yml logs -f postgres      # Postgres logs
-cat /etc/cron.d/marketmind                                      # confirm the schedule is installed
-tail -f /var/log/marketmind/daily.log                            # scheduled-job output
-tail -f state/refresh/logs/daily-refresh-*.log                   # MCP-triggered refresh output
-```
-
-Every ingest run also writes an audit row to `agent_runs` (counters +
-`error` column), queryable via the `get_ingest_status` MCP tool or directly
-against Postgres.
-
-## Rollback
-
-`data/raw/`, derived files, universe snapshots, and the PostgreSQL database are
-backed up on the same schedule; filesystem state and PostgreSQL are restored
-separately.
-
-Filesystem backups are plain tarballs containing `data/raw/` and `state/`:
-
-```bash
-tar -xzf /srv/marketmind-backups/marketmind-YYYY-MM-DD-HHMM.tar.gz -C /srv/marketmind
-```
-
-Postgres backups are `pg_dump -Fc` custom-format dumps, restored into a
-running (empty) container:
-
-```bash
-docker compose -f docker-compose.prod.yml exec -T postgres \
-  pg_restore -U marketmind -d marketmind --clean --if-exists \
-  < /srv/marketmind-backups/marketmind-postgres-YYYY-MM-DD-HHMM.dump
-```
-
-Code rollback is safe only when every migration since the target tag is
-backward-compatible. Otherwise stop the app and restore the matching Postgres
-and filesystem backups before starting the older image. The migration ledger
-deliberately refuses to run a checkout older than the database.
-
-Disable `/etc/cron.d/marketmind` during any rollback so jobs cannot start from
-a half-restored checkout. Afterward, install the schedule shipped by the target
-release. Rolling back to a pre-Compose release also requires restoring its
-systemd units and switching the MCP client back to stdio; checking out the tag
-alone is not a complete rollback.
-
-Move backups off-box (`rclone`/`restic`) for real disaster recovery — a
-same-machine copy is a local safety net, not a backup strategy.
+Download and verify the next release bundle, inspect `release.env`, extract
+it, and update the image digest in `.env`. Use the same Compose command as the
+selected database path, then reinstall the systemd units. Keep the previous
+release archive and image digest. A rollback across incompatible migrations
+also requires restoring the matching database and local files; treat the
+image, database dump, and files as one set.

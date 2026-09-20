@@ -97,33 +97,34 @@ uv run pytest tests/ -v --cov=. --cov-report=term-missing
 
 ### Environment variables
 
-`.env` is never committed. In production, `docker compose`'s `env_file:`
-directive loads it into the app container (see `docker-compose.prod.yml`);
-locally, export the values in your shell or pass `--env-file .env` to
-`uv run` yourself — no code in this repo calls `python-dotenv`.
+`.env` is never committed. In production it contains non-secret Compose
+settings; credentials live in untracked `secrets/` files mounted only into
+services that need them. Locally, export values in your shell or pass
+`--env-file .env` to `uv run` yourself — no code calls `python-dotenv`.
 
 | Variable | Purpose |
 |---|---|
-| `AI_API_KEY` | Chat API key (DeepSeek-compatible endpoint) for extraction / structuring |
+| `MARKETMIND_IMAGE` | Published image reference shared by the MCP service, dashboard, and scheduled jobs |
+| `MARKETMIND_POSTGRES_IMAGE` | Pinned PostgreSQL image from the same release bundle |
+| `AI_API_KEY_FILE` | Mounted chat API key for extraction / structuring in production |
 | `LLM_BASE_URL` | Chat endpoint (default `https://api.deepseek.com`) |
 | `LLM_MODEL` | Model identifier (default `deepseek-chat`) |
 | `LLM_MAX_RETRIES` | Retry attempts for transient chat API failures (default 3) |
 | `LLM_TIMEOUT_SECONDS` | Chat API request timeout (default 60) |
-| `FRED_API_KEY` | FRED macro series |
+| `FRED_API_KEY_FILE` | Mounted FRED key in production |
 | `SEC_CONTACT_NAME` | Operator name sent to SEC EDGAR and filings.xbrl.org (required) |
 | `SEC_CONTACT_EMAIL` | Operator email sent with every EDGAR request (required) |
 | `INGEST_MAX_CONSECUTIVE_FAILURES` | Consecutive extraction failures before the ingest run aborts (default 20) |
 | `INGEST_PRE_SCORE_MIN` | Minimum credibility/recency score sent to extraction (default 0.30) |
 | `INGEST_MAX_NEWS_PER_FEED` | Maximum accepted articles from each company feed (default 30) |
 | `MARKETMIND_DATABASE_DSN` | Postgres connection string; unset falls back to the local docker-compose test database |
-| `MARKETMIND_DB_PASSWORD` | Production Postgres password, supplied to libpq separately from the DSN |
-| `MARKETMIND_MCP_TOKEN` | Bearer token the MCP client must present on every request |
+| `MARKETMIND_MCP_TOKEN_FILE` | Path to mounted MCP bearer token in production |
 | `MARKETMIND_MCP_PORT` | Port the MCP server listens on (default 8000) |
 | `MARKETMIND_REFRESH_DIR` | Shared refresh lock/status/log directory (production: `/var/lib/marketmind/refresh`) |
 | `MARKETMIND_UID` / `MARKETMIND_GID` | Numeric owner used by the production app container for its bind-mounted data tree |
-| `MARKETMIND_DASHBOARD_TOKEN` | HTTP Basic password for the read-only operations dashboard |
+| `MARKETMIND_DASHBOARD_TOKEN_FILE` | Path to mounted dashboard HTTP Basic password |
 | `MARKETMIND_DASHBOARD_DSN` | SELECT-only Postgres DSN used by the dashboard |
-| `MARKETMIND_DASHBOARD_DB_PASSWORD` | Password for the dashboard's read-only role |
+| `PGPASSFILE` | Owner-only PostgreSQL password file mounted per service |
 | `MARKETMIND_DASHBOARD_PORT` | Dashboard listen port (default 8001) |
 | `MARKETMIND_DASHBOARD_HOST` | Dashboard bind address (default `127.0.0.1`) |
 | `MARKETMIND_DASHBOARD_LOG_DIRS` | Colon-separated directories whose `.log` files the dashboard may serve |
@@ -151,38 +152,19 @@ functional.
 
 ## Deployment (generic VPS)
 
-Docker-native: one image for the whole app, `docker compose` for the
-always-on services (Postgres, the MCP server over streamable-http — no
-ports beyond `127.0.0.1`), plain cron for scheduled jobs. No systemd, no
-install/update scripts.
-
-```bash
-deploy_user="$(id -un)"
-deploy_group="$(id -gn)"
-sudo install -d -m 0755 -o "$deploy_user" -g "$deploy_group" \
-  /srv/marketmind
-sudo install -d -m 0700 -o root -g root \
-  /srv/marketmind-backups /var/log/marketmind
-git clone git@github.com:Antoniodigiovanni/marketmind.git /srv/marketmind
-cd /srv/marketmind
-install -d -m 0700 data/raw state state/universe state/processed state/refresh
-cp .env.example .env   # edit: real secrets, database settings, MCP token, host UID/GID
-chmod 0600 .env
-
-docker compose -f docker-compose.prod.yml up -d --build
-sudo install -o root -g root -m 0644 deploy/crontab /etc/cron.d/marketmind
-sudo install -o root -g root -m 0644 deploy/logrotate /etc/logrotate.d/marketmind
-```
-
-Updating pulls the checkout, rebuilds Compose, and reinstalls
-`/etc/cron.d/marketmind`; the app applies checksum-verified PostgreSQL
-migrations on startup. See the deployment guide for the exact commands.
+A `v*` release tag builds and publishes one application image and a matching
+host configuration archive. The archive includes pinned application and
+PostgreSQL image digests. The VPS downloads that archive and pulls the images;
+it does not clone or build the source. Compose keeps PostgreSQL and MCP
+running; systemd timers launch scheduled jobs from the same pinned image.
+Only loopback ports are published. The [deployment guide](deploy/README.md)
+covers credentials, an optional offsite backup restore drill, scheduling, and updates.
 
 ### Operations dashboard
 
 A read-only web view of `agent_runs` and job logs, in its own container
-(`dashboard/`). It exists because MCP answers what the harness needs, not why
-a scheduled job failed at 06:10. It runs under a SELECT-only database role
+(`dashboard/`). It shows why a scheduled job failed at 06:10. It runs under a
+SELECT-only database role
 granted a single table, is HTTP Basic authenticated, and binds `127.0.0.1` —
 reach it with an SSH port-forward, or place a TLS-terminating reverse proxy
 in front of it. It serves no market data, holds no write path, and is not
@@ -254,7 +236,7 @@ the remaining daily steps. Yahoo's free delayed adjusted OHLCV is the only new
 source, so no key, paid subscription, schema migration, or separate schedule is
 required.
 
-`run_daily_refresh` runs the same ordered entry point as cron and returns
+`run_daily_refresh` runs the same ordered entry point as the systemd timer and returns
 immediately. Both paths use `state/refresh/daily-refresh.lock`, so a scheduled
 run, manual refresh, universe update, profile refresh, or filesystem backup
 cannot overlap. Poll `get_refresh_status`; there is deliberately no stop tool
@@ -301,7 +283,7 @@ later amendments and restatements append rows instead of replacing history.
 The endpoint returns an issuer's complete history on every call, so the daily
 job refreshes only issuers that filed a 10-K, 10-Q, 20-F or 6-K in that run.
 A quarterly sweep (`data.filings.backfill --financials`, scheduled in
-`deploy/crontab`) covers XBRL published after its filing and the amendments the
+`deploy/systemd/marketmind-financials.timer`) covers XBRL published after its filing and the amendments the
 daily job does not fetch.
 
 ## Daily jobs
