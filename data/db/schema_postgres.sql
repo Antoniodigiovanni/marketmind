@@ -568,7 +568,8 @@ CREATE INDEX IF NOT EXISTS idx_esef_country_date ON esef_filings (country, filed
 CREATE TABLE IF NOT EXISTS agent_runs (
     run_id      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     run_date    DATE        NOT NULL,
-    job_type    TEXT        NOT NULL,     -- 'news' | 'fetch' | 'views' | 'filings' | 'profiles'
+    job_type    TEXT        NOT NULL,     -- 'daily_refresh' | 'fetch' | 'news' | 'views'
+                                          -- | 'filings' | 'profiles'
     status      TEXT        NOT NULL DEFAULT 'started'
         CHECK (status IN ('started','succeeded','failed','aborted')),
     started_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),

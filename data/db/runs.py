@@ -46,7 +46,7 @@ async def finish_run(
     *,
     run_id: uuid.UUID,
     status: str,
-    counters: dict[str, int],
+    counters: dict[str, object],
     error: str | None = None,
 ) -> None:
     """Mark a run finished, recording its outcome counters.
@@ -55,7 +55,8 @@ async def finish_run(
         conn: An open connection.
         run_id: The run to finish.
         status: 'succeeded', 'failed', or 'aborted'.
-        counters: Per-job outcome counts, e.g. {'articles_fetched': 10}.
+        counters: Per-job outcome counts, e.g. {'articles_fetched': 10}, or
+            counts grouped per source, e.g. {'prices': {'fetched': 10}}.
             Stored as JSONB rather than fixed columns, so a new counter is
             never a schema change.
         error: Failure message, when status is 'failed' or 'aborted'.

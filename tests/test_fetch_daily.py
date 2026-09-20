@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from contextlib import asynccontextmanager
 
 import polars as pl
 import pytest
@@ -12,6 +13,7 @@ import data.fetch as fetch_mod
 from data.db.identifiers import create_identifier
 from data.db.listings import get_current_listing, upsert_listing
 from data.db.prices import get_last_fx_date, get_prices, get_volatility, upsert_prices
+from data.db.runs import list_recent_runs
 
 pytestmark = pytest.mark.asyncio
 
@@ -307,3 +309,97 @@ async def test_refresh_volatility_computes_from_prices(pg_conn) -> None:
     assert written == 4
     rows = await get_volatility(pg_conn, listing_id=listing_id)
     assert len(rows) == 4
+
+
+class _FakePool:
+    """Hands the daily refresh the test's own transaction-scoped connection."""
+
+    def __init__(self, conn) -> None:
+        self._conn = conn
+
+    def connection(self):
+        conn = self._conn
+
+        @asynccontextmanager
+        async def _cm():
+            yield conn
+
+        return _cm()
+
+
+def _stub_refresh_steps(monkeypatch, pg_conn, *, failing: str | None = None) -> None:
+    """Replace every refresh step with a canned summary, optionally failing one."""
+
+    async def fake_open_pool(*args, **kwargs):
+        return _FakePool(pg_conn)
+
+    async def fake_close_pool(pool) -> None:
+        return None
+
+    monkeypatch.setattr(fetch_mod, "open_pool", fake_open_pool)
+    monkeypatch.setattr(fetch_mod, "close_pool", fake_close_pool)
+
+    steps = {
+        "fetch_daily_prices": {"fetched": ["AAPL", "MSFT"], "skipped_unresolved": ["NOPE"]},
+        "fetch_volatility_indices": None,
+        "fetch_benchmark_prices": {
+            "fetched": ["sp500"],
+            "current": [],
+            "no_data": [],
+            "failed": ["stoxx600"],
+        },
+        "sync_fx_rates": {"USD": 3},
+        "refresh_volatility": 7,
+        "run_daily_macro_sync_postgres": {"DGS10": 2},
+        "sync_dividends": {"AAPL": 1},
+        "sync_short_interest_postgres": {"AAPL": 4},
+    }
+
+    for name, result in steps.items():
+
+        async def step(*args, _result=result, _name=name, **kwargs):
+            if _name == failing:
+                raise RuntimeError(f"{_name} upstream is down")
+            return _result
+
+        monkeypatch.setattr(fetch_mod, name, step)
+
+
+async def test_daily_refresh_records_a_fetch_audit_row(pg_conn, monkeypatch) -> None:
+    _stub_refresh_steps(monkeypatch, pg_conn)
+
+    await fetch_mod._run("2026-08-04")
+
+    runs = await list_recent_runs(pg_conn, job_type="fetch", limit=5)
+    assert len(runs) == 1
+    assert runs[0]["status"] == "succeeded"
+    assert runs[0]["error"] is None
+    assert runs[0]["counters"] == {
+        "prices": {"fetched": 2, "skipped_unresolved": 1},
+        "benchmarks": {"fetched": 1, "current": 0, "no_data": 0, "failed": 1},
+        "fx": {"USD": 3},
+        "volatility_rows": 7,
+        "macro": {"DGS10": 2},
+        "dividends": {"AAPL": 1},
+        "short_interest": {"AAPL": 4},
+    }
+
+
+async def test_daily_refresh_records_partial_counters_when_a_step_fails(
+    pg_conn, monkeypatch
+) -> None:
+    """A run that dies mid-way must still show which sources completed."""
+    _stub_refresh_steps(monkeypatch, pg_conn, failing="sync_dividends")
+
+    with pytest.raises(RuntimeError):
+        await fetch_mod._run("2026-08-04")
+
+    runs = await list_recent_runs(pg_conn, job_type="fetch", limit=5)
+    assert len(runs) == 1
+    assert runs[0]["status"] == "failed"
+    assert "sync_dividends upstream is down" in runs[0]["error"]
+    counters = runs[0]["counters"]
+    assert counters["prices"] == {"fetched": 2, "skipped_unresolved": 1}
+    assert counters["macro"] == {"DGS10": 2}
+    assert "dividends" not in counters
+    assert "short_interest" not in counters

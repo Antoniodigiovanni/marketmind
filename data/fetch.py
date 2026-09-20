@@ -22,6 +22,7 @@ from data.db.prices import (
     upsert_fx_rates,
     upsert_prices,
 )
+from data.db.runs import finish_run, start_run
 from data.dividends.fetch import sync_dividends
 from data.macro.fetch import run_daily_macro_sync_postgres
 from data.processed.volatility import compute_realized_vol
@@ -376,18 +377,53 @@ async def refresh_volatility(conn) -> int:
 
 
 async def _run(as_of: str) -> None:
-    """Run the daily price/FX/volatility refresh against Postgres."""
+    """Run the daily price/FX/volatility refresh against Postgres.
+
+    Raises:
+        Exception: Whatever a refresh step raises, after the failure and the
+            counters collected so far are recorded in agent_runs.
+    """
     pool = await open_pool(dsn_from_env())
     try:
         async with pool.connection() as conn:
-            summary = await fetch_daily_prices(conn, as_of=as_of)
-            await fetch_volatility_indices(conn, dt.date.fromisoformat(as_of))
-            benchmark_summary = await fetch_benchmark_prices(conn, as_of=as_of)
-            fx_summary = await sync_fx_rates(conn, as_of=as_of)
-            vol_written = await refresh_volatility(conn)
-            macro_summary = await run_daily_macro_sync_postgres(conn, today=as_of)
-            dividend_summary = await sync_dividends(conn, as_of=as_of)
-            short_summary = await sync_short_interest_postgres(conn, as_of=as_of)
+            run_id = await start_run(conn, run_date=dt.date.fromisoformat(as_of), job_type="fetch")
+            # Filled in step by step rather than at the end, so a run that
+            # dies halfway still records what it managed to complete.
+            counters: dict[str, object] = {}
+            try:
+                summary = await fetch_daily_prices(conn, as_of=as_of)
+                counters["prices"] = {
+                    "fetched": len(summary["fetched"]),
+                    "skipped_unresolved": len(summary["skipped_unresolved"]),
+                }
+
+                await fetch_volatility_indices(conn, dt.date.fromisoformat(as_of))
+
+                benchmark_summary = await fetch_benchmark_prices(conn, as_of=as_of)
+                counters["benchmarks"] = {
+                    group: len(keys) for group, keys in benchmark_summary.items()
+                }
+
+                fx_summary = await sync_fx_rates(conn, as_of=as_of)
+                counters["fx"] = dict(fx_summary)
+
+                vol_written = await refresh_volatility(conn)
+                counters["volatility_rows"] = vol_written
+
+                macro_summary = await run_daily_macro_sync_postgres(conn, today=as_of)
+                counters["macro"] = dict(macro_summary)
+
+                dividend_summary = await sync_dividends(conn, as_of=as_of)
+                counters["dividends"] = dict(dividend_summary)
+
+                short_summary = await sync_short_interest_postgres(conn, as_of=as_of)
+                counters["short_interest"] = dict(short_summary)
+            except Exception as exc:
+                await finish_run(
+                    conn, run_id=run_id, status="failed", counters=counters, error=str(exc)
+                )
+                raise
+            await finish_run(conn, run_id=run_id, status="succeeded", counters=counters)
             logger.info(
                 f"prices fetched={len(summary['fetched'])} "
                 f"skipped={len(summary['skipped_unresolved'])} "

@@ -472,7 +472,14 @@ async def run_daily_ingest(
     tickers_total = universe.height
     tickers_done = 0
 
-    run_id = await start_run(conn, run_date=date_as_date, job_type="news")
+    # The annual profile refresh shares this entry point but is a different
+    # job: auditing it as 'news' made a run that fetched no article at all
+    # look like a news run that found nothing.
+    run_id = await start_run(
+        conn,
+        run_date=date_as_date,
+        job_type="profiles" if profiles_only else "news",
+    )
 
     try:
         for row in universe.iter_rows(named=True):
