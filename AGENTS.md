@@ -9,8 +9,10 @@ separate, read-only operations dashboard shows job history and logs.
 
 Production runs on one Linux host with Docker Compose and a published image;
 the VPS does not need a source checkout. A versioned GitHub release bundles
-Compose and host scripts with the application and PostgreSQL image digests.
-PostgreSQL with pgvector is the only structured, queryable store. systemd
+Compose and host scripts with the application and optional PostgreSQL image
+digests. The normal deployment connects to a shared PostgreSQL instance using
+a dedicated database and role; an override can create a managed instance when
+none exists. PostgreSQL with pgvector is the only structured, queryable store. systemd
 timers invoke one-off jobs from the same image as the long-running MCP server.
 Local development and CI use a disposable PostgreSQL database.
 
@@ -32,6 +34,7 @@ uv run python -m agent.refresh {YYYY-MM-DD}          # complete daily job
 uv run python -m server.mcp                           # authenticated HTTP MCP
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
+# Add -f docker-compose.managed-db.yml only when this project owns PostgreSQL.
 ```
 
 Always use `uv run` for Python commands. In containers and systemd jobs, use

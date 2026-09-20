@@ -14,9 +14,19 @@ trap 'exit 1' HUP INT TERM
 trap 'rm -rf -- "$set_dir"' EXIT
 
 cd "$install_dir"
-docker compose -f docker-compose.prod.yml exec -T postgres \
-  pg_dump -U marketmind -Fc marketmind > "$set_dir/postgres.dump"
-docker compose -f docker-compose.prod.yml exec -T postgres \
+. ./release.env
+: "${MARKETMIND_POSTGRES_IMAGE:?release.env has no PostgreSQL image}"
+compose_config="$(docker compose -f docker-compose.prod.yml config --format json)"
+database_dsn="$(printf '%s' "$compose_config" | \
+  jq -er '.services.marketmind.environment.MARKETMIND_DATABASE_DSN')"
+database_network="$(printf '%s' "$compose_config" | jq -er '.networks.database.name')"
+client_user="$(id -u):$(id -g)"
+docker run --rm --network "$database_network" --user "$client_user" \
+  -e PGPASSFILE=/run/secrets/app_pgpass \
+  -v "$install_dir/secrets/app_pgpass:/run/secrets/app_pgpass:ro" \
+  "$MARKETMIND_POSTGRES_IMAGE" pg_dump --dbname "$database_dsn" -Fc \
+  > "$set_dir/postgres.dump"
+docker run --rm -i "$MARKETMIND_POSTGRES_IMAGE" \
   pg_restore --list < "$set_dir/postgres.dump" >/dev/null
 tar -czf "$set_dir/files.tar.gz" data/raw state
 tar -tzf "$set_dir/files.tar.gz" >/dev/null

@@ -72,7 +72,7 @@ jobs:
           postgres_ref="$(docker image inspect pgvector/pgvector:pg16 --format '{{index .RepoDigests 0}}')"
           test -n "$postgres_ref"
           mkdir -p bundle/deploy
-          cp docker-compose.prod.yml .env.example bundle/
+          cp docker-compose.prod.yml docker-compose.managed-db.yml .env.example bundle/
           cp deploy/*.sh deploy/logrotate deploy/README.md bundle/deploy/
           cp -R deploy/systemd bundle/deploy/
           printf 'MARKETMIND_IMAGE=%s@%s\nMARKETMIND_POSTGRES_IMAGE=%s\nRELEASE_TAG=%s\n' \

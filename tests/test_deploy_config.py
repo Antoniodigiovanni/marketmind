@@ -18,6 +18,7 @@ from agent.catchup import MAX_CATCHUP_DAYS, missing_dates
 
 ROOT = Path(__file__).resolve().parent.parent
 COMPOSE = ROOT / "docker-compose.prod.yml"
+MANAGED_DATABASE = ROOT / "docker-compose.managed-db.yml"
 RUNBOOK = ROOT / "deploy" / "README.md"
 SYSTEMD = ROOT / "deploy" / "systemd"
 
@@ -46,10 +47,11 @@ def test_postgres_is_the_only_structured_store() -> None:
         assert "duckdb" not in path.read_text(encoding="utf-8").lower()
 
 
-def test_production_dsn_uses_compose_database_hostname() -> None:
+def test_production_dsn_uses_shared_database_hostname() -> None:
     dsn = dotenv_values(ROOT / ".env.example")["MARKETMIND_DATABASE_DSN"]
     assert dsn is not None
-    assert urlparse(dsn).hostname == "postgres"
+    assert urlparse(dsn).hostname == "postgres-shared"
+    assert urlparse(dsn).path == "/marketmind"
     assert urlparse(dsn).password is None
 
 
@@ -57,7 +59,6 @@ def test_compose_uses_digest_inputs_and_file_secrets() -> None:
     compose = COMPOSE.read_text(encoding="utf-8")
     for variable in (
         "MARKETMIND_IMAGE",
-        "MARKETMIND_POSTGRES_IMAGE",
         "MARKETMIND_UID",
         "MARKETMIND_GID",
     ):
@@ -65,7 +66,6 @@ def test_compose_uses_digest_inputs_and_file_secrets() -> None:
     assert "env_file:" not in compose
     assert "PGPASSWORD:" not in compose
     assert "POSTGRES_PASSWORD:" not in compose
-    assert "POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password" in compose
     assert "PGPASSFILE: /run/secrets/app_pgpass" in compose
     assert "MARKETMIND_MCP_TOKEN_FILE: /run/secrets/mcp_token" in compose
     assert "AI_API_KEY_FILE: /run/secrets/llm_api_key" in compose
@@ -75,6 +75,49 @@ def test_compose_uses_digest_inputs_and_file_secrets() -> None:
     assert "read_only: true" in compose
     assert "build:" not in compose
     assert compose.count("image: ${MARKETMIND_IMAGE:?") == 2
+    assert "  postgres:" not in compose
+    assert "depends_on:" not in compose
+    assert "external: true" in compose
+
+
+def test_managed_database_is_an_explicit_override() -> None:
+    managed = MANAGED_DATABASE.read_text(encoding="utf-8")
+    assert "image: ${MARKETMIND_POSTGRES_IMAGE:?" in managed
+    assert "POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password" in managed
+    assert "marketmind_postgres_data:/var/lib/postgresql/data" in managed
+    assert managed.count("depends_on:") == 2
+
+
+def test_resolved_compose_modes_select_one_database_path() -> None:
+    if shutil.which("docker") is None:
+        pytest.skip("Docker Compose CLI is unavailable")
+    env = {
+        **os.environ,
+        "MARKETMIND_IMAGE": "ghcr.io/example/marketmind@sha256:" + "a" * 64,
+        "MARKETMIND_POSTGRES_IMAGE": "pgvector/pgvector@sha256:" + "b" * 64,
+        "MARKETMIND_DATABASE_DSN": "postgresql://marketmind@postgres-shared:5432/marketmind",
+        "MARKETMIND_DATABASE_NETWORK": "marketmind-database",
+        "MARKETMIND_UID": "1000",
+        "MARKETMIND_GID": "1000",
+        "SEC_CONTACT_NAME": "Test",
+        "SEC_CONTACT_EMAIL": "test@example.com",
+    }
+
+    def services(*files: Path) -> dict[str, object]:
+        command = ["docker", "compose"]
+        for path in files:
+            command.extend(("-f", str(path)))
+        command.extend(("config", "--format", "json"))
+        result = subprocess.run(command, check=True, capture_output=True, text=True, env=env)
+        return json.loads(result.stdout)["services"]
+
+    external_services = services(COMPOSE)
+    assert set(external_services) == {"marketmind"}
+    assert "depends_on" not in external_services["marketmind"]
+
+    managed_services = services(COMPOSE, MANAGED_DATABASE)
+    assert set(managed_services) == {"marketmind", "postgres"}
+    assert "postgres" in managed_services["marketmind"]["depends_on"]
 
 
 def test_release_bundle_and_runbook_need_no_source_checkout() -> None:
@@ -82,7 +125,7 @@ def test_release_bundle_and_runbook_need_no_source_checkout() -> None:
     runbook = RUNBOOK.read_text(encoding="utf-8")
     for item in ("steps.image.outputs.digest", "release.env", "sha256sum", "gh release create"):
         assert item in workflow
-    assert "docker-compose.prod.yml" in workflow
+    assert "docker-compose.prod.yml docker-compose.managed-db.yml" in workflow
     assert "deploy/systemd" in workflow
     assert "sha256sum --check" in runbook
     assert "git clone" not in runbook
@@ -108,13 +151,13 @@ def test_resolved_dashboard_environment_excludes_write_credentials() -> None:
     env = {
         **os.environ,
         "MARKETMIND_IMAGE": "ghcr.io/example/marketmind@sha256:" + "a" * 64,
-        "MARKETMIND_POSTGRES_IMAGE": "pgvector/pgvector@sha256:" + "b" * 64,
-        "MARKETMIND_DATABASE_DSN": "postgresql://marketmind@postgres:5432/marketmind",
+        "MARKETMIND_DATABASE_DSN": "postgresql://marketmind@postgres-shared:5432/marketmind",
+        "MARKETMIND_DATABASE_NETWORK": "marketmind-database",
         "MARKETMIND_UID": "1000",
         "MARKETMIND_GID": "1000",
         "SEC_CONTACT_NAME": "Test",
         "SEC_CONTACT_EMAIL": "test@example.com",
-        "MARKETMIND_DASHBOARD_DSN": "postgresql://marketmind_ro@postgres:5432/marketmind",
+        "MARKETMIND_DASHBOARD_DSN": ("postgresql://marketmind_ro@postgres-shared:5432/marketmind"),
     }
     result = subprocess.run(
         [
@@ -184,7 +227,11 @@ def test_backup_is_one_verified_offsite_set() -> None:
     restore = (ROOT / "deploy/restore-check.sh").read_text(encoding="utf-8")
     for marker in ("pg_dump", "files.tar.gz", "SHA256SUMS", "rclone copy", "rclone check"):
         assert marker in backup
+    assert "docker compose -f docker-compose.prod.yml exec" not in backup
+    assert 'jq -er ".networks.database.name"' not in backup
+    assert ".networks.database.name" in backup
     assert "pg_restore" in restore
+    assert "POSTGRES_HOST_AUTH_METHOD=trust" in restore
     assert "sha256sum --check" in restore
     assert "marketmind-backup.timer" in RUNBOOK.read_text(encoding="utf-8")
 

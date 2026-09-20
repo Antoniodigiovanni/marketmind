@@ -1,0 +1,41 @@
+# Optional PostgreSQL service for hosts without a shared instance. Combine
+# this file with docker-compose.prod.yml; do not use it when attaching to an
+# existing PostgreSQL server.
+services:
+  postgres:
+    image: ${MARKETMIND_POSTGRES_IMAGE:?set MARKETMIND_POSTGRES_IMAGE from release.env}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: marketmind
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: marketmind
+    volumes:
+      - marketmind_postgres_data:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
+    networks:
+      database:
+        aliases:
+          - postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketmind -d marketmind"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  marketmind:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  dashboard:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+
+volumes:
+  marketmind_postgres_data:

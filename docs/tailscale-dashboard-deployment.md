@@ -37,7 +37,6 @@ docker compose --profile dashboard -f docker-compose.prod.yml config --services
 The output should include:
 
 ```text
-postgres
 marketmind
 dashboard
 ```
@@ -63,14 +62,9 @@ password.
 
 ## 4. Create the read-only database account
 
-Open PostgreSQL:
-
-```bash
-docker compose -f docker-compose.prod.yml exec postgres \
-  psql -U marketmind -d marketmind
-```
-
-At the PostgreSQL prompt, run:
+Connect through the administration path for the shared PostgreSQL instance.
+For the optional managed database, use the combined Compose command documented
+in `deploy/README.md`. At the PostgreSQL prompt, run:
 
 ```sql
 DO $$
@@ -106,7 +100,10 @@ read -rsp 'Dashboard token: ' browser_secret; echo
 printf '%s\n' "$browser_secret" > secrets/dashboard_token
 unset browser_secret
 read -rsp 'Read-only database password: ' database_secret; echo
-printf 'postgres:5432:marketmind:marketmind_ro:%s\n' "$database_secret" > secrets/dashboard_pgpass
+read -rp 'Database hostname from MARKETMIND_DASHBOARD_DSN: ' database_host
+printf '%s:5432:marketmind:marketmind_ro:%s\n' \
+  "$database_host" "$database_secret" > secrets/dashboard_pgpass
+unset database_host
 unset database_secret
 chmod 0600 secrets/dashboard_token secrets/dashboard_pgpass
 ```
@@ -291,4 +288,4 @@ cd /srv/marketmind
 docker compose -f docker-compose.prod.yml stop dashboard
 ```
 
-This does not stop PostgreSQL, scheduled jobs, or the MCP server.
+This does not stop the shared PostgreSQL service, scheduled jobs, or the MCP server.

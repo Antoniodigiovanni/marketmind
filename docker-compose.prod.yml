@@ -2,29 +2,12 @@
 # this Compose file and the small host-configuration bundle under /app/deploy.
 # See deploy/README.md for extracting it without a source checkout.
 services:
-  postgres:
-    image: ${MARKETMIND_POSTGRES_IMAGE:?set MARKETMIND_POSTGRES_IMAGE from release.env}
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: marketmind
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-      POSTGRES_DB: marketmind
-    volumes:
-      - marketmind_postgres_data:/var/lib/postgresql/data
-    secrets:
-      - postgres_password
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U marketmind -d marketmind"]
-      interval: 5s
-      timeout: 3s
-      retries: 15
-
   marketmind:
     image: ${MARKETMIND_IMAGE:?set MARKETMIND_IMAGE in .env}
     restart: unless-stopped
     environment:
-      # Compose networking resolves the `postgres` hostname in the DSN.
-      # Supplying the password through libpq avoids URL-encoding problems.
+      # The DSN host must resolve on the external database network. Supplying
+      # the password through libpq avoids URL-encoding problems.
       MARKETMIND_DATABASE_DSN: ${MARKETMIND_DATABASE_DSN:?set MARKETMIND_DATABASE_DSN in .env}
       PGPASSFILE: /run/secrets/app_pgpass
       MARKETMIND_MCP_TOKEN_FILE: /run/secrets/mcp_token
@@ -56,9 +39,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    depends_on:
-      postgres:
-        condition: service_healthy
+    networks:
+      - database
     ports:
       - "127.0.0.1:${MARKETMIND_MCP_PORT:-8000}:${MARKETMIND_MCP_PORT:-8000}"
     volumes:
@@ -102,9 +84,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    depends_on:
-      postgres:
-        condition: service_healthy
+    networks:
+      - database
     # Published on loopback only. Reaching it from another machine is an SSH
     # port-forward unless a TLS-terminating reverse proxy is put in front.
     ports:
@@ -117,8 +98,6 @@ services:
       - dashboard_token
 
 secrets:
-  postgres_password:
-    file: ./secrets/postgres_password
   app_pgpass:
     file: ./secrets/app_pgpass
   mcp_token:
@@ -132,5 +111,7 @@ secrets:
   dashboard_token:
     file: ./secrets/dashboard_token
 
-volumes:
-  marketmind_postgres_data:
+networks:
+  database:
+    external: true
+    name: ${MARKETMIND_DATABASE_NETWORK:-marketmind-database}
