@@ -212,6 +212,8 @@ def test_timers_and_shared_job_runner() -> None:
     assert "python -m agent.catchup" in runner
     assert "python -m data.filings.backfill --financials" in runner
     assert "python -m data.filings.esef" in runner
+    assert "initial-backfill.complete" in runner
+    assert "data.filings.backfill --issuers" in runner
     assert "--frozen --no-sync" in runner
     for name in ("daily", "universe", "profiles", "financials", "esef", "backup"):
         service = (SYSTEMD / f"marketmind-{name}.service").read_text(encoding="utf-8")
@@ -231,6 +233,31 @@ def test_timers_and_shared_job_runner() -> None:
         "init-marketmind-db.sh",
     ):
         subprocess.run(["sh", "-n", str(ROOT / "deploy" / script)], check=True)
+
+
+def test_interactive_installer_discovers_owner_and_configures_schedules() -> None:
+    installer_path = ROOT / "deploy/install.sh"
+    installer = installer_path.read_text(encoding="utf-8")
+    subprocess.run(["bash", "-n", str(installer_path)], check=True)
+
+    assert "id -un" in installer
+    assert "id -u" in installer
+    assert "id -g" in installer
+    assert "antonio" not in installer.lower()
+    assert 'print "User=" user' in installer
+    assert 'print "Group=" group' in installer
+    assert "Run this as your normal deployment account" in installer
+    assert "systemd-analyze calendar" in installer
+    assert "installed_schedule" in installer
+    assert "systemctl is-enabled" in installer
+    assert "systemctl start --no-block marketmind-initial-backfill.service" in installer
+    assert "marketmind-initial-backfill.timer" in installer
+    assert "*-*-* 06:10:00" in installer
+    assert "*-02,05,08,11-01 04:00:00" in installer
+    assert "BACKFILL_MODE=scheduled" in installer
+
+    backfill_service = (SYSTEMD / "marketmind-initial-backfill.service").read_text(encoding="utf-8")
+    assert "run-job.sh backfill" in backfill_service
 
 
 def test_backup_is_one_verified_offsite_set() -> None:
@@ -270,7 +297,16 @@ def test_dashboard_role_and_private_logs_documented() -> None:
 
 def test_initial_filings_backfills_are_documented_before_timers() -> None:
     runbook = RUNBOOK.read_text(encoding="utf-8")
-    schedule = runbook.index("## 6. Install the schedule")
+    schedule = runbook.index("### Install the schedule")
     assert runbook.index("data.filings.backfill --issuers") < schedule
     assert runbook.index("data.filings.backfill --financials") < schedule
     assert runbook.index("python -m data.filings.esef") < schedule
+
+
+def test_installer_is_the_primary_documented_deployment_path() -> None:
+    runbook = RUNBOOK.read_text(encoding="utf-8")
+    installer = runbook.index("./deploy/install.sh")
+    manual = runbook.index("## Manual installation reference")
+    assert installer < manual
+    assert "next 22:00 local time" in runbook
+    assert "Installation does\nnot wait for the backfill" in runbook
