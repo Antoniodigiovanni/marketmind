@@ -8,12 +8,13 @@ one for Marketmind.
 
 A `v*` Git tag publishes an amd64 application image to GHCR and attaches a
 matching deployment archive to the GitHub release. The archive contains both
-Compose files, `.env.example`, host scripts, systemd units, and `release.env`.
+Compose files, `.env.example`, an interactive installer, host scripts, systemd
+units, and `release.env`.
 The server does not need a source checkout or a local build.
 
 ## Requirements
 
-- Linux amd64 with Docker Engine, Compose, systemd, `flock`, `sha256sum`,
+- Linux amd64 with Bash, Docker Engine, Compose, systemd, `flock`, `sha256sum`,
   `tar`, and `logrotate`.
 - An external Docker network shared with PostgreSQL. This guide calls it
   `postgres-network`; it publishes no port.
@@ -47,7 +48,51 @@ package is private, authenticate the downloads and run `docker login ghcr.io`
 with read-package access. Updating the bundle leaves `.env`, `secrets/`,
 `data/raw/`, and `state/` alone.
 
-## 2. Prepare local directories
+## 2. Run the interactive installer
+
+Run the installer as the normal deployment account, not through `sudo`:
+
+```bash
+cd /srv/marketmind
+./deploy/install.sh
+```
+
+The installer requests `sudo` only when it writes systemd and logrotate files.
+It discovers the current account's UID and GID, prepares the local directories,
+copies the release's pinned images into `.env`, creates missing random secrets,
+starts the selected database mode and application, and installs the schedule.
+The generated job services run as that account. Existing secrets, data, and
+timer choices are retained when the installer is run again.
+
+For every recurring job, the installer asks whether to enable it and presents
+the current schedule as the default. A custom value can be any calendar
+expression accepted by `systemd-analyze calendar`. The bundled defaults are:
+
+| Job | Enabled | Default schedule |
+|---|---:|---|
+| Daily refresh | Yes | Every day at 06:10 |
+| Universe refresh | Yes | Monday at 06:00 |
+| Company profiles | Yes | 5 January at 06:30 |
+| Company financials | Yes | 1 February, May, August, and November at 04:00 |
+| European filings | Yes | First day of each month at 05:00 |
+| Off-host backup | No | Every day at 02:30 |
+
+The installer also offers to run the initial historical filing backfill. Its
+default is a persistent, one-time systemd timer for the next 22:00 local time;
+`now`, a custom calendar time, and `skip` are also available. Installation does
+not wait for the backfill. The four stages run in order under a shared lock,
+are resumable after interruption, and write a completion marker only after all
+stages succeed.
+
+```bash
+journalctl -fu marketmind-initial-backfill.service
+```
+
+The rest of this document is the manual equivalent and operational reference.
+
+## Manual installation reference
+
+### Prepare local directories
 
 ```bash
 cd /srv/marketmind
@@ -66,7 +111,7 @@ under `secrets/`.
 
 Choose exactly one database path below.
 
-## 3A. Attach to an existing PostgreSQL instance
+### Attach to an existing PostgreSQL instance
 
 This is the recommended path when several projects share one PostgreSQL
 instance. Give each project a separate database and owner role:
@@ -133,7 +178,7 @@ Create `secrets/app_pgpass` using the exact DSN hostname and database password:
 postgres-shared:5432:marketmind:marketmind:<database-password>
 ```
 
-## 3B. Bootstrap the first shared PostgreSQL instance
+### Bootstrap the first shared PostgreSQL instance
 
 Use this path when the homelab does not have PostgreSQL yet. It creates a
 neutral `postgres` administrator and a separate, non-administrative
@@ -167,7 +212,7 @@ database and non-administrative role for each one using the `postgres`
 administrator. Changing either secret later does not change a role password in
 an initialized cluster; alter that database role at the same time.
 
-## 4. Create application secrets
+### Create application secrets
 
 For either database path, create these files after running `umask 077`:
 
@@ -192,7 +237,7 @@ mode `0644`. The PostgreSQL entrypoint changes to its internal UID before
 reading the mounted files, while the private parent directory prevents host
 users from traversing to them. Keep `app_pgpass` at `0600` for libpq.
 
-## 5. Start and verify Marketmind
+### Start and verify Marketmind
 
 With an existing shared PostgreSQL instance:
 
@@ -244,7 +289,7 @@ The issuer and financial commands can take a long time for the complete
 universe. Re-run either command after an interruption; stored filings and
 checkpoints prevent completed work from being inserted again.
 
-## 6. Install the schedule
+### Install the schedule
 
 Install timers only after the MCP smoke test succeeds. On a host with an older
 installation, remove its cron entry and disable old timers first:
