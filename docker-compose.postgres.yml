@@ -1,9 +1,11 @@
-# Optional PostgreSQL service for hosts without a shared instance. Combine
-# this file with docker-compose.prod.yml; do not use it when attaching to an
-# existing PostgreSQL server.
+# Independent PostgreSQL stack shared by projects on one host. The Marketmind
+# installer copies this file to /srv/postgres/docker-compose.yml; application
+# lifecycles must not own or stop this service.
+name: shared-postgres
+
 services:
   postgres:
-    image: ${MARKETMIND_POSTGRES_IMAGE:?set MARKETMIND_POSTGRES_IMAGE from release.env}
+    image: ${POSTGRES_IMAGE:?set POSTGRES_IMAGE in /srv/postgres/.env}
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
@@ -11,10 +13,8 @@ services:
       POSTGRES_DB: postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./deploy/init-marketmind-db.sh:/docker-entrypoint-initdb.d/10-marketmind.sh:ro
     secrets:
       - postgres_admin_password
-      - marketmind_database_password
     networks:
       database:
         aliases:
@@ -25,21 +25,14 @@ services:
       timeout: 3s
       retries: 15
 
-  marketmind:
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  dashboard:
-    depends_on:
-      postgres:
-        condition: service_healthy
-
 secrets:
   postgres_admin_password:
     file: ./secrets/postgres_admin_password
-  marketmind_database_password:
-    file: ./secrets/marketmind_database_password
+
+networks:
+  database:
+    external: true
+    name: ${POSTGRES_NETWORK:-postgres-network}
 
 volumes:
   postgres_data:

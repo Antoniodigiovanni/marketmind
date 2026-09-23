@@ -1,15 +1,14 @@
 # Marketmind deployment
 
-The normal homelab deployment runs only the Marketmind containers and connects
-them to an existing PostgreSQL instance. Marketmind gets its own database and
-roles; it does not share another application's database or tables. If the host
-has no PostgreSQL instance, the optional managed-database Compose file starts
-one for Marketmind.
+Marketmind connects to a shared PostgreSQL instance through its own database
+and role. On a new homelab, the installer creates PostgreSQL as an independent
+Compose project under `/srv/postgres`. Other projects can use that instance,
+and Marketmind updates or shutdowns cannot stop it.
 
 A `v*` Git tag publishes an amd64 application image to GHCR and attaches a
-matching deployment archive to the GitHub release. The archive contains both
-Compose files, `.env.example`, an interactive installer, host scripts, systemd
-units, and `release.env`.
+matching deployment archive to the GitHub release. The archive contains the
+application and shared-PostgreSQL Compose files, `.env.example`, an interactive
+installer, host scripts, systemd units, and `release.env`.
 The server does not need a source checkout or a local build.
 
 ## Requirements
@@ -18,7 +17,7 @@ The server does not need a source checkout or a local build.
   `tar`, and `logrotate`.
 - An external Docker network shared with PostgreSQL. This guide calls it
   `postgres-network`; it publishes no port.
-- PostgreSQL 16 or later with pgvector installed. The managed image already
+- PostgreSQL 16 or later with pgvector installed. The bundled shared image
   includes pgvector.
 - A deployment account with Docker access and ownership of Marketmind's local
   state and secret files.
@@ -43,10 +42,12 @@ tar -xzf "marketmind-$release_tag-deploy.tar.gz"
 cat release.env
 ```
 
-Confirm that `RELEASE_TAG` matches the requested tag. If the repository or
-package is private, authenticate the downloads and run `docker login ghcr.io`
-with read-package access. Updating the bundle leaves `.env`, `secrets/`,
-`data/raw/`, and `state/` alone.
+Confirm that `RELEASE_TAG` matches the requested tag. A private repository
+returns `404` to unauthenticated `curl`; download the two assets with an
+authenticated `gh release download` on a trusted workstation and copy them to
+the host. A private package also requires `docker login ghcr.io` with
+read-package access. Updating the bundle leaves `.env`, `secrets/`, `data/raw/`,
+and `state/` alone.
 
 ## 2. Run the interactive installer
 
@@ -59,8 +60,9 @@ cd /srv/marketmind
 
 The installer requests `sudo` only when it writes systemd and logrotate files.
 It discovers the current account's UID and GID, prepares the local directories,
-copies the release's pinned images into `.env`, creates missing random secrets,
-starts the selected database mode and application, and installs the schedule.
+copies the release's pinned image into `.env`, creates missing random secrets,
+creates or connects to the independent shared database service, starts the
+application, and installs the schedule.
 The generated job services run as that account. Existing secrets, data, and
 timer choices are retained when the installer is run again.
 
@@ -178,39 +180,63 @@ Create `secrets/app_pgpass` using the exact DSN hostname and database password:
 postgres-shared:5432:marketmind:marketmind:<database-password>
 ```
 
-### Bootstrap the first shared PostgreSQL instance
+### Bootstrap the independent shared PostgreSQL instance
 
-Use this path when the homelab does not have PostgreSQL yet. It creates a
-neutral `postgres` administrator and a separate, non-administrative
-`marketmind` role and database. The container publishes the same
-`postgres-shared` network alias used in path 3A, so the DSNs remain:
+Use this path when the homelab does not have PostgreSQL yet. The database stack
+lives under `/srv/postgres`, separately from every application:
+
+```text
+/srv/postgres/       shared PostgreSQL lifecycle and administrator secret
+/srv/marketmind/     Marketmind application and its database-role secret
+```
+
+Prepare the shared stack using the PostgreSQL image from `release.env`:
+
+```bash
+sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" /srv/postgres
+install -d -m 0700 /srv/postgres/secrets
+install -m 0644 docker-compose.postgres.yml /srv/postgres/docker-compose.yml
+cat > /srv/postgres/.env <<EOF
+POSTGRES_IMAGE=<MARKETMIND_POSTGRES_IMAGE from release.env>
+POSTGRES_NETWORK=postgres-network
+POSTGRES_DATA_VOLUME=postgres-shared-data
+EOF
+openssl rand -hex 32 > /srv/postgres/secrets/postgres_admin_password
+chmod 0600 /srv/postgres/.env
+chmod 0644 /srv/postgres/secrets/postgres_admin_password
+docker compose --project-directory /srv/postgres \
+  -f /srv/postgres/docker-compose.yml up -d --wait
+```
+
+Generate Marketmind's separate role password and provision its database:
+
+```bash
+openssl rand -hex 32 > secrets/marketmind_database_password
+chmod 0600 secrets/marketmind_database_password
+./deploy/provision-marketmind-db.sh \
+  /srv/postgres /srv/marketmind/secrets/marketmind_database_password
+```
+
+The shared service publishes the same `postgres-shared` network alias used for
+an existing instance, so the application configuration remains:
 
 ```dotenv
 MARKETMIND_DATABASE_NETWORK=postgres-network
 MARKETMIND_DATABASE_DSN=postgresql://marketmind@postgres-shared:5432/marketmind
 MARKETMIND_DASHBOARD_DSN=postgresql://marketmind_ro@postgres-shared:5432/marketmind
-POSTGRES_DATA_VOLUME=postgres-shared-data
 ```
 
-Copy both image references from `release.env` into `.env`. Generate two
-different passwords with `openssl rand -hex 32`:
-
-- Put the cluster administrator password in
-  `secrets/postgres_admin_password`.
-- Put the Marketmind role password in
-  `secrets/marketmind_database_password` and use the same value in
-  `secrets/app_pgpass`:
+Use the Marketmind role password in `secrets/app_pgpass`:
 
 ```text
 postgres-shared:5432:marketmind:marketmind:<marketmind-database-password>
 ```
 
-The shared PostgreSQL volume persists across container replacement. Its
-initialization script enables `vector` and `pg_trgm` and creates only the
-Marketmind database. Later projects join `postgres-network`; create a separate
-database and non-administrative role for each one using the `postgres`
-administrator. Changing either secret later does not change a role password in
-an initialized cluster; alter that database role at the same time.
+The shared PostgreSQL volume persists across container replacement. The
+provisioning script enables `vector` and `pg_trgm` only in Marketmind's
+database. Later projects join `postgres-network` and receive a separate role
+and database. Manage PostgreSQL from `/srv/postgres`, independently of any one
+application.
 
 ### Create application secrets
 
@@ -231,28 +257,16 @@ with permissive permissions:
 chmod 0600 secrets/app_pgpass secrets/mcp_token secrets/llm_api_key secrets/fred_api_key
 ```
 
-For bootstrap mode only, keep the `secrets/` directory at `0700` and make
-`secrets/postgres_admin_password` and `secrets/marketmind_database_password`
-mode `0644`. The PostgreSQL entrypoint changes to its internal UID before
-reading the mounted files, while the private parent directory prevents host
-users from traversing to them. Keep `app_pgpass` at `0600` for libpq.
+Keep `marketmind_database_password` and `app_pgpass` at `0600`. The PostgreSQL
+administrator password belongs only under `/srv/postgres/secrets`; Marketmind
+does not mount or retain it.
 
 ### Start and verify Marketmind
-
-With an existing shared PostgreSQL instance:
 
 ```bash
 docker compose -f docker-compose.prod.yml config --quiet
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
-```
-
-When bootstrapping the first shared PostgreSQL instance:
-
-```bash
-docker compose -f docker-compose.prod.yml -f docker-compose.managed-db.yml config --quiet
-docker compose -f docker-compose.prod.yml -f docker-compose.managed-db.yml pull
-docker compose -f docker-compose.prod.yml -f docker-compose.managed-db.yml up -d
 ```
 
 Then inspect the application:
@@ -392,8 +406,10 @@ sudo systemctl enable --now marketmind-backup.timer
 ## Updating and rollback
 
 Download and verify the next release bundle, inspect `release.env`, extract
-it, and update the image digest in `.env`. Use the same Compose command as the
-selected database path, then reinstall the systemd units. Keep the previous
-release archive and image digest. A rollback across incompatible migrations
-also requires restoring the matching database and local files; treat the
-image, database dump, and files as one set.
+it, and rerun `deploy/install.sh`. The installer updates the application image
+without replacing data or secrets. Once `/srv/postgres` exists, the installer
+preserves its Compose file, image, volume, and network settings; update that
+shared service through its own maintenance process. Keep the previous release
+archive and image digest. A rollback across incompatible migrations also
+requires restoring the matching database and local files; treat the image,
+database dump, and files as one set.

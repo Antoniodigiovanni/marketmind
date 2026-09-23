@@ -105,7 +105,6 @@ services that need them. Locally, export values in your shell or pass
 | Variable | Purpose |
 |---|---|
 | `MARKETMIND_IMAGE` | Published image reference shared by the MCP service, dashboard, and scheduled jobs |
-| `MARKETMIND_POSTGRES_IMAGE` | Pinned PostgreSQL image from the same release bundle |
 | `AI_API_KEY_FILE` | Mounted chat API key for extraction / structuring in production |
 | `LLM_BASE_URL` | Chat endpoint (default `https://api.deepseek.com`) |
 | `LLM_MODEL` | Model identifier (default `deepseek-chat`) |
