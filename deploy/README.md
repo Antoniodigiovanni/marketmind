@@ -13,7 +13,7 @@ The server does not need a source checkout or a local build.
 
 ## Requirements
 
-- Linux amd64 with Bash, Docker Engine, Compose, systemd, `flock`, `sha256sum`,
+- Linux amd64 with Bash 4+, Docker Engine, Compose, systemd, `flock`, `sha256sum`,
   `tar`, and `logrotate`.
 - An external Docker network shared with PostgreSQL. This guide calls it
   `postgres-network`; it publishes no port.
@@ -23,7 +23,10 @@ The server does not need a source checkout or a local build.
   state and secret files.
 
 `jq`, `rclone`, and an off-host destination are needed only for Marketmind's
-optional backup job. Keep that timer disabled for the initial deployment.
+optional backup job. When that job is selected, the installer installs missing
+`jq` and `rclone` packages through the host package manager. You still need an
+account or reachable storage location for the off-host destination. Keep the
+timer disabled until a restore has been tested.
 
 ## 1. Download and verify a release
 
@@ -58,17 +61,19 @@ cd /srv/marketmind
 ./deploy/install.sh
 ```
 
-The installer requests `sudo` only when it writes systemd and logrotate files.
-It discovers the current account's UID and GID, prepares the local directories,
-copies the release's pinned image into `.env`, creates missing random secrets,
-creates or connects to the independent shared database service, starts the
-application, and installs the schedule.
+The installer checks Docker access before asking configuration questions. It
+requests `sudo` when it installs optional system packages or writes host-level
+systemd and logrotate files. It discovers the current account's UID and GID,
+prepares the local directories, copies the release's pinned image into `.env`,
+creates missing random secrets, creates or connects to the independent shared
+database service, starts the application, and installs the schedule.
 The generated job services run as that account. Existing secrets, data, and
 timer choices are retained when the installer is run again.
 
-For every recurring job, the installer asks whether to enable it and presents
-the current schedule as the default. A custom value can be any calendar
-expression accepted by `systemd-analyze calendar`. The bundled defaults are:
+For every recurring job, the installer explains its work and expected cost,
+asks whether to enable it, and presents the current schedule as the default.
+A custom value can be any calendar expression accepted by
+`systemd-analyze calendar`. The bundled defaults are:
 
 | Job | Enabled | Default schedule |
 |---|---:|---|
@@ -376,8 +381,14 @@ per-database restore. Marketmind's optional job also produces a coordinated
 set containing a custom-format dump of only the `marketmind` database and its
 local `data/raw` and `state` directories.
 
-To use that job, install `jq` and `rclone`, create `/srv/marketmind-backups`,
-configure root's rclone remote, and write:
+When the backup timer is selected, the interactive installer installs missing
+`jq` and `rclone` packages on supported apt, dnf, yum, zypper, and pacman hosts.
+It opens `rclone config` if the named remote does not exist and verifies access
+before saving the destination. The remote is configured for the deployment
+account because the backup service runs as that account.
+
+For the manual path, install `jq` and `rclone`, configure the deployment
+account's rclone remote, create `/srv/marketmind-backups`, and write:
 
 ```bash
 sudo install -d -m 0700 /etc/marketmind /srv/marketmind-backups

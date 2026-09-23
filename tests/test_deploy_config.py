@@ -264,9 +264,100 @@ def test_interactive_installer_discovers_owner_and_configures_schedules() -> Non
     assert "*-*-* 06:10:00" in installer
     assert "*-02,05,08,11-01 04:00:00" in installer
     assert "BACKFILL_MODE=scheduled" in installer
+    assert '[[ "${SELECTED_ENABLED[backup]}" == yes ]] || return 0' in installer
+    assert "The main freshness job" in installer
+    assert "It does not\\nrun the daily price/news pipeline" in installer
+    assert "model-provider intensive" in installer
+    assert "Quarterly\\nmatches the reporting cycle" in installer
+    assert "Requires jq, rclone" in installer
+    assert 'prompt_yes_no "Enable $label?"' in installer
+    for package_manager in ("apt-get", "dnf", "yum", "zypper", "pacman"):
+        assert package_manager in installer
+    assert 'install_system_packages "${missing[@]}"' in installer
+    assert "rclone listremotes" in installer
+    assert "rclone config" in installer
+    assert "rclone lsd" in installer
 
     backfill_service = (SYSTEMD / "marketmind-initial-backfill.service").read_text(encoding="utf-8")
     assert "run-job.sh backfill" in backfill_service
+
+
+def test_installer_can_skip_unconfigured_backups() -> None:
+    bash_major = int(
+        subprocess.run(
+            ["bash", "-c", 'printf "%s" "${BASH_VERSINFO[0]}"'],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    if bash_major < 4:
+        pytest.skip("installer requires Bash 4+; macOS ships Bash 3")
+    installer_path = ROOT / "deploy/install.sh"
+    env = {**os.environ, "INSTALLER_PATH": str(installer_path)}
+    subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$INSTALLER_PATH"; SELECTED_ENABLED[backup]=no; configure_backup',
+        ],
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_installer_uses_detected_package_manager_for_backup_dependencies(
+    tmp_path: Path,
+) -> None:
+    bash_major = int(
+        subprocess.run(
+            ["bash", "-c", 'printf "%s" "${BASH_VERSINFO[0]}"'],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    if bash_major < 4:
+        pytest.skip("installer requires Bash 4+; macOS ships Bash 3")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    call_log = tmp_path / "sudo-calls"
+    fake_apt = fake_bin / "apt-get"
+    fake_apt.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_apt.chmod(0o755)
+    fake_sudo = fake_bin / "sudo"
+    fake_sudo.write_text(
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$INSTALLER_CALL_LOG"\n',
+        encoding="utf-8",
+    )
+    fake_sudo.chmod(0o755)
+
+    installer_path = ROOT / "deploy/install.sh"
+    env = {
+        **os.environ,
+        "INSTALLER_PATH": str(installer_path),
+        "INSTALLER_CALL_LOG": str(call_log),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }
+    subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$INSTALLER_PATH"; install_system_packages jq rclone',
+        ],
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert call_log.read_text(encoding="utf-8").splitlines() == [
+        "apt-get update",
+        "apt-get install -y jq rclone",
+    ]
 
 
 def test_database_provisioning_keeps_password_out_of_process_arguments(
