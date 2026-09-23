@@ -7,6 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="$(dirname "$SCRIPT_DIR")"
 SYSTEMD_DIR=/etc/systemd/system
+POSTGRES_INSTALL_DIR=/srv/postgres
 DEPLOY_USER=$(id -un)
 DEPLOY_GROUP=$(id -gn)
 TIMER_NAMES=(daily universe profiles financials esef backup)
@@ -91,23 +92,31 @@ release_value() {
   awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "$INSTALL_DIR/release.env"
 }
 
-env_value() {
-  local key=$1
+config_value() {
+  local file=$1 key=$2
   awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); gsub(/^"|"$/, ""); print; exit}' \
-    "$INSTALL_DIR/.env"
+    "$file"
 }
 
-set_env() {
-  local key=$1 value=$2 tmp
+env_value() {
+  config_value "$INSTALL_DIR/.env" "$1"
+}
+
+set_config_value() {
+  local file=$1 key=$2 value=$3 tmp
   tmp=$(mktemp)
   awk -v key="$key" -v value="$value" '
     BEGIN { found = 0 }
     $0 ~ "^" key "=" { print key "=" value; found = 1; next }
     { print }
     END { if (!found) print key "=" value }
-  ' "$INSTALL_DIR/.env" > "$tmp"
-  cat "$tmp" > "$INSTALL_DIR/.env"
+  ' "$file" > "$tmp"
+  cat "$tmp" > "$file"
   rm -f "$tmp"
+}
+
+set_env() {
+  set_config_value "$INSTALL_DIR/.env" "$1" "$2"
 }
 
 write_secret() {
@@ -253,6 +262,53 @@ configure_backfill() {
   done
 }
 
+prepare_shared_postgres() {
+  local postgres_env="$POSTGRES_INSTALL_DIR/.env"
+  sudo install -d -m 0755 -o "$DEPLOY_USER" -g "$DEPLOY_GROUP" "$POSTGRES_INSTALL_DIR"
+  install -d -m 0700 "$POSTGRES_INSTALL_DIR/secrets"
+  if [[ ! -f "$POSTGRES_INSTALL_DIR/docker-compose.yml" ]]; then
+    install -m 0644 "$INSTALL_DIR/docker-compose.postgres.yml" \
+      "$POSTGRES_INSTALL_DIR/docker-compose.yml"
+  fi
+  if [[ ! -f "$postgres_env" ]]; then
+    (umask 077; : > "$postgres_env")
+  fi
+  chmod 0600 "$postgres_env"
+  if [[ -z "$(config_value "$postgres_env" POSTGRES_IMAGE)" ]]; then
+    set_config_value "$postgres_env" POSTGRES_IMAGE \
+      "$(release_value MARKETMIND_POSTGRES_IMAGE)"
+  fi
+  if [[ -z "$(config_value "$postgres_env" POSTGRES_NETWORK)" ]]; then
+    set_config_value "$postgres_env" POSTGRES_NETWORK "$database_network"
+  fi
+  if [[ -z "$(config_value "$postgres_env" POSTGRES_DATA_VOLUME)" ]]; then
+    set_config_value "$postgres_env" POSTGRES_DATA_VOLUME postgres-shared-data
+  fi
+
+  if [[ ! -s "$POSTGRES_INSTALL_DIR/secrets/postgres_admin_password" ]]; then
+    if [[ -s "$INSTALL_DIR/secrets/postgres_admin_password" ]]; then
+      mv "$INSTALL_DIR/secrets/postgres_admin_password" \
+        "$POSTGRES_INSTALL_DIR/secrets/postgres_admin_password"
+    else
+      write_secret "$POSTGRES_INSTALL_DIR/secrets/postgres_admin_password" \
+        "$(openssl rand -hex 32)" 0644
+    fi
+  fi
+  chmod 0644 "$POSTGRES_INSTALL_DIR/secrets/postgres_admin_password"
+}
+
+start_shared_postgres() {
+  local postgres_compose=(
+    docker compose --project-directory "$POSTGRES_INSTALL_DIR"
+    -f "$POSTGRES_INSTALL_DIR/docker-compose.yml"
+  )
+  "${postgres_compose[@]}" config --quiet
+  "${postgres_compose[@]}" pull
+  "${postgres_compose[@]}" up -d --wait
+  "$INSTALL_DIR/deploy/provision-marketmind-db.sh" \
+    "$POSTGRES_INSTALL_DIR" "$INSTALL_DIR/secrets/marketmind_database_password"
+}
+
 render_service() {
   local source=$1 target=$2 escaped_dir
   escaped_dir=${INSTALL_DIR//|/\\|}
@@ -336,6 +392,8 @@ done
 [[ -f "$INSTALL_DIR/release.env" ]] || die "release.env is missing; use the published bundle."
 [[ -f "$INSTALL_DIR/.env.example" ]] || die ".env.example is missing."
 [[ -f "$INSTALL_DIR/docker-compose.prod.yml" ]] || die "docker-compose.prod.yml is missing."
+[[ -f "$INSTALL_DIR/docker-compose.postgres.yml" ]] || \
+  die "docker-compose.postgres.yml is missing."
 docker compose version >/dev/null 2>&1 || die "The Docker Compose plugin is not available."
 
 heading "Marketmind homelab installer"
@@ -350,7 +408,6 @@ sudo install -d -m 0700 -o root -g root /var/log/marketmind
 if [[ ! -f .env ]]; then cp .env.example .env; fi
 chmod 0600 .env
 set_env MARKETMIND_IMAGE "$(release_value MARKETMIND_IMAGE)"
-set_env MARKETMIND_POSTGRES_IMAGE "$(release_value MARKETMIND_POSTGRES_IMAGE)"
 set_env MARKETMIND_UID "$(id -u)"
 set_env MARKETMIND_GID "$(id -g)"
 
@@ -367,23 +424,27 @@ if [[ -z "$contact_email" || "$contact_email" == "you@example.com" ]]; then
   set_env SEC_CONTACT_EMAIL "$contact_email"
 fi
 
-managed=yes
-if [[ -f state/deployment-mode && $(< state/deployment-mode) == existing ]]; then managed=no; fi
-if prompt_yes_no "Start the first shared PostgreSQL instance here?" "$managed"; then
-  managed=yes
-  printf 'managed\n' > state/deployment-mode
-  if [[ ! -s secrets/postgres_admin_password ]]; then
-    write_secret secrets/postgres_admin_password "$(openssl rand -hex 32)" 0644
-  fi
+database_network=$(env_value MARKETMIND_DATABASE_NETWORK)
+database_network=${database_network:-postgres-network}
+shared_local=yes
+if [[ -f state/deployment-mode && $(< state/deployment-mode) == existing ]]; then
+  shared_local=no
+fi
+if prompt_yes_no "Create or use the shared PostgreSQL service in /srv/postgres?" \
+  "$shared_local"; then
+  shared_local=yes
+  printf 'shared-local\n' > state/deployment-mode
   if [[ ! -s secrets/marketmind_database_password ]]; then
-    write_secret secrets/marketmind_database_password "$(openssl rand -hex 32)" 0644
+    write_secret secrets/marketmind_database_password "$(openssl rand -hex 32)"
   fi
+  chmod 0600 secrets/marketmind_database_password
   db_password=$(< secrets/marketmind_database_password)
   write_secret secrets/app_pgpass \
     "postgres-shared:5432:marketmind:marketmind:$db_password"
   unset db_password
+  prepare_shared_postgres
 else
-  managed=no
+  shared_local=no
   printf 'existing\n' > state/deployment-mode
   [[ -s secrets/app_pgpass ]] || die \
     "Create secrets/app_pgpass for the existing PostgreSQL instance, then rerun the installer."
@@ -393,8 +454,6 @@ if [[ ! -s secrets/mcp_token ]]; then
 fi
 ensure_secret llm_api_key "Model provider API key"
 ensure_secret fred_api_key "FRED API key"
-database_network=$(env_value MARKETMIND_DATABASE_NETWORK)
-database_network=${database_network:-postgres-network}
 docker network inspect "$database_network" >/dev/null 2>&1 || \
   docker network create "$database_network" >/dev/null
 ok "Configuration and secrets are ready."
@@ -404,8 +463,6 @@ configure_backup
 configure_backfill
 
 heading "Starting containers"
-compose_files=(-f docker-compose.prod.yml)
-if [[ "$managed" == yes ]]; then compose_files+=(-f docker-compose.managed-db.yml); fi
 if ! docker pull "$(release_value MARKETMIND_IMAGE)"; then
   warn "The package requires registry authentication."
   while [[ -z "${gh_user:-}" ]]; do gh_user=$(prompt_text "GitHub username"); done
@@ -413,9 +470,12 @@ if ! docker pull "$(release_value MARKETMIND_IMAGE)"; then
   printf '%s' "$gh_token" | docker login ghcr.io -u "$gh_user" --password-stdin
   unset gh_token
 fi
-docker compose "${compose_files[@]}" config --quiet
-docker compose "${compose_files[@]}" pull
-docker compose "${compose_files[@]}" up -d
+if [[ "$shared_local" == yes ]]; then
+  start_shared_postgres
+fi
+docker compose -f docker-compose.prod.yml config --quiet
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
 ok "Containers started."
 
 heading "Installing schedules"
@@ -423,7 +483,11 @@ install_systemd
 ok "Systemd configuration installed."
 
 heading "Done"
-docker compose "${compose_files[@]}" ps
+docker compose -f docker-compose.prod.yml ps
+if [[ "$shared_local" == yes ]]; then
+  docker compose --project-directory "$POSTGRES_INSTALL_DIR" \
+    -f "$POSTGRES_INSTALL_DIR/docker-compose.yml" ps
+fi
 say
 systemctl list-timers 'marketmind-*' --no-pager || true
 say

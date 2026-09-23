@@ -63,8 +63,14 @@ password.
 ## 4. Create the read-only database account
 
 Connect through the administration path for the shared PostgreSQL instance.
-For the optional managed database, use the combined Compose command documented
-in `deploy/README.md`. At the PostgreSQL prompt, run:
+For the independent homelab stack, open the prompt with:
+
+```bash
+docker compose --project-directory /srv/postgres \
+  -f /srv/postgres/docker-compose.yml exec postgres psql -U postgres
+```
+
+At the PostgreSQL prompt, run:
 
 ```sql
 DO $$

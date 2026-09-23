@@ -9,12 +9,13 @@ separate, read-only operations dashboard shows job history and logs.
 
 Production runs on one Linux host with Docker Compose and a published image;
 the VPS does not need a source checkout. A versioned GitHub release bundles
-Compose and host scripts with the application and optional PostgreSQL image
-digests. The normal deployment connects to a shared PostgreSQL instance using
-a dedicated database and role; an override can bootstrap a shared instance when
-none exists. That instance uses a separate administrator role so later projects
-can receive their own databases and roles. PostgreSQL with pgvector is the only
-structured, queryable store. systemd
+Compose and host scripts with the application and PostgreSQL image digests.
+The normal deployment connects to a shared PostgreSQL instance using a
+dedicated database and role. On a new host, the installer creates that shared
+service as an independent Compose project under `/srv/postgres`; Marketmind
+does not own its lifecycle. Later projects receive their own databases and
+roles on the same instance. PostgreSQL with pgvector is the only structured,
+queryable store. systemd
 timers invoke one-off jobs from the same image as the long-running MCP server.
 Local development and CI use a disposable PostgreSQL database.
 
@@ -37,7 +38,7 @@ uv run python -m agent.refresh {YYYY-MM-DD}          # complete daily job
 uv run python -m server.mcp                           # authenticated HTTP MCP
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
-# Add -f docker-compose.managed-db.yml only when this project owns PostgreSQL.
+# The independent shared database stack lives under /srv/postgres.
 ```
 
 Always use `uv run` for Python commands. In containers and systemd jobs, use

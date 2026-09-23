@@ -18,7 +18,7 @@ from agent.catchup import MAX_CATCHUP_DAYS, missing_dates
 
 ROOT = Path(__file__).resolve().parent.parent
 COMPOSE = ROOT / "docker-compose.prod.yml"
-MANAGED_DATABASE = ROOT / "docker-compose.managed-db.yml"
+SHARED_DATABASE = ROOT / "docker-compose.postgres.yml"
 RUNBOOK = ROOT / "deploy" / "README.md"
 SYSTEMD = ROOT / "deploy" / "systemd"
 
@@ -80,25 +80,30 @@ def test_compose_uses_digest_inputs_and_file_secrets() -> None:
     assert "external: true" in compose
 
 
-def test_managed_database_is_an_explicit_override() -> None:
-    managed = MANAGED_DATABASE.read_text(encoding="utf-8")
-    assert "image: ${MARKETMIND_POSTGRES_IMAGE:?" in managed
-    assert "POSTGRES_USER: postgres" in managed
-    assert "POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password" in managed
-    assert "marketmind_database_password" in managed
-    assert "postgres_data:/var/lib/postgresql/data" in managed
-    assert "init-marketmind-db.sh:/docker-entrypoint-initdb.d/10-marketmind.sh:ro" in managed
-    assert "POSTGRES_USER: marketmind" not in managed
-    assert managed.count("depends_on:") == 2
+def test_shared_database_has_an_independent_lifecycle() -> None:
+    shared = SHARED_DATABASE.read_text(encoding="utf-8")
+    assert "name: shared-postgres" in shared
+    assert "image: ${POSTGRES_IMAGE:?" in shared
+    assert "POSTGRES_USER: postgres" in shared
+    assert "POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password" in shared
+    assert "postgres_data:/var/lib/postgresql/data" in shared
+    assert "postgres-shared" in shared
+    assert "external: true" in shared
+    assert "marketmind_database_password" not in shared
+    assert "init-marketmind-db.sh" not in shared
+    assert "depends_on:" not in shared
+    assert "ports:" not in shared
 
 
-def test_resolved_compose_modes_select_one_database_path() -> None:
+def test_application_and_shared_database_are_separate_compose_projects() -> None:
     if shutil.which("docker") is None:
         pytest.skip("Docker Compose CLI is unavailable")
     env = {
         **os.environ,
         "MARKETMIND_IMAGE": "ghcr.io/example/marketmind@sha256:" + "a" * 64,
-        "MARKETMIND_POSTGRES_IMAGE": "pgvector/pgvector@sha256:" + "b" * 64,
+        "POSTGRES_IMAGE": "pgvector/pgvector@sha256:" + "b" * 64,
+        "POSTGRES_NETWORK": "postgres-network",
+        "POSTGRES_DATA_VOLUME": "postgres-shared-data",
         "MARKETMIND_DATABASE_DSN": "postgresql://marketmind@postgres-shared:5432/marketmind",
         "MARKETMIND_DATABASE_NETWORK": "postgres-network",
         "MARKETMIND_UID": "1000",
@@ -119,9 +124,9 @@ def test_resolved_compose_modes_select_one_database_path() -> None:
     assert set(external_services) == {"marketmind"}
     assert "depends_on" not in external_services["marketmind"]
 
-    managed_services = services(COMPOSE, MANAGED_DATABASE)
-    assert set(managed_services) == {"marketmind", "postgres"}
-    assert "postgres" in managed_services["marketmind"]["depends_on"]
+    shared_services = services(SHARED_DATABASE)
+    assert set(shared_services) == {"postgres"}
+    assert "marketmind" not in shared_services
 
 
 def test_release_bundle_and_runbook_need_no_source_checkout() -> None:
@@ -129,7 +134,7 @@ def test_release_bundle_and_runbook_need_no_source_checkout() -> None:
     runbook = RUNBOOK.read_text(encoding="utf-8")
     for item in ("steps.image.outputs.digest", "release.env", "sha256sum", "gh release create"):
         assert item in workflow
-    assert "docker-compose.prod.yml docker-compose.managed-db.yml" in workflow
+    assert "docker-compose.prod.yml docker-compose.postgres.yml" in workflow
     assert "deploy/systemd" in workflow
     assert "sha256sum --check" in runbook
     assert "git clone" not in runbook
@@ -230,7 +235,7 @@ def test_timers_and_shared_job_runner() -> None:
         "run-job.sh",
         "backup-set.sh",
         "restore-check.sh",
-        "init-marketmind-db.sh",
+        "provision-marketmind-db.sh",
     ):
         subprocess.run(["sh", "-n", str(ROOT / "deploy" / script)], check=True)
 
@@ -252,12 +257,63 @@ def test_interactive_installer_discovers_owner_and_configures_schedules() -> Non
     assert "systemctl is-enabled" in installer
     assert "systemctl start --no-block marketmind-initial-backfill.service" in installer
     assert "marketmind-initial-backfill.timer" in installer
+    assert "POSTGRES_INSTALL_DIR=/srv/postgres" in installer
+    assert "docker-compose.postgres.yml" in installer
+    assert "provision-marketmind-db.sh" in installer
+    assert "docker-compose.managed-db.yml" not in installer
     assert "*-*-* 06:10:00" in installer
     assert "*-02,05,08,11-01 04:00:00" in installer
     assert "BACKFILL_MODE=scheduled" in installer
 
     backfill_service = (SYSTEMD / "marketmind-initial-backfill.service").read_text(encoding="utf-8")
     assert "run-job.sh backfill" in backfill_service
+
+
+def test_database_provisioning_keeps_password_out_of_process_arguments(
+    tmp_path: Path,
+) -> None:
+    postgres_dir = tmp_path / "postgres"
+    postgres_dir.mkdir()
+    (postgres_dir / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    password_file = tmp_path / "database-password"
+    password = "a1b2c3d4"
+    password_file.write_text(password, encoding="utf-8")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CAPTURE_ARGS"\ncat >> "$CAPTURE_STDIN"\n',
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    args_file = tmp_path / "args"
+    stdin_file = tmp_path / "stdin"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "CAPTURE_ARGS": str(args_file),
+        "CAPTURE_STDIN": str(stdin_file),
+    }
+
+    subprocess.run(
+        [
+            "sh",
+            str(ROOT / "deploy/provision-marketmind-db.sh"),
+            str(postgres_dir),
+            str(password_file),
+        ],
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert password not in args_file.read_text(encoding="utf-8")
+    provisioned_sql = stdin_file.read_text(encoding="utf-8")
+    assert password in provisioned_sql
+    assert "CREATE DATABASE marketmind OWNER marketmind" in provisioned_sql
+    assert "CREATE EXTENSION IF NOT EXISTS vector" in provisioned_sql
 
 
 def test_backup_is_one_verified_offsite_set() -> None:
