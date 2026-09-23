@@ -2,7 +2,12 @@
 set -euo pipefail
 
 # Interactive first-host installer. Run this as the deployment account; it
-# requests sudo only when writing host-level systemd and logrotate files.
+# requests sudo for host packages and host-level systemd and logrotate files.
+
+if (( BASH_VERSINFO[0] < 4 )); then
+  printf 'Error: this installer requires Bash 4 or newer.\n' >&2
+  exit 1
+fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="$(dirname "$SCRIPT_DIR")"
@@ -19,6 +24,14 @@ declare -A TIMER_LABELS=(
   [financials]="Quarterly company financials"
   [esef]="Monthly European filings"
   [backup]="Nightly off-host backup"
+)
+declare -A TIMER_DETAILS=(
+  [daily]=$'The main freshness job. It resolves identities already in the stored universe,\nupdates prices, FX, macro data, dividends and short interest, ingests news and facts,\nstructures views, and fetches recent SEC filings. It catches up at most 7 missed days\nand can make many model-provider and market-data requests.'
+  [universe]=$'Downloads the official S&P 500 and STOXX 600 constituent lists, records\nadditions and removals, and synchronizes identifiers and Yahoo listings. It does not\nrun the daily price/news pipeline. Weekly is enough because membership changes rarely.'
+  [profiles]=$'Rebuilds the descriptive company profile for every active company and skips news.\nThis is slow and model-provider intensive, so the default cadence is annual.'
+  [financials]=$'Reloads complete SEC Company Facts histories for tracked US issuers. Quarterly\nmatches the reporting cycle and avoids an expensive full-universe sweep every day.'
+  [esef]=$'Scans filings.xbrl.org for new European filings from the configured countries and\narchives new packages. The broad index scan is monthly because filings are periodic.'
+  [backup]=$'Creates a PostgreSQL dump plus an archive of raw and state files, verifies checksums,\nand copies the set to an rclone destination. Requires jq, rclone, and an off-host\ndestination. It remains disabled by default until a restore has been tested.'
 )
 declare -A TIMER_DEFAULT_ENABLED=(
   [daily]=yes [universe]=yes [profiles]=yes [financials]=yes [esef]=yes [backup]=no
@@ -151,7 +164,7 @@ validate_calendar() {
 }
 
 configure_timers() {
-  local name label enabled schedule current
+  local name label enabled schedule current detail_line
   heading "Schedules"
   say "Press Enter to accept each current default. Times use the homelab's local timezone."
   for name in "${TIMER_NAMES[@]}"; do
@@ -161,12 +174,16 @@ configure_timers() {
       if timer_is_enabled "$name"; then enabled=yes; else enabled=no; fi
     fi
     printf '\n%s%s%s\n' "$bold" "$label" "$reset"
-    if prompt_yes_no "Enable this timer?" "$enabled"; then
+    while IFS= read -r detail_line; do
+      printf '  %s\n' "$detail_line"
+    done <<< "${TIMER_DETAILS[$name]}"
+    printf '  Bundled schedule: %s\n' "${TIMER_DEFAULT_SCHEDULE[$name]}"
+    if prompt_yes_no "Enable $label?" "$enabled"; then
       SELECTED_ENABLED[$name]=yes
       current=$(installed_schedule "$name")
       schedule=${current:-${TIMER_DEFAULT_SCHEDULE[$name]}}
       while true; do
-        schedule=$(prompt_text "systemd OnCalendar expression" "$schedule")
+        schedule=$(prompt_text "When should it run? (systemd OnCalendar)" "$schedule")
         if validate_calendar "$schedule"; then break; fi
         warn "systemd does not recognize that calendar expression."
       done
@@ -180,18 +197,55 @@ configure_timers() {
   done
 }
 
+install_system_packages() {
+  local packages=("$@")
+  if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y "${packages[@]}"
+  elif command -v dnf >/dev/null 2>&1; then
+    sudo dnf install -y "${packages[@]}"
+  elif command -v yum >/dev/null 2>&1; then
+    sudo yum install -y "${packages[@]}"
+  elif command -v zypper >/dev/null 2>&1; then
+    sudo zypper --non-interactive install "${packages[@]}"
+  elif command -v pacman >/dev/null 2>&1; then
+    sudo pacman -Sy --needed --noconfirm "${packages[@]}"
+  else
+    die "Install these backup dependencies and rerun: ${packages[*]}"
+  fi
+}
+
 configure_backup() {
-  local remote tmp
+  local remote remote_name tmp missing=()
   [[ "${SELECTED_ENABLED[backup]}" == yes ]] || return 0
-  require_command jq
-  require_command rclone
+  command -v jq >/dev/null 2>&1 || missing+=(jq)
+  command -v rclone >/dev/null 2>&1 || missing+=(rclone)
+  if (( ${#missing[@]} )); then
+    info "Installing backup dependencies: ${missing[*]}"
+    install_system_packages "${missing[@]}"
+  fi
+  command -v jq >/dev/null 2>&1 || die "jq installation did not provide the jq command."
+  command -v rclone >/dev/null 2>&1 || die "rclone installation did not provide the rclone command."
   if sudo test -s /etc/marketmind/backup.conf; then
     ok "Keeping the existing backup destination."
     return
   fi
   heading "Backup destination"
   say "Use an existing rclone remote and path, for example: offsite:marketmind"
-  while [[ -z "${remote:-}" ]]; do remote=$(prompt_text "rclone destination"); done
+  while true; do
+    remote=$(prompt_text "rclone destination")
+    if [[ "$remote" == ?*:* ]]; then break; fi
+    warn "Use an rclone remote and path such as offsite:marketmind."
+  done
+  remote_name=${remote%%:*}
+  if ! rclone listremotes | grep -Fxq "$remote_name:"; then
+    warn "The rclone remote '$remote_name' is not configured. Opening rclone setup."
+    rclone config
+  fi
+  rclone listremotes | grep -Fxq "$remote_name:" || \
+    die "The rclone remote '$remote_name' is still not configured."
+  rclone lsd "$remote_name:" >/dev/null || \
+    die "Cannot connect to the rclone remote '$remote_name'."
   tmp=$(mktemp)
   printf 'MARKETMIND_BACKUP_REMOTE=%s\n' "$remote" > "$tmp"
   sudo install -d -m 0700 /etc/marketmind
@@ -383,116 +437,124 @@ EOF
   trap - RETURN
 }
 
-[[ $(id -u) -ne 0 ]] || die "Run this as your normal deployment account, not with sudo."
-[[ -t 0 ]] || die "This installer needs an interactive terminal."
-[[ "$INSTALL_DIR" != *[[:space:]]* ]] || die "The installation path cannot contain spaces."
-for command in awk date docker flock install openssl sed sudo systemctl systemd-analyze; do
-  require_command "$command"
-done
-[[ -f "$INSTALL_DIR/release.env" ]] || die "release.env is missing; use the published bundle."
-[[ -f "$INSTALL_DIR/.env.example" ]] || die ".env.example is missing."
-[[ -f "$INSTALL_DIR/docker-compose.prod.yml" ]] || die "docker-compose.prod.yml is missing."
-[[ -f "$INSTALL_DIR/docker-compose.postgres.yml" ]] || \
-  die "docker-compose.postgres.yml is missing."
-docker compose version >/dev/null 2>&1 || die "The Docker Compose plugin is not available."
+main() {
+  [[ $(id -u) -ne 0 ]] || die "Run this as your normal deployment account, not with sudo."
+  [[ -t 0 ]] || die "This installer needs an interactive terminal."
+  [[ "$INSTALL_DIR" != *[[:space:]]* ]] || die "The installation path cannot contain spaces."
+  for command in awk date docker flock install openssl sed sudo systemctl systemd-analyze; do
+    require_command "$command"
+  done
+  [[ -f "$INSTALL_DIR/release.env" ]] || die "release.env is missing; use the published bundle."
+  [[ -f "$INSTALL_DIR/.env.example" ]] || die ".env.example is missing."
+  [[ -f "$INSTALL_DIR/docker-compose.prod.yml" ]] || die "docker-compose.prod.yml is missing."
+  [[ -f "$INSTALL_DIR/docker-compose.postgres.yml" ]] || \
+    die "docker-compose.postgres.yml is missing."
+  docker compose version >/dev/null 2>&1 || die "The Docker Compose plugin is not available."
+  docker info >/dev/null 2>&1 || die \
+    "Cannot access the Docker daemon as $DEPLOY_USER. Make 'docker info' work without sudo, then rerun."
 
-heading "Marketmind homelab installer"
-say "Install directory: $INSTALL_DIR"
-say "Deployment account: $DEPLOY_USER ($(id -u):$(id -g))"
-sudo -v
+  heading "Marketmind homelab installer"
+  say "Install directory: $INSTALL_DIR"
+  say "Deployment account: $DEPLOY_USER ($(id -u):$(id -g))"
+  sudo -v
 
-heading "Local configuration"
-cd "$INSTALL_DIR"
-install -d -m 0700 data/raw state state/universe state/processed state/refresh secrets
-sudo install -d -m 0700 -o root -g root /var/log/marketmind
-if [[ ! -f .env ]]; then cp .env.example .env; fi
-chmod 0600 .env
-set_env MARKETMIND_IMAGE "$(release_value MARKETMIND_IMAGE)"
-set_env MARKETMIND_UID "$(id -u)"
-set_env MARKETMIND_GID "$(id -g)"
+  heading "Local configuration"
+  cd "$INSTALL_DIR"
+  install -d -m 0700 data/raw state state/universe state/processed state/refresh secrets
+  sudo install -d -m 0700 -o root -g root /var/log/marketmind
+  if [[ ! -f .env ]]; then cp .env.example .env; fi
+  chmod 0600 .env
+  set_env MARKETMIND_IMAGE "$(release_value MARKETMIND_IMAGE)"
+  set_env MARKETMIND_UID "$(id -u)"
+  set_env MARKETMIND_GID "$(id -g)"
 
-contact_name=$(env_value SEC_CONTACT_NAME)
-if [[ -z "$contact_name" || "$contact_name" == "Your Name" ]]; then
-  contact_name=$(prompt_text "SEC contact name")
-  [[ -n "$contact_name" ]] || die "SEC contact name is required."
-  set_env SEC_CONTACT_NAME "\"${contact_name//\"/\\\"}\""
-fi
-contact_email=$(env_value SEC_CONTACT_EMAIL)
-if [[ -z "$contact_email" || "$contact_email" == "you@example.com" ]]; then
-  contact_email=$(prompt_text "SEC contact email")
-  [[ "$contact_email" == *@* ]] || die "Enter a valid SEC contact email."
-  set_env SEC_CONTACT_EMAIL "$contact_email"
-fi
-
-database_network=$(env_value MARKETMIND_DATABASE_NETWORK)
-database_network=${database_network:-postgres-network}
-shared_local=yes
-if [[ -f state/deployment-mode && $(< state/deployment-mode) == existing ]]; then
-  shared_local=no
-fi
-if prompt_yes_no "Create or use the shared PostgreSQL service in /srv/postgres?" \
-  "$shared_local"; then
-  shared_local=yes
-  printf 'shared-local\n' > state/deployment-mode
-  if [[ ! -s secrets/marketmind_database_password ]]; then
-    write_secret secrets/marketmind_database_password "$(openssl rand -hex 32)"
+  contact_name=$(env_value SEC_CONTACT_NAME)
+  if [[ -z "$contact_name" || "$contact_name" == "Your Name" ]]; then
+    contact_name=$(prompt_text "SEC contact name")
+    [[ -n "$contact_name" ]] || die "SEC contact name is required."
+    set_env SEC_CONTACT_NAME "\"${contact_name//\"/\\\"}\""
   fi
-  chmod 0600 secrets/marketmind_database_password
-  db_password=$(< secrets/marketmind_database_password)
-  write_secret secrets/app_pgpass \
-    "postgres-shared:5432:marketmind:marketmind:$db_password"
-  unset db_password
-  prepare_shared_postgres
-else
-  shared_local=no
-  printf 'existing\n' > state/deployment-mode
-  [[ -s secrets/app_pgpass ]] || die \
-    "Create secrets/app_pgpass for the existing PostgreSQL instance, then rerun the installer."
-fi
-if [[ ! -s secrets/mcp_token ]]; then
-  write_secret secrets/mcp_token "$(openssl rand -hex 32)"
-fi
-ensure_secret llm_api_key "Model provider API key"
-ensure_secret fred_api_key "FRED API key"
-docker network inspect "$database_network" >/dev/null 2>&1 || \
-  docker network create "$database_network" >/dev/null
-ok "Configuration and secrets are ready."
+  contact_email=$(env_value SEC_CONTACT_EMAIL)
+  if [[ -z "$contact_email" || "$contact_email" == "you@example.com" ]]; then
+    contact_email=$(prompt_text "SEC contact email")
+    [[ "$contact_email" == *@* ]] || die "Enter a valid SEC contact email."
+    set_env SEC_CONTACT_EMAIL "$contact_email"
+  fi
 
-configure_timers
-configure_backup
-configure_backfill
+  database_network=$(env_value MARKETMIND_DATABASE_NETWORK)
+  database_network=${database_network:-postgres-network}
+  shared_local=yes
+  if [[ -f state/deployment-mode && $(< state/deployment-mode) == existing ]]; then
+    shared_local=no
+  fi
+  if prompt_yes_no "Create or use the shared PostgreSQL service in /srv/postgres?" \
+    "$shared_local"; then
+    shared_local=yes
+    printf 'shared-local\n' > state/deployment-mode
+    if [[ ! -s secrets/marketmind_database_password ]]; then
+      write_secret secrets/marketmind_database_password "$(openssl rand -hex 32)"
+    fi
+    chmod 0600 secrets/marketmind_database_password
+    db_password=$(< secrets/marketmind_database_password)
+    write_secret secrets/app_pgpass \
+      "postgres-shared:5432:marketmind:marketmind:$db_password"
+    unset db_password
+    prepare_shared_postgres
+  else
+    shared_local=no
+    printf 'existing\n' > state/deployment-mode
+    [[ -s secrets/app_pgpass ]] || die \
+      "Create secrets/app_pgpass for the existing PostgreSQL instance, then rerun the installer."
+  fi
+  if [[ ! -s secrets/mcp_token ]]; then
+    write_secret secrets/mcp_token "$(openssl rand -hex 32)"
+  fi
+  ensure_secret llm_api_key "Model provider API key"
+  ensure_secret fred_api_key "FRED API key"
+  docker network inspect "$database_network" >/dev/null 2>&1 || \
+    docker network create "$database_network" >/dev/null
+  ok "Configuration and secrets are ready."
 
-heading "Starting containers"
-if ! docker pull "$(release_value MARKETMIND_IMAGE)"; then
-  warn "The package requires registry authentication."
-  while [[ -z "${gh_user:-}" ]]; do gh_user=$(prompt_text "GitHub username"); done
-  gh_token=$(prompt_secret "GitHub token with read:packages")
-  printf '%s' "$gh_token" | docker login ghcr.io -u "$gh_user" --password-stdin
-  unset gh_token
-fi
-if [[ "$shared_local" == yes ]]; then
-  start_shared_postgres
-fi
-docker compose -f docker-compose.prod.yml config --quiet
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
-ok "Containers started."
+  configure_timers
+  configure_backup
+  configure_backfill
 
-heading "Installing schedules"
-install_systemd
-ok "Systemd configuration installed."
+  heading "Starting containers"
+  if ! docker pull "$(release_value MARKETMIND_IMAGE)"; then
+    warn "The package requires registry authentication."
+    while [[ -z "${gh_user:-}" ]]; do gh_user=$(prompt_text "GitHub username"); done
+    gh_token=$(prompt_secret "GitHub token with read:packages")
+    printf '%s' "$gh_token" | docker login ghcr.io -u "$gh_user" --password-stdin
+    unset gh_token
+  fi
+  if [[ "$shared_local" == yes ]]; then
+    start_shared_postgres
+  fi
+  docker compose -f docker-compose.prod.yml config --quiet
+  docker compose -f docker-compose.prod.yml pull
+  docker compose -f docker-compose.prod.yml up -d
+  ok "Containers started."
 
-heading "Done"
-docker compose -f docker-compose.prod.yml ps
-if [[ "$shared_local" == yes ]]; then
-  docker compose --project-directory "$POSTGRES_INSTALL_DIR" \
-    -f "$POSTGRES_INSTALL_DIR/docker-compose.yml" ps
-fi
-say
-systemctl list-timers 'marketmind-*' --no-pager || true
-say
-info "MCP endpoint: http://127.0.0.1:8000/mcp"
-info "Follow service logs: docker compose -f docker-compose.prod.yml logs -f marketmind"
-if [[ "$BACKFILL_MODE" != skip ]]; then
-  info "Follow backfill: journalctl -fu marketmind-initial-backfill.service"
+  heading "Installing schedules"
+  install_systemd
+  ok "Systemd configuration installed."
+
+  heading "Done"
+  docker compose -f docker-compose.prod.yml ps
+  if [[ "$shared_local" == yes ]]; then
+    docker compose --project-directory "$POSTGRES_INSTALL_DIR" \
+      -f "$POSTGRES_INSTALL_DIR/docker-compose.yml" ps
+  fi
+  say
+  systemctl list-timers 'marketmind-*' --no-pager || true
+  say
+  info "MCP endpoint: http://127.0.0.1:8000/mcp"
+  info "Follow service logs: docker compose -f docker-compose.prod.yml logs -f marketmind"
+  if [[ "$BACKFILL_MODE" != skip ]]; then
+    info "Follow backfill: journalctl -fu marketmind-initial-backfill.service"
+  fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
 fi
