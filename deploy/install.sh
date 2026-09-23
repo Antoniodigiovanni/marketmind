@@ -182,7 +182,7 @@ configure_timers() {
 
 configure_backup() {
   local remote tmp
-  [[ "${SELECTED_ENABLED[backup]}" == yes ]] || return
+  [[ "${SELECTED_ENABLED[backup]}" == yes ]] || return 0
   require_command jq
   require_command rclone
   if sudo test -s /etc/marketmind/backup.conf; then

@@ -264,6 +264,7 @@ def test_interactive_installer_discovers_owner_and_configures_schedules() -> Non
     assert "*-*-* 06:10:00" in installer
     assert "*-02,05,08,11-01 04:00:00" in installer
     assert "BACKFILL_MODE=scheduled" in installer
+    assert '[[ "${SELECTED_ENABLED[backup]}" == yes ]] || return 0' in installer
 
     backfill_service = (SYSTEMD / "marketmind-initial-backfill.service").read_text(encoding="utf-8")
     assert "run-job.sh backfill" in backfill_service
