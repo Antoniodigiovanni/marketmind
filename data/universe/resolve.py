@@ -24,11 +24,12 @@ def main() -> None:
     """Run the PostgreSQL universe/listing synchronization job."""
     stats = asyncio.run(resolve_universe())
     logger.info(
-        "universe sync members={} valid={} review={} unresolved={}",
+        "universe sync members={} valid={} review={} unresolved={} conflict={}",
         stats["members"],
         stats["valid"],
         stats["review"],
         stats["unresolved"],
+        stats["conflict"],
     )
 
 
