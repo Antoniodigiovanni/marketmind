@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -236,8 +237,11 @@ def test_timers_and_shared_job_runner() -> None:
         "backup-set.sh",
         "restore-check.sh",
         "provision-marketmind-db.sh",
+        "provision-dashboard-db.sh",
     ):
         subprocess.run(["sh", "-n", str(ROOT / "deploy" / script)], check=True)
+    for script in ("dashboard.sh", "marketmind.sh", "update.sh"):
+        subprocess.run(["bash", "-n", str(ROOT / "deploy" / script)], check=True)
 
 
 def test_interactive_installer_discovers_owner_and_configures_schedules() -> None:
@@ -260,6 +264,8 @@ def test_interactive_installer_discovers_owner_and_configures_schedules() -> Non
     assert "POSTGRES_INSTALL_DIR=/srv/postgres" in installer
     assert "docker-compose.postgres.yml" in installer
     assert "provision-marketmind-db.sh" in installer
+    assert '"$INSTALL_DIR/deploy/dashboard.sh" enable' in installer
+    assert '"$INSTALL_DIR/deploy/dashboard.sh" disable' in installer
     assert "docker-compose.managed-db.yml" not in installer
     assert "*-*-* 06:10:00" in installer
     assert "*-02,05,08,11-01 04:00:00" in installer
@@ -277,6 +283,7 @@ def test_interactive_installer_discovers_owner_and_configures_schedules() -> Non
     assert "rclone listremotes" in installer
     assert "rclone config" in installer
     assert "rclone lsd" in installer
+    assert 'prompt_yes_no "Enable the operations dashboard?"' in installer
 
     backfill_service = (SYSTEMD / "marketmind-initial-backfill.service").read_text(encoding="utf-8")
     assert "run-job.sh backfill" in backfill_service
@@ -360,6 +367,92 @@ def test_installer_uses_detected_package_manager_for_backup_dependencies(
     ]
 
 
+def test_installer_can_leave_dashboard_disabled(tmp_path: Path) -> None:
+    bash_major = int(
+        subprocess.run(
+            ["bash", "-c", 'printf "%s" "${BASH_VERSINFO[0]}"'],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    if bash_major < 4:
+        pytest.skip("installer requires Bash 4+; macOS ships Bash 3")
+
+    install_dir = tmp_path / "marketmind"
+    deploy_dir = install_dir / "deploy"
+    deploy_dir.mkdir(parents=True)
+    shutil.copy(ROOT / "deploy/install.sh", deploy_dir / "install.sh")
+    (install_dir / "state").mkdir()
+    (install_dir / "secrets").mkdir()
+    (install_dir / ".env").write_text("", encoding="utf-8")
+    env = {**os.environ, "INSTALLER_PATH": str(deploy_dir / "install.sh")}
+
+    subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$INSTALLER_PATH"; configure_dashboard; test "$DASHBOARD_ENABLED" = no',
+        ],
+        check=True,
+        env=env,
+        input="n\n",
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_dashboard_command_generates_shared_credentials(tmp_path: Path) -> None:
+    bash_major = int(
+        subprocess.run(
+            ["bash", "-c", 'printf "%s" "${BASH_VERSINFO[0]}"'],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    if bash_major < 4:
+        pytest.skip("installer requires Bash 4+; macOS ships Bash 3")
+
+    install_dir = tmp_path / "marketmind"
+    deploy_dir = install_dir / "deploy"
+    deploy_dir.mkdir(parents=True)
+    shutil.copy(ROOT / "deploy/dashboard.sh", deploy_dir / "dashboard.sh")
+    (install_dir / "state").mkdir()
+    (install_dir / "secrets").mkdir()
+    (install_dir / ".env").write_text(
+        "MARKETMIND_DASHBOARD_DSN=postgresql://marketmind_ro@postgres-shared:5432/marketmind\n",
+        encoding="utf-8",
+    )
+    env = {**os.environ, "DASHBOARD_SCRIPT": str(deploy_dir / "dashboard.sh")}
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$DASHBOARD_SCRIPT"; prepare_shared_credentials; prepare_browser_credential',
+        ],
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    database_password = (
+        (install_dir / "secrets/dashboard_database_password").read_text(encoding="utf-8").strip()
+    )
+    assert re.fullmatch(r"[0-9a-f]{64}", database_password)
+    assert (install_dir / "secrets/dashboard_pgpass").read_text(encoding="utf-8") == (
+        f"postgres-shared:5432:marketmind:marketmind_ro:{database_password}\n"
+    )
+    assert re.fullmatch(
+        r"[0-9a-f]{64}\n", (install_dir / "secrets/dashboard_token").read_text(encoding="utf-8")
+    )
+    assert database_password not in result.stdout
+    for filename in ("dashboard_database_password", "dashboard_pgpass", "dashboard_token"):
+        assert (install_dir / f"secrets/{filename}").stat().st_mode & 0o777 == 0o600
+
+
 def test_database_provisioning_keeps_password_out_of_process_arguments(
     tmp_path: Path,
 ) -> None:
@@ -407,6 +500,281 @@ def test_database_provisioning_keeps_password_out_of_process_arguments(
     assert "CREATE EXTENSION IF NOT EXISTS vector" in provisioned_sql
 
 
+def test_dashboard_provisioning_limits_role_and_hides_password_from_arguments(
+    tmp_path: Path,
+) -> None:
+    postgres_dir = tmp_path / "postgres"
+    postgres_dir.mkdir()
+    (postgres_dir / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    password_file = tmp_path / "dashboard-password"
+    password = "deadbeef01234567"
+    password_file.write_text(password, encoding="utf-8")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CAPTURE_ARGS"\n'
+        'case "$*" in *-Atqc*) printf "t\\n" ;; esac\n'
+        'cat >> "$CAPTURE_STDIN"\n',
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    args_file = tmp_path / "args"
+    stdin_file = tmp_path / "stdin"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "CAPTURE_ARGS": str(args_file),
+        "CAPTURE_STDIN": str(stdin_file),
+    }
+
+    subprocess.run(
+        [
+            "sh",
+            str(ROOT / "deploy/provision-dashboard-db.sh"),
+            str(postgres_dir),
+            str(password_file),
+        ],
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert password not in args_file.read_text(encoding="utf-8")
+    provisioned_sql = stdin_file.read_text(encoding="utf-8")
+    assert password in provisioned_sql
+    assert "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION" in provisioned_sql
+    assert "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public" in provisioned_sql
+    assert "GRANT SELECT ON TABLE public.agent_runs TO marketmind_ro" in provisioned_sql
+
+
+def test_updater_verifies_release_and_preserves_runtime_files() -> None:
+    updater = (ROOT / "deploy/update.sh").read_text(encoding="utf-8")
+    assert "sha256sum --check" in updater
+    assert "archive name does not match RELEASE_TAG" in updater
+    assert "state/deployment-releases" in updater
+    assert "state/dashboard-enabled" in updater
+    assert "./deploy/install.sh --refresh-systemd" in updater
+    assert 'stage_image "$release_source"' in updater
+    assert "docker image inspect" in updater
+    assert 'docker cp "$temporary_container:/app/deploy"' in updater
+    assert "secrets/" not in updater
+    assert "data/raw" not in updater
+    assert "docker-compose.postgres.yml up" not in updater
+
+
+def test_operator_command_updates_latest_release_by_default() -> None:
+    command = (ROOT / "deploy/marketmind.sh").read_text(encoding="utf-8")
+    installer = (ROOT / "deploy/install.sh").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    subprocess.run(["bash", "-n", str(ROOT / "deploy/marketmind.sh")], check=True)
+    assert 'exec "$INSTALL_DIR/deploy/update.sh" "${2:-latest}"' in command
+    assert "/usr/local/bin/marketmind" in installer
+    assert "${{ steps.registry.outputs.image }}:latest" in workflow
+    assert "org.opencontainers.image.version=${{ github.ref_name }}" in workflow
+
+
+def test_update_command_preserves_runtime_state_and_refreshes_services(tmp_path: Path) -> None:
+    bash_major = int(
+        subprocess.run(
+            ["bash", "-c", 'printf "%s" "${BASH_VERSINFO[0]}"'],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    if bash_major < 4 or shutil.which("flock") is None:
+        pytest.skip("updater requires Linux with Bash 4+ and flock")
+
+    install_dir = tmp_path / "marketmind"
+    deploy_dir = install_dir / "deploy"
+    deploy_dir.mkdir(parents=True)
+    shutil.copy(ROOT / "deploy/update.sh", deploy_dir / "update.sh")
+    (deploy_dir / "update.sh").chmod(0o755)
+    (install_dir / "state").mkdir()
+    (install_dir / "state/dashboard-enabled").write_text("no\n", encoding="utf-8")
+    (install_dir / "secrets").mkdir()
+    (install_dir / "secrets/keep").write_text("secret\n", encoding="utf-8")
+    (install_dir / "data").mkdir()
+    (install_dir / "data/keep").write_text("raw\n", encoding="utf-8")
+    (install_dir / ".env").write_text(
+        "MARKETMIND_IMAGE=ghcr.io/example/marketmind@sha256:old\nKEEP=value\n",
+        encoding="utf-8",
+    )
+    (install_dir / "release.env").write_text("RELEASE_TAG=v1.0.0\n", encoding="utf-8")
+    for filename in (".env.example", "docker-compose.prod.yml", "docker-compose.postgres.yml"):
+        (install_dir / filename).write_text("old\n", encoding="utf-8")
+
+    bundle = tmp_path / "bundle"
+    (bundle / "deploy").mkdir(parents=True)
+    image = "ghcr.io/example/marketmind@sha256:" + "a" * 64
+    (bundle / "release.env").write_text(
+        f"MARKETMIND_IMAGE={image}\nRELEASE_TAG=v1.1.0\n",
+        encoding="utf-8",
+    )
+    (bundle / ".env.example").write_text("new example\n", encoding="utf-8")
+    for filename in ("docker-compose.prod.yml", "docker-compose.postgres.yml"):
+        (bundle / filename).write_text("services: {}\n", encoding="utf-8")
+    shutil.copy(ROOT / "deploy/update.sh", bundle / "deploy/update.sh")
+    shutil.copy(ROOT / "deploy/marketmind.sh", bundle / "deploy/marketmind.sh")
+    (bundle / "deploy/install.sh").write_text(
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" > state/systemd-refresh\n',
+        encoding="utf-8",
+    )
+    (bundle / "deploy/dashboard.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    for script in (bundle / "deploy").iterdir():
+        script.chmod(0o755)
+
+    archive = tmp_path / "marketmind-v1.1.0-deploy.tar.gz"
+    subprocess.run(["tar", "-czf", str(archive), "-C", str(bundle), "."], check=True)
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    Path(f"{archive}.sha256").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker_log = tmp_path / "docker-calls"
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$DOCKER_LOG"\n', encoding="utf-8"
+    )
+    fake_docker.chmod(0o755)
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text("#!/usr/bin/env bash\nprintf '401'\n", encoding="utf-8")
+    fake_curl.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "DOCKER_LOG": str(docker_log),
+    }
+
+    subprocess.run(
+        ["bash", str(deploy_dir / "update.sh"), str(archive)],
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    updated_env = (install_dir / ".env").read_text(encoding="utf-8")
+    assert f"MARKETMIND_IMAGE={image}" in updated_env
+    assert "KEEP=value" in updated_env
+    assert (install_dir / "secrets/keep").read_text(encoding="utf-8") == "secret\n"
+    assert (install_dir / "data/keep").read_text(encoding="utf-8") == "raw\n"
+    assert (install_dir / "state/current-release").read_text(encoding="utf-8") == "v1.1.0\n"
+    assert (install_dir / "state/systemd-refresh").read_text(encoding="utf-8") == (
+        "--refresh-systemd\n"
+    )
+    assert list((install_dir / "state/deployment-releases").glob("v1.0.0-*"))
+    calls = docker_log.read_text(encoding="utf-8")
+    assert f"pull {image}" in calls
+    assert "up -d --wait --wait-timeout 120 marketmind" in calls
+
+
+def test_update_command_can_stage_latest_release_from_registry(tmp_path: Path) -> None:
+    bash_major = int(
+        subprocess.run(
+            ["bash", "-c", 'printf "%s" "${BASH_VERSINFO[0]}"'],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    if bash_major < 4 or shutil.which("flock") is None:
+        pytest.skip("updater requires Linux with Bash 4+ and flock")
+
+    install_dir = tmp_path / "marketmind"
+    deploy_dir = install_dir / "deploy"
+    deploy_dir.mkdir(parents=True)
+    shutil.copy(ROOT / "deploy/update.sh", deploy_dir / "update.sh")
+    (deploy_dir / "update.sh").chmod(0o755)
+    (install_dir / "state").mkdir()
+    (install_dir / "state/dashboard-enabled").write_text("no\n", encoding="utf-8")
+    (install_dir / ".env").write_text(
+        "MARKETMIND_IMAGE=ghcr.io/example/marketmind@sha256:old\n",
+        encoding="utf-8",
+    )
+    postgres_image = "pgvector/pgvector@sha256:" + "b" * 64
+    (install_dir / "release.env").write_text(
+        "MARKETMIND_IMAGE=ghcr.io/example/marketmind@sha256:old\n"
+        f"MARKETMIND_POSTGRES_IMAGE={postgres_image}\n"
+        "RELEASE_TAG=v1.0.0\n",
+        encoding="utf-8",
+    )
+    for filename in (".env.example", "docker-compose.prod.yml", "docker-compose.postgres.yml"):
+        (install_dir / filename).write_text("old\n", encoding="utf-8")
+
+    image_root = tmp_path / "image"
+    (image_root / "deploy").mkdir(parents=True)
+    (image_root / ".env.example").write_text("new example\n", encoding="utf-8")
+    for filename in ("docker-compose.prod.yml", "docker-compose.postgres.yml"):
+        (image_root / filename).write_text("services: {}\n", encoding="utf-8")
+    shutil.copy(ROOT / "deploy/update.sh", image_root / "deploy/update.sh")
+    shutil.copy(ROOT / "deploy/marketmind.sh", image_root / "deploy/marketmind.sh")
+    (image_root / "deploy/install.sh").write_text(
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" > state/systemd-refresh\n',
+        encoding="utf-8",
+    )
+    (image_root / "deploy/dashboard.sh").write_text(
+        "#!/usr/bin/env bash\nexit 0\n", encoding="utf-8"
+    )
+    for script in (image_root / "deploy").iterdir():
+        script.chmod(0o755)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker_log = tmp_path / "docker-calls"
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$DOCKER_LOG"
+if [[ "${1:-}" == image && "${2:-}" == inspect ]]; then
+  if [[ "$*" == *org.opencontainers.image.version* ]]; then
+    printf 'v1.1.0\\n'
+  else
+    printf 'ghcr.io/example/marketmind@sha256:%064d\\n' 0
+  fi
+elif [[ "${1:-}" == create ]]; then
+  printf 'temporary-container\\n'
+elif [[ "${1:-}" == cp ]]; then
+  source_path=${2#*:/app/}
+  cp -a "$FAKE_IMAGE_ROOT/$source_path" "$3"
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text("#!/usr/bin/env bash\nprintf '401'\n", encoding="utf-8")
+    fake_curl.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "DOCKER_LOG": str(docker_log),
+        "FAKE_IMAGE_ROOT": str(image_root),
+    }
+
+    subprocess.run(
+        ["bash", str(deploy_dir / "update.sh"), "latest"],
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    expected_image = "ghcr.io/example/marketmind@sha256:" + "0" * 64
+    assert f"MARKETMIND_IMAGE={expected_image}" in (install_dir / ".env").read_text(
+        encoding="utf-8"
+    )
+    assert (install_dir / "state/current-release").read_text(encoding="utf-8") == "v1.1.0\n"
+    calls = docker_log.read_text(encoding="utf-8")
+    assert "pull ghcr.io/example/marketmind:latest" in calls
+    assert "create --entrypoint /bin/true" in calls
+    assert "cp temporary-container:/app/deploy" in calls
+
+
 def test_backup_is_one_verified_offsite_set() -> None:
     backup = (ROOT / "deploy/backup-set.sh").read_text(encoding="utf-8")
     restore = (ROOT / "deploy/restore-check.sh").read_text(encoding="utf-8")
@@ -438,6 +806,7 @@ def test_dashboard_role_and_private_logs_documented() -> None:
     assert "GRANT SELECT ON agent_runs TO marketmind_ro" in runbook
     assert "ssh -N -L 8001:127.0.0.1:8001" in runbook
     assert "tailscale serve --bg http://127.0.0.1:8001" in runbook
+    assert "./deploy/dashboard.sh enable" in runbook
     logrotate = (ROOT / "deploy/logrotate").read_text(encoding="utf-8")
     assert "create 0600 root root" in logrotate
 
@@ -457,3 +826,9 @@ def test_installer_is_the_primary_documented_deployment_path() -> None:
     assert installer < manual
     assert "next 22:00 local time" in runbook
     assert "Installation does\nnot wait for the backfill" in runbook
+    assert "marketmind update" in runbook
+    assert "marketmind update vX.Y.Z" in runbook
+    assert "./deploy/update.sh marketmind-vX.Y.Z-deploy.tar.gz" in runbook
+    assert "mcp_servers:" in runbook
+    assert 'Authorization: "Bearer ${MARKETMIND_MCP_TOKEN}"' in runbook
+    assert "hermes mcp test marketmind" in runbook

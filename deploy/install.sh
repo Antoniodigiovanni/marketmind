@@ -100,6 +100,19 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
+wait_for_http_status() {
+  local url=$1 expected=$2 label=$3 attempt status=
+  for ((attempt = 1; attempt <= 30; attempt++)); do
+    status=$(curl -sS -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || true)
+    if [[ "$status" == "$expected" ]]; then
+      ok "$label is responding on $url."
+      return 0
+    fi
+    sleep 2
+  done
+  die "$label did not respond with HTTP $expected within 60 seconds."
+}
+
 release_value() {
   local key=$1
   awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "$INSTALL_DIR/release.env"
@@ -157,6 +170,23 @@ installed_schedule() {
 
 timer_is_enabled() {
   systemctl is-enabled --quiet "marketmind-$1.timer" 2>/dev/null
+}
+
+load_timer_configuration() {
+  local name current
+  for name in "${TIMER_NAMES[@]}"; do
+    current=$(installed_schedule "$name")
+    SELECTED_SCHEDULE[$name]=${current:-${TIMER_DEFAULT_SCHEDULE[$name]}}
+    if sudo test -e "$SYSTEMD_DIR/marketmind-$name.timer"; then
+      if timer_is_enabled "$name"; then
+        SELECTED_ENABLED[$name]=yes
+      else
+        SELECTED_ENABLED[$name]=no
+      fi
+    else
+      SELECTED_ENABLED[$name]=${TIMER_DEFAULT_ENABLED[$name]}
+    fi
+  done
 }
 
 validate_calendar() {
@@ -252,6 +282,25 @@ configure_backup() {
   sudo install -d -m 0700 -o "$DEPLOY_USER" -g "$DEPLOY_GROUP" /srv/marketmind-backups
   sudo install -o root -g root -m 0600 "$tmp" /etc/marketmind/backup.conf
   rm -f "$tmp"
+}
+
+configure_dashboard() {
+  local default=no
+  if [[ -f "$INSTALL_DIR/state/dashboard-enabled" ]]; then
+    default=$(< "$INSTALL_DIR/state/dashboard-enabled")
+  elif [[ -s "$INSTALL_DIR/secrets/dashboard_token" && \
+          -s "$INSTALL_DIR/secrets/dashboard_pgpass" ]]; then
+    default=yes
+  fi
+
+  heading "Operations dashboard"
+  say "The optional dashboard shows scheduled-job status and selected logs in a browser."
+  say "It is read-only, password protected, and published only on 127.0.0.1:8001."
+  if ! prompt_yes_no "Enable the operations dashboard?" "$default"; then
+    DASHBOARD_ENABLED=no
+    return 0
+  fi
+  DASHBOARD_ENABLED=yes
 }
 
 next_quiet_time() {
@@ -432,16 +481,21 @@ EOF
     now) sudo systemctl disable --now marketmind-initial-backfill.timer 2>/dev/null || true
          sudo systemctl start --no-block marketmind-initial-backfill.service ;;
     skip) sudo systemctl disable --now marketmind-initial-backfill.timer 2>/dev/null || true ;;
+    preserve) ;;
   esac
   rm -rf "$staging"
   trap - RETURN
+}
+
+install_operator_command() {
+  sudo ln -sfn "$INSTALL_DIR/deploy/marketmind.sh" /usr/local/bin/marketmind
 }
 
 main() {
   [[ $(id -u) -ne 0 ]] || die "Run this as your normal deployment account, not with sudo."
   [[ -t 0 ]] || die "This installer needs an interactive terminal."
   [[ "$INSTALL_DIR" != *[[:space:]]* ]] || die "The installation path cannot contain spaces."
-  for command in awk date docker flock install openssl sed sudo systemctl systemd-analyze; do
+  for command in awk curl date docker flock install ln openssl sed sudo systemctl systemd-analyze; do
     require_command "$command"
   done
   [[ -f "$INSTALL_DIR/release.env" ]] || die "release.env is missing; use the published bundle."
@@ -515,6 +569,7 @@ main() {
     docker network create "$database_network" >/dev/null
   ok "Configuration and secrets are ready."
 
+  configure_dashboard
   configure_timers
   configure_backup
   configure_backfill
@@ -533,11 +588,19 @@ main() {
   docker compose -f docker-compose.prod.yml config --quiet
   docker compose -f docker-compose.prod.yml pull
   docker compose -f docker-compose.prod.yml up -d
+  wait_for_http_status http://127.0.0.1:8000/mcp 401 "MCP server"
+  if [[ "$DASHBOARD_ENABLED" == yes ]]; then
+    "$INSTALL_DIR/deploy/dashboard.sh" enable
+  else
+    "$INSTALL_DIR/deploy/dashboard.sh" disable
+  fi
   ok "Containers started."
 
   heading "Installing schedules"
   install_systemd
+  install_operator_command
   ok "Systemd configuration installed."
+  printf '%s\n' "$(release_value RELEASE_TAG)" > state/current-release
 
   heading "Done"
   docker compose -f docker-compose.prod.yml ps
@@ -550,11 +613,30 @@ main() {
   say
   info "MCP endpoint: http://127.0.0.1:8000/mcp"
   info "Follow service logs: docker compose -f docker-compose.prod.yml logs -f marketmind"
+  if [[ "$DASHBOARD_ENABLED" == yes ]]; then
+    info "Dashboard: http://127.0.0.1:8001 (use an SSH tunnel for remote access)"
+    info "Dashboard password file: $INSTALL_DIR/secrets/dashboard_token"
+  fi
   if [[ "$BACKFILL_MODE" != skip ]]; then
     info "Follow backfill: journalctl -fu marketmind-initial-backfill.service"
   fi
 }
 
+refresh_systemd() {
+  [[ $(id -u) -ne 0 ]] || die "Run this as your normal deployment account, not with sudo."
+  for command in awk ln sed sudo systemctl; do require_command "$command"; done
+  load_timer_configuration
+  BACKFILL_MODE=preserve
+  BACKFILL_SCHEDULE=
+  install_systemd
+  install_operator_command
+  ok "Systemd definitions refreshed without changing timer choices."
+}
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  main "$@"
+  if [[ "${1:-}" == --refresh-systemd ]]; then
+    refresh_systemd
+  else
+    main "$@"
+  fi
 fi
