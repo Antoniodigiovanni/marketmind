@@ -6,6 +6,7 @@ import datetime as dt
 
 import pytest
 
+from data.db.listings import get_current_listing
 from data.db.universe import get_universe_members, sync_universe
 
 pytestmark = pytest.mark.asyncio
@@ -74,6 +75,36 @@ async def test_sync_universe_retries_unresolved_members_once(pg_conn, tmp_path) 
     assert stats["unresolved"] == 0
     assert stats["valid"] == 1
     assert attempts["AAPL"] == 2
+
+
+async def test_sync_universe_preserves_owner_and_continues_on_symbol_collision(
+    pg_conn, tmp_path
+) -> None:
+    (tmp_path / "sp500.csv").write_text(
+        "ticker,name,country,sector,added_date,removed_date\n"
+        "MRK,Merck & Co.,US,Health Care,2020-01-01,\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "eurostoxx600.csv").write_text(
+        "ticker,name,country,sector,added_date,removed_date\n"
+        "OTHER,Other Company,DE,Health Care,2020-01-01,\n",
+        encoding="utf-8",
+    )
+
+    def colliding_search(id_value: str, *, name_hint: str | None = None) -> dict[str, str] | None:
+        return {"symbol": "MRK", "name": id_value}
+
+    stats = await sync_universe(
+        pg_conn, universe_dir=tmp_path, searcher=colliding_search, checker=lambda _: True
+    )
+
+    assert stats["members"] == 2
+    assert stats["valid"] == 1
+    assert stats["conflict"] == 1
+    listing = await get_current_listing(pg_conn, provider="yahoo", symbol="MRK")
+    assert listing is not None
+    members = await get_universe_members(pg_conn, universe="sp500", as_of=dt.date(2026, 1, 1))
+    assert listing["company_id"] == members[0]["company_id"]
 
 
 async def test_get_universe_members_is_point_in_time(pg_conn, tmp_path) -> None:

@@ -47,6 +47,7 @@ RIC_OVERRIDES: dict[str, str] = {
     "KYGa.I": "KRZ.IR",  # Kerry Group
     "SJP.L": "STJ.L",  # St James's Place (renamed symbol)
     "SCOR.PA": "SCR.PA",  # SCOR SE
+    "MRCG.DE": "MRK.DE",  # Merck KGaA (MRK without suffix is Merck & Co.)
 }
 
 

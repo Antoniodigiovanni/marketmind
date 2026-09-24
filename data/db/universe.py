@@ -12,10 +12,11 @@ import uuid
 from pathlib import Path
 
 import psycopg
+from loguru import logger
 from psycopg.rows import dict_row
 
 from data.db.identifiers import get_or_create_identifier
-from data.db.listings import get_current_listing_for_company, upsert_listing
+from data.db.listings import get_current_listing, get_current_listing_for_company, upsert_listing
 from data.universe.loader import UNIVERSE_DIR, load_all_members
 from data.universe.sources.ric import RIC_OVERRIDES, ric_variants
 from data.universe.sources.yahoo import search_by_id, symbol_has_data
@@ -54,6 +55,16 @@ async def _resolve_and_store_listing(
     else:
         symbol = found["symbol"]
         status = "valid" if check(symbol) else "review"
+    existing = await get_current_listing(conn, provider="yahoo", symbol=symbol)
+    if existing is not None and existing["company_id"] != company_id:
+        logger.warning(
+            "Yahoo symbol collision: {} ({}) resolved to {}, already owned by company {}",
+            row["name"],
+            row["ticker"],
+            symbol,
+            existing["company_id"],
+        )
+        return "conflict"
     await upsert_listing(
         conn,
         company_id=company_id,
@@ -90,11 +101,11 @@ async def sync_universe(
         checker: Callable(symbol) -> bool; defaults to symbol_has_data.
 
     Returns:
-        Stats dict: {members, valid, review, unresolved}.
+        Stats dict: {members, valid, review, unresolved, conflict}.
     """
     search = searcher if searcher is not None else search_by_id
     check = checker if checker is not None else symbol_has_data
-    stats = {"members": 0, "valid": 0, "review": 0, "unresolved": 0}
+    stats = {"members": 0, "valid": 0, "review": 0, "unresolved": 0, "conflict": 0}
     unresolved: list[tuple[dict[str, object], uuid.UUID]] = []
 
     for row in load_all_members(universe_dir).to_dicts():
