@@ -12,7 +12,8 @@ dependencies = [
     "yfinance>=0.2",
     "requests>=2.31",
     # Data processing
-    "polars>=0.20",
+    # The production homelab CPU predates AVX/AVX2; use Polars' compatible runtime.
+    "polars[rtcompat]>=0.20",
     "pandas>=2.0",
     "numpy>=1.26",
     # LLM / agent
