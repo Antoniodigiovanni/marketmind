@@ -284,6 +284,8 @@ def test_interactive_installer_discovers_owner_and_configures_schedules() -> Non
     assert "rclone config" in installer
     assert "rclone lsd" in installer
     assert 'prompt_yes_no "Enable the operations dashboard?"' in installer
+    assert 'prompt_yes_no "Expose the dashboard privately through Tailscale Serve?"' in installer
+    assert '"$INSTALL_DIR/deploy/dashboard.sh" tailscale enable' in installer
 
     backfill_service = (SYSTEMD / "marketmind-initial-backfill.service").read_text(encoding="utf-8")
     assert "run-job.sh backfill" in backfill_service
@@ -451,6 +453,59 @@ def test_dashboard_command_generates_shared_credentials(tmp_path: Path) -> None:
     assert database_password not in result.stdout
     for filename in ("dashboard_database_password", "dashboard_pgpass", "dashboard_token"):
         assert (install_dir / f"secrets/{filename}").stat().st_mode & 0o777 == 0o600
+
+
+def test_dashboard_command_manages_only_its_tailscale_mapping(tmp_path: Path) -> None:
+    install_dir = tmp_path / "marketmind"
+    deploy_dir = install_dir / "deploy"
+    deploy_dir.mkdir(parents=True)
+    shutil.copy(ROOT / "deploy/dashboard.sh", deploy_dir / "dashboard.sh")
+    (install_dir / "state").mkdir()
+    (install_dir / "state/dashboard-enabled").write_text("yes\n", encoding="utf-8")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_tailscale = fake_bin / "tailscale"
+    fake_tailscale.write_text(
+        '#!/usr/bin/env bash\nif [[ "${1:-}" == ip ]]; then printf "100.64.0.1\\n"; fi\n',
+        encoding="utf-8",
+    )
+    fake_tailscale.chmod(0o755)
+    call_log = tmp_path / "sudo-calls"
+    fake_sudo = fake_bin / "sudo"
+    fake_sudo.write_text(
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$TAILSCALE_CALL_LOG"\n',
+        encoding="utf-8",
+    )
+    fake_sudo.chmod(0o755)
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text("#!/usr/bin/env bash\nprintf '401'\n", encoding="utf-8")
+    fake_curl.chmod(0o755)
+    env = {
+        **os.environ,
+        "DASHBOARD_SCRIPT": str(deploy_dir / "dashboard.sh"),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "TAILSCALE_CALL_LOG": str(call_log),
+    }
+
+    subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$DASHBOARD_SCRIPT"; enable_tailscale 8443; disable_tailscale',
+        ],
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    calls = call_log.read_text(encoding="utf-8").splitlines()
+    assert calls[0] == ("tailscale serve --bg --https=8443 --set-path=/ http://127.0.0.1:8001")
+    assert calls[1] == "tailscale serve status"
+    assert calls[2] == "tailscale serve --https=8443 --set-path=/ off"
+    assert (install_dir / "state/dashboard-tailscale-enabled").read_text(encoding="utf-8") == "no\n"
+    assert "reset" not in "\n".join(calls)
 
 
 def test_database_provisioning_keeps_password_out_of_process_arguments(
@@ -805,7 +860,8 @@ def test_dashboard_role_and_private_logs_documented() -> None:
     runbook = RUNBOOK.read_text(encoding="utf-8")
     assert "GRANT SELECT ON agent_runs TO marketmind_ro" in runbook
     assert "ssh -N -L 8001:127.0.0.1:8001" in runbook
-    assert "tailscale serve --bg http://127.0.0.1:8001" in runbook
+    assert "marketmind dashboard tailscale enable" in runbook
+    assert "Tailscale Funnel" in runbook
     assert "./deploy/dashboard.sh enable" in runbook
     logrotate = (ROOT / "deploy/logrotate").read_text(encoding="utf-8")
     assert "create 0600 root root" in logrotate

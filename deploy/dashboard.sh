@@ -2,6 +2,7 @@
 set -euo pipefail
 
 action=${1:-}
+subaction=${2:-}
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${MARKETMIND_INSTALL_DIR:-$(dirname "$SCRIPT_DIR")}"
 POSTGRES_INSTALL_DIR="${MARKETMIND_POSTGRES_DIR:-/srv/postgres}"
@@ -9,6 +10,7 @@ COMPOSE=(docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" --profile dash
 
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 ok() { printf '✓ %s\n' "$*"; }
+warn() { printf '! %s\n' "$*" >&2; }
 
 wait_until_ready() {
   local attempt status=
@@ -143,13 +145,88 @@ dashboard_status() {
   "${COMPOSE[@]}" ps dashboard
 }
 
+tailscale_connected() {
+  command -v tailscale >/dev/null 2>&1 && [[ -n $(tailscale ip -4 2>/dev/null) ]]
+}
+
+enable_tailscale() {
+  local previous_port port=${1:-$(cat "$INSTALL_DIR/state/dashboard-tailscale-port" 2>/dev/null || true)}
+  port=${port:-443}
+  [[ "$port" =~ ^[0-9]+$ ]] && ((port >= 1 && port <= 65535)) || \
+    die "Tailscale HTTPS port must be between 1 and 65535"
+  [[ $(cat "$INSTALL_DIR/state/dashboard-enabled" 2>/dev/null || true) == yes ]] || \
+    die "enable the dashboard before exposing it through Tailscale"
+  tailscale_connected || die "Tailscale is not installed and connected on this host"
+  wait_until_ready
+  previous_port=$(cat "$INSTALL_DIR/state/dashboard-tailscale-port" 2>/dev/null || true)
+  if [[ $(cat "$INSTALL_DIR/state/dashboard-tailscale-enabled" 2>/dev/null || true) == yes && \
+        -n "$previous_port" && "$previous_port" != "$port" ]]; then
+    if ! sudo tailscale serve --https="$previous_port" --set-path=/ off; then
+      die "could not remove the previous Marketmind mapping on HTTPS port $previous_port"
+    fi
+    printf 'no\n' > "$INSTALL_DIR/state/dashboard-tailscale-enabled"
+  fi
+  if ! sudo tailscale serve --bg --https="$port" --set-path=/ http://127.0.0.1:8001; then
+    die "Tailscale Serve could not publish the dashboard"
+  fi
+  printf '%s\n' "$port" > "$INSTALL_DIR/state/dashboard-tailscale-port"
+  printf 'yes\n' > "$INSTALL_DIR/state/dashboard-tailscale-enabled"
+  ok "Dashboard is available privately through Tailscale HTTPS on port $port."
+  sudo tailscale serve status
+}
+
+disable_tailscale() {
+  local port
+  if [[ $(cat "$INSTALL_DIR/state/dashboard-tailscale-enabled" 2>/dev/null || true) != yes ]]; then
+    ok "Marketmind has no managed Tailscale Serve mapping."
+    return 0
+  fi
+  port=$(cat "$INSTALL_DIR/state/dashboard-tailscale-port" 2>/dev/null || true)
+  port=${port:-443}
+  command -v tailscale >/dev/null 2>&1 || \
+    die "Tailscale is unavailable; the saved Serve mapping was not changed"
+  if ! sudo tailscale serve --https="$port" --set-path=/ off; then
+    warn "Tailscale Serve could not remove the dashboard mapping."
+    return 1
+  fi
+  printf 'no\n' > "$INSTALL_DIR/state/dashboard-tailscale-enabled"
+  ok "Removed Marketmind's Tailscale Serve mapping."
+}
+
+tailscale_status() {
+  printf 'Marketmind-managed mapping: %s\n' \
+    "$(cat "$INSTALL_DIR/state/dashboard-tailscale-enabled" 2>/dev/null || printf 'no')"
+  printf 'HTTPS port: %s\n' \
+    "$(cat "$INSTALL_DIR/state/dashboard-tailscale-port" 2>/dev/null || printf '443')"
+  if command -v tailscale >/dev/null 2>&1; then
+    sudo tailscale serve status
+  else
+    warn "Tailscale is not installed."
+  fi
+}
+
+disable_dashboard_and_exposure() {
+  if [[ $(cat "$INSTALL_DIR/state/dashboard-tailscale-enabled" 2>/dev/null || true) == yes ]]; then
+    disable_tailscale || warn "Could not remove the Tailscale mapping; run the command again later."
+  fi
+  disable_dashboard
+}
+
 main() {
   [[ $(id -u) -ne 0 ]] || die "run this as the deployment account, not with sudo"
   case "$action" in
     enable) enable_dashboard ;;
-    disable) disable_dashboard ;;
+    disable) disable_dashboard_and_exposure ;;
     status) dashboard_status ;;
-    *) die "usage: dashboard.sh enable|disable|status" ;;
+    tailscale)
+      case "$subaction" in
+        enable) enable_tailscale "${3:-}" ;;
+        disable) disable_tailscale ;;
+        status) tailscale_status ;;
+        *) die "usage: dashboard.sh tailscale enable [https-port]|disable|status" ;;
+      esac
+      ;;
+    *) die "usage: dashboard.sh enable|disable|status|tailscale" ;;
   esac
 }
 

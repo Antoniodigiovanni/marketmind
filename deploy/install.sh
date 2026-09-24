@@ -285,7 +285,9 @@ configure_backup() {
 }
 
 configure_dashboard() {
-  local default=no
+  local default=no tailscale_default=no tailscale_port
+  TAILSCALE_DASHBOARD_ENABLED=no
+  TAILSCALE_DASHBOARD_PORT=
   if [[ -f "$INSTALL_DIR/state/dashboard-enabled" ]]; then
     default=$(< "$INSTALL_DIR/state/dashboard-enabled")
   elif [[ -s "$INSTALL_DIR/secrets/dashboard_token" && \
@@ -301,6 +303,35 @@ configure_dashboard() {
     return 0
   fi
   DASHBOARD_ENABLED=yes
+
+  if ! command -v tailscale >/dev/null 2>&1 || \
+      [[ -z $(tailscale ip -4 2>/dev/null || true) ]]; then
+    say "Tailscale is not installed and connected, so private tailnet access is skipped."
+    say "You can add it later with: ./deploy/dashboard.sh tailscale enable"
+    return 0
+  fi
+  tailscale_default=yes
+  if [[ -f "$INSTALL_DIR/state/dashboard-tailscale-enabled" ]]; then
+    tailscale_default=$(< "$INSTALL_DIR/state/dashboard-tailscale-enabled")
+  fi
+  say "Tailscale Serve can provide a persistent private HTTPS address without an SSH tunnel."
+  say "Current Tailscale Serve configuration:"
+  sudo tailscale serve status || true
+  if ! prompt_yes_no "Expose the dashboard privately through Tailscale Serve?" \
+      "$tailscale_default"; then
+    return 0
+  fi
+  TAILSCALE_DASHBOARD_ENABLED=yes
+  tailscale_port=$(cat "$INSTALL_DIR/state/dashboard-tailscale-port" 2>/dev/null || true)
+  while true; do
+    tailscale_port=$(prompt_text "Tailscale HTTPS port" "${tailscale_port:-443}")
+    if [[ "$tailscale_port" =~ ^[0-9]+$ ]] && \
+        ((tailscale_port >= 1 && tailscale_port <= 65535)); then
+      break
+    fi
+    warn "Enter a port between 1 and 65535."
+  done
+  TAILSCALE_DASHBOARD_PORT=$tailscale_port
 }
 
 next_quiet_time() {
@@ -591,6 +622,11 @@ main() {
   wait_for_http_status http://127.0.0.1:8000/mcp 401 "MCP server"
   if [[ "$DASHBOARD_ENABLED" == yes ]]; then
     "$INSTALL_DIR/deploy/dashboard.sh" enable
+    if [[ "$TAILSCALE_DASHBOARD_ENABLED" == yes ]]; then
+      "$INSTALL_DIR/deploy/dashboard.sh" tailscale enable "$TAILSCALE_DASHBOARD_PORT"
+    elif [[ $(cat state/dashboard-tailscale-enabled 2>/dev/null || true) == yes ]]; then
+      "$INSTALL_DIR/deploy/dashboard.sh" tailscale disable
+    fi
   else
     "$INSTALL_DIR/deploy/dashboard.sh" disable
   fi
@@ -614,7 +650,11 @@ main() {
   info "MCP endpoint: http://127.0.0.1:8000/mcp"
   info "Follow service logs: docker compose -f docker-compose.prod.yml logs -f marketmind"
   if [[ "$DASHBOARD_ENABLED" == yes ]]; then
-    info "Dashboard: http://127.0.0.1:8001 (use an SSH tunnel for remote access)"
+    if [[ "$TAILSCALE_DASHBOARD_ENABLED" == yes ]]; then
+      info "Dashboard: use the private HTTPS URL printed by Tailscale Serve."
+    else
+      info "Dashboard: http://127.0.0.1:8001"
+    fi
     info "Dashboard password file: $INSTALL_DIR/secrets/dashboard_token"
   fi
   if [[ "$BACKFILL_MODE" != skip ]]; then
