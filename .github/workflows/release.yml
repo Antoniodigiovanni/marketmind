@@ -60,7 +60,10 @@ jobs:
           context: .
           push: true
           platforms: linux/amd64
-          tags: ${{ steps.registry.outputs.image }}:${{ github.ref_name }}
+          tags: |
+            ${{ steps.registry.outputs.image }}:${{ github.ref_name }}
+            ${{ steps.registry.outputs.image }}:latest
+          labels: org.opencontainers.image.version=${{ github.ref_name }}
       - name: Create matching host bundle
         env:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}

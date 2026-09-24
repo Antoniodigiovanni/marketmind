@@ -13,8 +13,8 @@ The server does not need a source checkout or a local build.
 
 ## Requirements
 
-- Linux amd64 with Bash 4+, Docker Engine, Compose, systemd, `flock`, `sha256sum`,
-  `tar`, and `logrotate`.
+- Linux amd64 with Bash 4+, Docker Engine, Compose, systemd, `curl`, `flock`,
+  `sha256sum`, `tar`, and `logrotate`.
 - An external Docker network shared with PostgreSQL. This guide calls it
   `postgres-network`; it publishes no port.
 - PostgreSQL 16 or later with pgvector installed. The bundled shared image
@@ -70,6 +70,14 @@ database service, starts the application, and installs the schedule.
 The generated job services run as that account. Existing secrets, data, and
 timer choices are retained when the installer is run again.
 
+The installer also offers the read-only operations dashboard. With the bundled
+shared PostgreSQL service, it creates a separate `marketmind_ro` login, limits
+that login to `SELECT` on `agent_runs`, generates the browser token and database
+password, and starts the optional Compose profile. With an existing PostgreSQL
+instance, its administrator must create `marketmind_ro` first; the installer
+then records that role's password and starts the dashboard. Choosing no stops a
+previously enabled dashboard without deleting its credentials.
+
 For every recurring job, the installer explains its work and expected cost,
 asks whether to enable it, and presents the current schedule as the default.
 A custom value can be any calendar expression accepted by
@@ -94,6 +102,41 @@ stages succeed.
 ```bash
 journalctl -fu marketmind-initial-backfill.service
 ```
+
+## 3. Connect Hermes through MCP
+
+When Hermes runs directly on the same homelab, add this entry to the
+`~/.hermes/config.yaml` belonging to the account that runs Hermes:
+
+```yaml
+mcp_servers:
+  marketmind:
+    url: "http://127.0.0.1:8000/mcp"
+    headers:
+      Authorization: "Bearer ${MARKETMIND_MCP_TOKEN}"
+    timeout: 300
+    supports_parallel_tool_calls: false
+```
+
+Put the contents of `/srv/marketmind/secrets/mcp_token` in that account's
+`~/.hermes/.env` without adding the value to `config.yaml`:
+
+```dotenv
+MARKETMIND_MCP_TOKEN=<contents of /srv/marketmind/secrets/mcp_token>
+```
+
+Keep both files owner-only, restart Hermes, and verify discovery:
+
+```bash
+chmod 0600 ~/.hermes/config.yaml ~/.hermes/.env
+hermes mcp test marketmind
+```
+
+The URL uses loopback deliberately. If the client runs on another machine,
+forward the endpoint first with
+`ssh -N -L 8000:127.0.0.1:8000 <deploy-user>@<host>`, then use the same URL locally.
+If Hermes runs inside a container, its `127.0.0.1` is a different network
+namespace and it needs explicit container-network wiring instead.
 
 The rest of this document is the manual equivalent and operational reference.
 
@@ -340,6 +383,20 @@ journalctl -u marketmind-daily.service -n 100 --no-pager
 
 ## Optional operations dashboard
 
+The interactive installer performs this section automatically when the
+dashboard is selected. On an existing installation that uses the bundled
+shared PostgreSQL service, the equivalent operation is one command:
+
+```bash
+cd /srv/marketmind
+./deploy/dashboard.sh enable
+```
+
+Use `./deploy/dashboard.sh status` to inspect it and
+`./deploy/dashboard.sh disable` to stop it without deleting credentials. The
+commands below remain the manual reference for an externally managed
+PostgreSQL instance.
+
 Create a separate read-only role through the shared instance's normal
 administration path. Use a different password from the application role:
 
@@ -416,11 +473,47 @@ sudo systemctl enable --now marketmind-backup.timer
 
 ## Updating and rollback
 
-Download and verify the next release bundle, inspect `release.env`, extract
-it, and rerun `deploy/install.sh`. The installer updates the application image
-without replacing data or secrets. Once `/srv/postgres` exists, the installer
-preserves its Compose file, image, volume, and network settings; update that
-shared service through its own maintenance process. Keep the previous release
-archive and image digest. A rollback across incompatible migrations also
+After a release is published, run the operator command as the deployment
+account. The Docker login saved during installation supplies the
+package-registry credential:
+
+```bash
+marketmind update
+```
+
+This installs the newest published release. Use
+`marketmind update vX.Y.Z` when you deliberately want a particular release.
+The updater pulls the selected image from GHCR, resolves it to an immutable
+digest, and copies the matching Compose files and host scripts out of a stopped
+temporary container. It saves the current deployment files under
+`state/deployment-releases/`, installs the new bundle, updates the pinned image,
+recreates the application and enabled dashboard, and refreshes systemd service
+definitions while preserving enabled timers and their schedules. It does not
+replace `.env`, secrets, raw data, state, or the independent PostgreSQL stack.
+
+The release archive remains an offline fallback. Copy the archive and its
+`.sha256` file into `/srv/marketmind`, then pass the archive path instead:
+
+```bash
+cd /srv/marketmind
+./deploy/update.sh marketmind-vX.Y.Z-deploy.tar.gz
+```
+
+That path verifies both the checksum and archive structure before changing the
+installation. The registry path needs only the package-read PAT already stored
+by `docker login`; it does not need authenticated access to GitHub release
+assets.
+
+Inspect the result with:
+
+```bash
+cat state/current-release
+docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml logs --tail=100 marketmind
+systemctl list-timers 'marketmind-*'
+```
+
+The old container image and saved deployment files remain available for a
+code-only rollback. A rollback across incompatible database migrations also
 requires restoring the matching database and local files; treat the image,
 database dump, and files as one set.

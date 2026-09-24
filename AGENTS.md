@@ -15,8 +15,8 @@ dedicated database and role. On a new host, the installer creates that shared
 service as an independent Compose project under `/srv/postgres`; Marketmind
 does not own its lifecycle. Later projects receive their own databases and
 roles on the same instance. PostgreSQL with pgvector is the only structured,
-queryable store. systemd
-timers invoke one-off jobs from the same image as the long-running MCP server.
+queryable store. systemd timers invoke one-off jobs from the same image as the
+long-running MCP server.
 Local development and CI use a disposable PostgreSQL database.
 
 ## Commands
@@ -38,6 +38,9 @@ uv run python -m agent.refresh {YYYY-MM-DD}          # complete daily job
 uv run python -m server.mcp                           # authenticated HTTP MCP
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
+./deploy/dashboard.sh enable|disable|status           # dashboard lifecycle
+marketmind update                                    # install newest production release
+marketmind update vX.Y.Z                             # install a selected release
 # The independent shared database stack lives under /srv/postgres.
 ```
 
@@ -94,6 +97,10 @@ Always use `uv run` for Python commands. In containers and systemd jobs, use
   only its own DSN/password and browser token, never the main database
   password or source credentials. Publish it on loopback; remote access goes
   through an encrypted, restricted tunnel.
+- `deploy/install.sh` owns first-host configuration. Routine releases use
+  `deploy/update.sh`, which preserves runtime configuration, credentials,
+  state, timer choices, and the independent PostgreSQL service. Dashboard
+  lifecycle operations go through `deploy/dashboard.sh`.
 - Scheduled data jobs share `state/refresh/daily-refresh.lock`. Preserve
   `agent_runs` audit rows and terminal status for every run.
 - The daily refresh ends with the incremental SEC filings fetch. European ESEF
