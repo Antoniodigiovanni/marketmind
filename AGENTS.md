@@ -96,7 +96,8 @@ Always use `uv run` for Python commands. In containers and systemd jobs, use
   It may read only `agent_runs` and selected job logs. Its container receives
   only its own DSN/password and browser token, never the main database
   password or source credentials. Publish it on loopback; remote access goes
-  through an encrypted, restricted tunnel.
+  through an encrypted, restricted tunnel. `dashboard.sh` may configure a
+  private Tailscale Serve mapping, but never Tailscale Funnel.
 - `deploy/install.sh` owns first-host configuration. Routine releases use
   `deploy/update.sh`, which preserves runtime configuration, credentials,
   state, timer choices, and the independent PostgreSQL service. Dashboard

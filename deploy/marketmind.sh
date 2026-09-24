@@ -8,6 +8,8 @@ usage() {
   cat <<'EOF'
 Usage:
   marketmind update [vX.Y.Z]
+  marketmind dashboard enable|disable|status
+  marketmind dashboard tailscale enable [https-port]|disable|status
   marketmind version
   marketmind help
 
@@ -18,6 +20,10 @@ EOF
 case "${1:-help}" in
   update)
     exec "$INSTALL_DIR/deploy/update.sh" "${2:-latest}"
+    ;;
+  dashboard)
+    shift
+    exec "$INSTALL_DIR/deploy/dashboard.sh" "$@"
     ;;
   version)
     if [[ -s "$INSTALL_DIR/state/current-release" ]]; then

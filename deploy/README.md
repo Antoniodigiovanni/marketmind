@@ -78,6 +78,12 @@ instance, its administrator must create `marketmind_ro` first; the installer
 then records that role's password and starts the dashboard. Choosing no stops a
 previously enabled dashboard without deleting its credentials.
 
+When Tailscale is installed and connected, the installer also offers to publish
+the dashboard privately through Tailscale Serve. The default is HTTPS port 443;
+another port can be selected when that endpoint is already used. The mapping is
+persistent across reboots and is reachable only subject to the tailnet's access
+rules. Marketmind never enables Tailscale Funnel or public internet access.
+
 For every recurring job, the installer explains its work and expected cost,
 asks whether to enable it, and presents the current schedule as the default.
 A custom value can be any calendar expression accepted by
@@ -397,6 +403,19 @@ Use `./deploy/dashboard.sh status` to inspect it and
 commands below remain the manual reference for an externally managed
 PostgreSQL instance.
 
+If Tailscale is installed and connected, manage private HTTPS access with:
+
+```bash
+marketmind dashboard tailscale enable
+marketmind dashboard tailscale status
+marketmind dashboard tailscale disable
+```
+
+The enable command uses HTTPS port 443 by default. Pass another port when
+needed, for example `marketmind dashboard tailscale enable 8443`. Disabling it
+removes only the protocol, port, and root-path mapping recorded by Marketmind;
+it does not reset unrelated Tailscale Serve configuration.
+
 Create a separate read-only role through the shared instance's normal
 administration path. Use a different password from the application role:
 
@@ -422,12 +441,12 @@ files mode `0600`, and start the profile:
 docker compose -f docker-compose.prod.yml --profile dashboard up -d dashboard
 ```
 
-The dashboard binds to loopback. Reach it with
-`ssh -N -L 8001:127.0.0.1:8001 <deploy-user>@<host>` or an authorized tailnet.
-It receives only the read-only role and its browser token.
+The dashboard itself remains bound to loopback and receives only the read-only
+role and its browser token. Tailscale Serve is the preferred remote-access path;
+an SSH tunnel remains available when Tailscale is not configured.
 
 ```bash
-tailscale serve --bg http://127.0.0.1:8001
+ssh -N -L 8001:127.0.0.1:8001 <deploy-user>@<host>
 ```
 
 ## Optional backups
