@@ -6,7 +6,7 @@ import datetime as dt
 
 from data.db.filings import has_checkpoint
 from data.db.identifiers import get_or_create_identifier
-from data.filings.backfill import backfill_issuer
+from data.filings.backfill import backfill_13f, backfill_issuer
 from data.sources.sec import Submission
 
 
@@ -79,3 +79,46 @@ async def test_issuer_backfill_is_postgres_only_and_resumable(pg_conn, tmp_path)
     assert (await (await pg_conn.execute("SELECT COUNT(*) FROM filings")).fetchone())[0] == 3
     assert (await (await pg_conn.execute("SELECT COUNT(*) FROM filing_text")).fetchone())[0] == 1
     assert await has_checkpoint(pg_conn, source="backfill:issuer:AAPL", key="2026-08-31")
+
+
+async def test_13f_backfill_retries_a_failed_filing(pg_conn, tmp_path, monkeypatch) -> None:
+    """Do not checkpoint a transient 13F failure before it can be retried."""
+    from data.filings import backfill as backfill_module
+
+    accession = "000106798326000001"
+
+    def fake_filings(client, *, start: str, end: str):
+        yield "0001067983", accession, "2026-08-14", "Berkshire Hathaway"
+
+    calls = 0
+
+    async def flaky_process(*args, **kwargs) -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("temporary archive failure")
+        return 2
+
+    monkeypatch.setattr(backfill_module, "iter_13f_filings", fake_filings)
+    monkeypatch.setattr(backfill_module, "_process_13f", flaky_process)
+
+    failed = await backfill_13f(
+        pg_conn,
+        object(),  # type: ignore[arg-type]
+        tmp_path,
+        start="2026-08-01",
+        end="2026-08-31",
+    )
+    assert failed["skipped"] == 1
+    assert not await has_checkpoint(pg_conn, source="13f", key=accession)
+
+    recovered = await backfill_13f(
+        pg_conn,
+        object(),  # type: ignore[arg-type]
+        tmp_path,
+        start="2026-08-01",
+        end="2026-08-31",
+    )
+    assert recovered["13f_filings"] == 1
+    assert recovered["13f_rows"] == 2
+    assert await has_checkpoint(pg_conn, source="13f", key=accession)

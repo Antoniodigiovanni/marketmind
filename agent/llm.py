@@ -10,7 +10,7 @@ from typing import Any
 import requests
 from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from data.secrets import credential
+from data.credentials import credential
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-chat"

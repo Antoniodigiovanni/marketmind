@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from data.secrets import credential
+from data.credentials import credential
 
 
 def test_credential_reads_owner_file_without_newline(tmp_path, monkeypatch) -> None:
