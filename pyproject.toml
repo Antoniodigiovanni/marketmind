@@ -34,6 +34,7 @@ dependencies = [
     "loguru>=0.7",
     "python-dotenv>=1.0",
     "pyarrow>=14.0",
+    "curl-cffi>=0.15",
 ]
 
 [project.optional-dependencies]
