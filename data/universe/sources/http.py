@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+import ssl
 import threading
 import time
+from pathlib import Path
 
 import certifi
 import requests
 
-SYSTEM_CA_BUNDLE = "/etc/ssl/cert.pem"
+SYSTEM_CA_BUNDLE_CANDIDATES = (
+    "/etc/ssl/cert.pem",  # macOS and some Unix distributions
+    "/etc/ssl/certs/ca-certificates.crt",  # Debian and Ubuntu
+    ssl.get_default_verify_paths().cafile,
+)
+SYSTEM_CA_BUNDLE = next(
+    (path for path in SYSTEM_CA_BUNDLE_CANDIDATES if path is not None and Path(path).is_file()),
+    certifi.where(),
+)
 
 
 class RateLimiter:
@@ -39,8 +49,8 @@ def get_with_ca_fallback(
 ) -> requests.Response:
     """GET a URL, retrying once with the system CA bundle on TLS errors.
 
-    certifi's bundle fails to verify some issuer chains on macOS (stoxx.com is
-    one example); the system bundle at /etc/ssl/cert.pem verifies them.
+    certifi's bundle fails to verify some issuer chains (stoxx.com is one
+    example); an available platform CA bundle verifies them.
 
     Args:
         url: Request URL.
