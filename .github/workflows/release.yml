@@ -38,6 +38,16 @@ jobs:
         env:
           MARKETMIND_REQUIRE_POSTGRES: "1"
         run: uv run --frozen pytest tests/ -q --cov=. --cov-fail-under=85
+      - name: Verify live external-service contracts
+        env:
+          RUN_LIVE_TESTS: "1"
+          SEC_CONTACT_NAME: ${{ secrets.SEC_CONTACT_NAME }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+        run: uv run --frozen pytest tests/integration -v -m live --no-cov
 
   publish:
     needs: check

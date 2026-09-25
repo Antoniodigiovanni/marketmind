@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+import ssl
 import threading
 import time
+from pathlib import Path
 
 import certifi
 import requests
 
-SYSTEM_CA_BUNDLE = "/etc/ssl/cert.pem"
+SYSTEM_CA_BUNDLE_CANDIDATES = (
+    "/etc/ssl/cert.pem",  # macOS and some Unix distributions
+    "/etc/ssl/certs/ca-certificates.crt",  # Debian and Ubuntu
+    ssl.get_default_verify_paths().cafile,
+)
+SYSTEM_CA_BUNDLE = next(
+    (path for path in SYSTEM_CA_BUNDLE_CANDIDATES if path is not None and Path(path).is_file()),
+    certifi.where(),
+)
 
 
 class RateLimiter:
@@ -36,11 +46,12 @@ def get_with_ca_fallback(
     params: dict[str, str] | None = None,
     timeout: int = 60,
     headers: dict[str, str] | None = None,
+    fallback_ca_bundle: str | Path | None = None,
 ) -> requests.Response:
-    """GET a URL, retrying once with the system CA bundle on TLS errors.
+    """GET a URL, retrying once with a verified fallback CA bundle on TLS errors.
 
-    certifi's bundle fails to verify some issuer chains on macOS (stoxx.com is
-    one example); the system bundle at /etc/ssl/cert.pem verifies them.
+    certifi's bundle fails to verify some issuer chains (stoxx.com is one
+    example); a source-specific or available platform CA bundle verifies them.
 
     Args:
         url: Request URL.
@@ -48,6 +59,7 @@ def get_with_ca_fallback(
         params: Query parameters.
         timeout: Request timeout in seconds.
         headers: Request headers.
+        fallback_ca_bundle: Optional source-specific CA chain for the retry.
 
     Returns:
         The response from the first successful attempt.
@@ -61,6 +73,5 @@ def get_with_ca_fallback(
             url, params=params, timeout=timeout, headers=headers, verify=certifi.where()
         )
     except requests.exceptions.SSLError:
-        return http.get(
-            url, params=params, timeout=timeout, headers=headers, verify=SYSTEM_CA_BUNDLE
-        )
+        fallback = str(fallback_ca_bundle) if fallback_ca_bundle else SYSTEM_CA_BUNDLE
+        return http.get(url, params=params, timeout=timeout, headers=headers, verify=fallback)

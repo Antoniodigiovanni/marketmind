@@ -93,6 +93,9 @@ uv run python -m data.db.init_postgres
 
 # Run the test suite (disposable PostgreSQL, mocked external APIs)
 uv run pytest tests/ -v --cov=. --cov-report=term-missing
+
+# Verify live external-service contracts (requires configured credentials)
+RUN_LIVE_TESTS=1 uv run pytest tests/integration -m live --no-cov
 ```
 
 ### Environment variables

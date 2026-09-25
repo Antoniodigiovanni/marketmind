@@ -1,0 +1,83 @@
+name: Live source contracts
+
+on:
+  pull_request:
+    paths:
+      - "agent/llm.py"
+      - "data/sources/**"
+      - "data/universe/sources/**"
+      - "tests/integration/**"
+      - ".github/workflows/live-contracts.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  public-sources:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --all-extras
+      - name: Verify live public-source contracts
+        env:
+          RUN_LIVE_TESTS: "1"
+          SEC_CONTACT_NAME: ${{ secrets.SEC_CONTACT_NAME }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+        run: >-
+          uv run --frozen pytest -v -m live --no-cov
+          tests/integration/test_sec_live.py
+          tests/integration/test_universe_live.py
+          tests/integration/test_market_data_live.py
+          tests/integration/test_news_live.py
+          tests/integration/test_reference_live.py
+          tests/integration/test_macro_live.py::test_live_ecb_series_contract
+
+  fred:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --all-extras
+      - name: Verify live FRED contract
+        env:
+          RUN_LIVE_TESTS: "1"
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: >-
+          uv run --frozen pytest -v -m live --no-cov
+          tests/integration/test_macro_live.py::test_live_fred_series_contract
+
+  chat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --all-extras
+      - name: Verify live chat contract
+        env:
+          RUN_LIVE_TESTS: "1"
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+        run: uv run --frozen pytest -v -m live --no-cov tests/integration/test_chat_live.py

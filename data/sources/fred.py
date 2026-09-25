@@ -5,7 +5,7 @@ from __future__ import annotations
 import polars as pl
 import requests
 
-from data.secrets import credential
+from data.credentials import credential
 
 FRED_OBSERVATIONS_URL = "https://api.stlouisfed.org/fred/series/observations"
 

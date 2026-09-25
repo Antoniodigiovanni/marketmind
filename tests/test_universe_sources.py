@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import certifi
@@ -11,7 +12,7 @@ import requests
 from data.universe.sources.http import SYSTEM_CA_BUNDLE, get_with_ca_fallback
 from data.universe.sources.ric import ric_to_yahoo, ric_variants
 from data.universe.sources.sp500 import parse_cspx_holdings
-from data.universe.sources.stoxx import parse_selection_list
+from data.universe.sources.stoxx import latest_selection_list_url, parse_selection_list
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -30,6 +31,50 @@ def test_parse_selection_list_keeps_only_top_600() -> None:
 def test_parse_selection_list_empty_raises() -> None:
     with pytest.raises(ValueError, match="selection list"):
         parse_selection_list("not,a,valid,file\n1,2,3,4\n")
+
+
+def test_latest_selection_list_url_uses_public_resource_api() -> None:
+    payload = {
+        "status_code": "200",
+        "data": json.dumps(
+            [
+                {
+                    "symbol": "sxxp",
+                    "slpublic": (
+                        "<a href='documents/stoxxnet/Documents/Reports/STOXXSelectionList/"
+                        "2026/September/slpublic_sxxp_20260901.csv'>download</a>"
+                    ),
+                }
+            ]
+        ),
+    }
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return payload
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.params: dict[str, str] = {}
+
+        def get(self, url: str, **kwargs: object) -> FakeResponse:
+            self.params = kwargs["params"]  # type: ignore[assignment]
+            return FakeResponse()
+
+    session = FakeSession()
+
+    url = latest_selection_list_url(session)  # type: ignore[arg-type]
+
+    assert url.endswith("/STOXXSelectionList/2026/September/slpublic_sxxp_20260901.csv")
+    assert (
+        session.params["_STOXXNewSelectionlistportlet_WAR_STOXXNewSelectionlistportlet_symbols"]
+        == "SXXP"
+    )
 
 
 def test_parse_cspx_holdings_keeps_only_equities() -> None:
@@ -156,3 +201,26 @@ def test_ca_fallback_retries_with_system_bundle() -> None:
     assert response.status_code == 200
     assert calls[0]["verify"] == certifi.where()
     assert calls[1]["verify"] == SYSTEM_CA_BUNDLE
+
+
+def test_ca_fallback_uses_source_specific_bundle() -> None:
+    class FakeResponse:
+        status_code = 200
+
+    calls: list[dict[str, object]] = []
+
+    class FakeSession:
+        def get(self, url: str, **kwargs: object) -> FakeResponse:
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise requests.exceptions.SSLError("default bundle failed")
+            return FakeResponse()
+
+    bundle = Path("source-chain.pem")
+    response = get_with_ca_fallback(
+        "https://example.com", session=FakeSession(), fallback_ca_bundle=bundle
+    )
+
+    assert response.status_code == 200
+    assert calls[0]["verify"] == certifi.where()
+    assert calls[1]["verify"] == str(bundle)

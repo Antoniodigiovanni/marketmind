@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from data.secrets import credential
+from data.credentials import credential
 
 HOST_ENV = "MARKETMIND_DASHBOARD_HOST"
 PORT_ENV = "MARKETMIND_DASHBOARD_PORT"

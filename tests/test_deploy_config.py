@@ -205,7 +205,7 @@ def test_resolved_dashboard_environment_excludes_write_credentials() -> None:
 
 
 def test_dashboard_reads_only_the_run_audit_log() -> None:
-    allowed = {"data.db.pool", "data.db.runs", "data.secrets"}
+    allowed = {"data.credentials", "data.db.pool", "data.db.runs"}
     for path in (ROOT / "dashboard").rglob("*.py"):
         source = path.read_text(encoding="utf-8")
         imported = set(re.findall(r"^from (data\.[\w.]+) import", source, flags=re.MULTILINE))

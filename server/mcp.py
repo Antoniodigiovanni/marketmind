@@ -26,6 +26,7 @@ from agent.refresh import launch_refresh, refresh_status
 from agent.views import get_market_views as get_views
 from agent.views import save_market_view as save_view
 from data.benchmarks import get_benchmarks as benchmark_registry
+from data.credentials import credential
 from data.db import prices as prices_db
 from data.db.articles import get_news as articles_get_news
 from data.db.articles import search_news as articles_search_news
@@ -48,7 +49,6 @@ from data.db.market_data import get_macro as market_get_macro
 from data.db.market_data import get_short_interest as market_get_short_interest
 from data.db.pool import dsn_from_env, open_pool
 from data.db.runs import list_recent_runs
-from data.secrets import credential
 from data.universe.loader import get_universe
 
 MCP_PORT = int(os.getenv("MARKETMIND_MCP_PORT", "8000"))

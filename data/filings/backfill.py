@@ -162,6 +162,7 @@ async def backfill_13f(
         except Exception:
             logger.exception(f"backfill: 13F filing {accession} failed")
             counts["skipped"] += 1
+            continue
         await mark_checkpoint(conn, source="13f", key=accession)
     return counts
 

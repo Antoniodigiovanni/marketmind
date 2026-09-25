@@ -12,6 +12,16 @@ from data.db.init_postgres import apply_schema
 from data.db.pool import close_pool, database_available, dsn_from_env, open_pool
 
 
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Skip live contract tests unless the caller explicitly enables them."""
+    if os.getenv("RUN_LIVE_TESTS") == "1":
+        return
+    marker = pytest.mark.skip(reason="set RUN_LIVE_TESTS=1 to call live external services")
+    for item in items:
+        if item.get_closest_marker("live") is not None:
+            item.add_marker(marker)
+
+
 @pytest.fixture(autouse=True)
 def _deterministic_operator_contact(monkeypatch: pytest.MonkeyPatch) -> None:
     """Give every test a fixed operator contact for courtesy-access sources.
@@ -25,8 +35,9 @@ def _deterministic_operator_contact(monkeypatch: pytest.MonkeyPatch) -> None:
     `.invalid` is reserved by RFC 2606 and resolves nowhere, so a leaked
     request is inert.
     """
-    monkeypatch.setenv("SEC_CONTACT_NAME", "marketmind test suite")
-    monkeypatch.setenv("SEC_CONTACT_EMAIL", "tests@marketmind.invalid")
+    if os.getenv("RUN_LIVE_TESTS") != "1":
+        monkeypatch.setenv("SEC_CONTACT_NAME", "marketmind test suite")
+        monkeypatch.setenv("SEC_CONTACT_EMAIL", "tests@marketmind.invalid")
 
 
 def skip_or_fail_no_postgres(message: str) -> None:

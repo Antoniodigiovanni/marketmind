@@ -118,6 +118,29 @@ def test_get_filings_maps_gb_to_uksef(monkeypatch) -> None:
     assert filings[0].entity_name == "Halma plc"
 
 
+def test_get_filings_resolves_relative_artifact_urls(monkeypatch) -> None:
+    page = _page("ESEF/IT/1", "815600AB", "Banco BPM", "IT", None)
+    page["data"][0]["attributes"].update(
+        {
+            "package_url": "/entity/report.zip",
+            "report_url": "/entity/report.xhtml",
+            "json_url": "/entity/report.json",
+        }
+    )
+    url = (
+        "https://filings.xbrl.org/api/filings?filter[country]=IT"
+        "&page[size]=200&include=entity&sort=-processed"
+    )
+    client = XbrlorgClient(FakeSession({url: page}))  # type: ignore[arg-type]
+    monkeypatch.setattr(client._limiter, "wait", lambda: None)
+
+    filing = client.get_filings("IT")[0]
+
+    assert filing.package_url == "https://filings.xbrl.org/entity/report.zip"
+    assert filing.xhtml_url == "https://filings.xbrl.org/entity/report.xhtml"
+    assert filing.json_url == "https://filings.xbrl.org/entity/report.json"
+
+
 def test_download_returns_bytes(monkeypatch) -> None:
     url = "https://filings.xbrl.org/ESEF/IT/1/package.zip"
     session = FakeSession({url: b"ignored"})
