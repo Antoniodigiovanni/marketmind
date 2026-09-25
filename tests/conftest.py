@@ -25,8 +25,9 @@ def _deterministic_operator_contact(monkeypatch: pytest.MonkeyPatch) -> None:
     `.invalid` is reserved by RFC 2606 and resolves nowhere, so a leaked
     request is inert.
     """
-    monkeypatch.setenv("SEC_CONTACT_NAME", "marketmind test suite")
-    monkeypatch.setenv("SEC_CONTACT_EMAIL", "tests@marketmind.invalid")
+    if os.getenv("RUN_LIVE_TESTS") != "1":
+        monkeypatch.setenv("SEC_CONTACT_NAME", "marketmind test suite")
+        monkeypatch.setenv("SEC_CONTACT_EMAIL", "tests@marketmind.invalid")
 
 
 def skip_or_fail_no_postgres(message: str) -> None:

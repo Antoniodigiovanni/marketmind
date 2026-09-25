@@ -117,6 +117,11 @@ Always use `uv run` for Python commands. In containers and systemd jobs, use
 - Keep tests offline: mock external HTTP/model calls and use fixtures for
   market data. PostgreSQL tests use a disposable database whose name ends
   in `_test`; never point them at production.
+- Live source contracts are a separate integration suite. Run the SEC checks
+  with `RUN_LIVE_TESTS=1 uv run pytest tests/integration/test_sec_live.py -m live
+  --no-cov`; they require real `SEC_CONTACT_NAME` and `SEC_CONTACT_EMAIL`
+  values. A scheduled workflow detects upstream changes, and release builds
+  must pass these checks before publishing.
 - Run PostgreSQL-backed tests with `MARKETMIND_REQUIRE_POSTGRES=1` before
   deployment so a missing server fails rather than skipping tests. CI
   requires at least 85% total coverage.

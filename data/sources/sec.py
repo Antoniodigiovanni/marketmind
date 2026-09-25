@@ -85,7 +85,52 @@ class EdgardClient:
         }
 
     def _parse_recent(self, data: dict[str, Any]) -> list[Submission]:
-        recent = data["filings"]["recent"]
+        """Parse either a current submissions document or a historical page.
+
+        SEC's current filer document nests its columnar filing data under
+        ``filings.recent``. Files referenced by ``filings.files`` use the same
+        columns at the document root.
+
+        Args:
+            data: JSON object returned by a submissions endpoint.
+
+        Returns:
+            Filing metadata in the order supplied by SEC.
+
+        Raises:
+            ValueError: If the payload does not contain the required columnar
+                arrays or if those arrays have different lengths.
+        """
+        filings = data.get("filings")
+        if filings is None:
+            recent = data
+        elif isinstance(filings, dict):
+            recent = filings.get("recent")
+        else:
+            raise ValueError("SEC submissions payload field 'filings' is not an object")
+
+        if not isinstance(recent, dict):
+            raise ValueError("SEC submissions payload has no filing-data object")
+
+        required = (
+            "accessionNumber",
+            "form",
+            "filingDate",
+            "reportDate",
+            "primaryDocument",
+        )
+        columns: dict[str, list[Any]] = {}
+        for name in required:
+            value = recent.get(name)
+            if not isinstance(value, list):
+                raise ValueError(f"SEC submissions payload field {name!r} is not an array")
+            columns[name] = value
+
+        lengths = {len(column) for column in columns.values()}
+        if len(lengths) != 1:
+            detail = ", ".join(f"{name}={len(value)}" for name, value in columns.items())
+            raise ValueError(f"SEC submissions payload columns have different lengths: {detail}")
+
         return [
             Submission(
                 accession=accession.replace("-", ""),
@@ -95,11 +140,11 @@ class EdgardClient:
                 primary_document=doc,
             )
             for accession, form, filed, period, doc in zip(
-                recent["accessionNumber"],
-                recent["form"],
-                recent["filingDate"],
-                recent["reportDate"],
-                recent["primaryDocument"],
+                columns["accessionNumber"],
+                columns["form"],
+                columns["filingDate"],
+                columns["reportDate"],
+                columns["primaryDocument"],
                 strict=True,
             )
         ]

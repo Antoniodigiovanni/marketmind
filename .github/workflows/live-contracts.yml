@@ -1,0 +1,38 @@
+name: Live source contracts
+
+on:
+  pull_request:
+    paths:
+      - "data/sources/sec.py"
+      - "tests/integration/test_sec_live.py"
+      - ".github/workflows/live-contracts.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sec:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --all-extras
+      - name: Verify live SEC contracts
+        env:
+          RUN_LIVE_TESTS: "1"
+          SEC_CONTACT_NAME: ${{ secrets.SEC_CONTACT_NAME }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+        run: uv run --frozen pytest tests/integration/test_sec_live.py -q -m live --no-cov

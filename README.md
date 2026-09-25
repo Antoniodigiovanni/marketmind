@@ -93,6 +93,9 @@ uv run python -m data.db.init_postgres
 
 # Run the test suite (disposable PostgreSQL, mocked external APIs)
 uv run pytest tests/ -v --cov=. --cov-report=term-missing
+
+# Verify live SEC response contracts (requires real SEC contact variables)
+RUN_LIVE_TESTS=1 uv run pytest tests/integration/test_sec_live.py -m live --no-cov
 ```
 
 ### Environment variables

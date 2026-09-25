@@ -170,17 +170,14 @@ def test_all_submissions_follows_pagination_files(monkeypatch) -> None:
             "files": [{"name": "CIK0000000000-submissions-001.json"}],
         }
     }
+    # Historical files referenced by filings.files are flat columnar
+    # documents, unlike the filings.recent object in the main response.
     second = {
-        "filings": {
-            "recent": {
-                "accessionNumber": ["0000000000-25-000001"],
-                "filingDate": ["2025-08-01"],
-                "form": ["10-K"],
-                "primaryDocument": ["b.htm"],
-                "reportDate": ["2025-06-30"],
-            },
-            "files": [],
-        }
+        "accessionNumber": ["0000000000-25-000001"],
+        "filingDate": ["2025-08-01"],
+        "form": ["10-K"],
+        "primaryDocument": ["b.htm"],
+        "reportDate": ["2025-06-30"],
     }
     pages = [first, second]
     session = FakeSession({})
@@ -193,3 +190,32 @@ def test_all_submissions_follows_pagination_files(monkeypatch) -> None:
     assert len(subs) == 2
     assert subs[0].form_type == "8-K"
     assert subs[1].form_type == "10-K"
+
+
+@pytest.mark.parametrize(
+    "payload, message",
+    [
+        ({"filings": {}}, "no filing-data object"),
+        ({"accessionNumber": []}, "field 'form' is not an array"),
+        (
+            {
+                "accessionNumber": ["0000000000-25-000001"],
+                "filingDate": [],
+                "form": ["10-K"],
+                "primaryDocument": ["b.htm"],
+                "reportDate": ["2025-06-30"],
+            },
+            "columns have different lengths",
+        ),
+    ],
+)
+def test_submissions_rejects_malformed_contract(
+    monkeypatch, payload: dict[str, object], message: str
+) -> None:
+    session = FakeSession({})
+    session.get = lambda url, **kw: FakeResponse(payload)  # type: ignore[method-assign]
+    client = EdgardClient(session)  # type: ignore[arg-type]
+    monkeypatch.setattr(client._limiter, "wait", lambda: None)
+
+    with pytest.raises(ValueError, match=message):
+        client.submissions("0000000000")
