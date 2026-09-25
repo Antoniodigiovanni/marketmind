@@ -32,7 +32,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --frozen --all-extras
-      - name: Verify live SEC contracts
+      - name: Verify live public-source contracts
         env:
           RUN_LIVE_TESTS: "1"
           SEC_CONTACT_NAME: ${{ secrets.SEC_CONTACT_NAME }}

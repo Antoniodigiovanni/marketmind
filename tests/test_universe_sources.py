@@ -201,3 +201,26 @@ def test_ca_fallback_retries_with_system_bundle() -> None:
     assert response.status_code == 200
     assert calls[0]["verify"] == certifi.where()
     assert calls[1]["verify"] == SYSTEM_CA_BUNDLE
+
+
+def test_ca_fallback_uses_source_specific_bundle() -> None:
+    class FakeResponse:
+        status_code = 200
+
+    calls: list[dict[str, object]] = []
+
+    class FakeSession:
+        def get(self, url: str, **kwargs: object) -> FakeResponse:
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise requests.exceptions.SSLError("default bundle failed")
+            return FakeResponse()
+
+    bundle = Path("source-chain.pem")
+    response = get_with_ca_fallback(
+        "https://example.com", session=FakeSession(), fallback_ca_bundle=bundle
+    )
+
+    assert response.status_code == 200
+    assert calls[0]["verify"] == certifi.where()
+    assert calls[1]["verify"] == str(bundle)

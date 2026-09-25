@@ -7,6 +7,7 @@ import html
 import io
 import json
 import re
+from pathlib import Path
 from urllib.parse import urljoin
 
 import polars as pl
@@ -15,6 +16,7 @@ import requests
 from data.universe.sources.http import get_with_ca_fallback
 
 STOXX_DATA_URL = "https://www.stoxx.com/selection-lists"
+STOXX_CA_BUNDLE = Path(__file__).parent / "certs" / "stoxx-ca-bundle.pem"
 USER_AGENT = "marketmind/0.1 (universe maintenance; free data only)"
 
 REQUIRED_COLUMNS = [
@@ -103,6 +105,7 @@ def latest_selection_list_url(session: requests.Session | None = None) -> str:
         },
         timeout=40,
         headers={"User-Agent": USER_AGENT},
+        fallback_ca_bundle=STOXX_CA_BUNDLE,
     )
     resp.raise_for_status()
 
@@ -134,7 +137,11 @@ def fetch_selection_list(session: requests.Session | None = None) -> pl.DataFram
     """
     url = latest_selection_list_url(session)
     resp = get_with_ca_fallback(
-        url, session=session, timeout=60, headers={"User-Agent": USER_AGENT}
+        url,
+        session=session,
+        timeout=60,
+        headers={"User-Agent": USER_AGENT},
+        fallback_ca_bundle=STOXX_CA_BUNDLE,
     )
     resp.raise_for_status()
     return parse_selection_list(resp.text)
