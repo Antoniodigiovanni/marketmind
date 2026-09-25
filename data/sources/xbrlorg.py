@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urljoin
 
 import requests
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
@@ -12,6 +13,7 @@ from data.sources.contact import contact_user_agent
 from data.universe.sources.http import RateLimiter, get_with_ca_fallback
 
 FILINGS_URL = "https://filings.xbrl.org/api/filings"
+ARTIFACT_BASE_URL = "https://filings.xbrl.org/"
 USER_AGENT_PURPOSE = "European filings ingest"
 PAGE_SIZE = 200
 
@@ -126,9 +128,17 @@ class XbrlorgClient:
                     filing_system="UKSEF" if country == "GB" else "ESEF",
                     period_end=attrs.get("period_end"),
                     date_added=attrs.get("date_added", ""),
-                    package_url=attrs.get("package_url", ""),
-                    xhtml_url=attrs.get("report_url"),
-                    json_url=attrs.get("json_url"),
+                    package_url=urljoin(ARTIFACT_BASE_URL, attrs.get("package_url", "")),
+                    xhtml_url=(
+                        urljoin(ARTIFACT_BASE_URL, attrs["report_url"])
+                        if attrs.get("report_url")
+                        else None
+                    ),
+                    json_url=(
+                        urljoin(ARTIFACT_BASE_URL, attrs["json_url"])
+                        if attrs.get("json_url")
+                        else None
+                    ),
                     sha256=attrs.get("sha256"),
                 )
             )

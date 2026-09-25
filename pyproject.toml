@@ -50,7 +50,7 @@ testpaths = ["tests"]
 addopts = "-v --cov=. --cov-report=term-missing"
 asyncio_mode = "auto"
 markers = [
-    "live: live EDGAR download smoke tests (require network; run with RUN_LIVE_TESTS=1)",
+    "live: live external-service contract tests (require network; run with RUN_LIVE_TESTS=1)",
 ]
 
 [tool.ruff]

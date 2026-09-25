@@ -12,6 +12,16 @@ from data.db.init_postgres import apply_schema
 from data.db.pool import close_pool, database_available, dsn_from_env, open_pool
 
 
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Skip live contract tests unless the caller explicitly enables them."""
+    if os.getenv("RUN_LIVE_TESTS") == "1":
+        return
+    marker = pytest.mark.skip(reason="set RUN_LIVE_TESTS=1 to call live external services")
+    for item in items:
+        if item.get_closest_marker("live") is not None:
+            item.add_marker(marker)
+
+
 @pytest.fixture(autouse=True)
 def _deterministic_operator_contact(monkeypatch: pytest.MonkeyPatch) -> None:
     """Give every test a fixed operator contact for courtesy-access sources.
