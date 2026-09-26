@@ -19,6 +19,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from dashboard import config, logs, render
 from dashboard.universe import universe_page
+from data.credentials import credential
 from data.db.pool import close_pool, open_pool
 from data.db.runs import list_recent_runs
 
@@ -141,6 +142,8 @@ def main() -> None:
     a reverse proxy terminating TLS sits in front of it.
     """
     config.dsn()
+    if not credential("MARKETMIND_MCP_TOKEN"):
+        raise RuntimeError("MARKETMIND_MCP_TOKEN is required for the universe page")
     app = build_app(config.token())
     uvicorn.run(app, host=config.host(), port=config.port(), log_level="info")
 

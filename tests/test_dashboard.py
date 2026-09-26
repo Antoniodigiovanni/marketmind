@@ -10,7 +10,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from dashboard import config, logs, render
-from dashboard.app import EXPECTED_JOBS, build_app
+from dashboard.app import EXPECTED_JOBS, build_app, main
 
 TOKEN = "dashboard-secret"
 
@@ -62,6 +62,14 @@ def test_the_dashboard_refuses_to_use_an_unset_database_dsn(monkeypatch) -> None
     monkeypatch.setenv(config.DSN_ENV, "   ")
     with pytest.raises(RuntimeError, match=config.DSN_ENV):
         config.dsn()
+
+
+def test_web_app_requires_mcp_at_startup(monkeypatch) -> None:
+    monkeypatch.setenv(config.DSN_ENV, "postgresql://marketmind_ro@localhost/test")
+    monkeypatch.delenv("MARKETMIND_MCP_TOKEN", raising=False)
+    monkeypatch.delenv("MARKETMIND_MCP_TOKEN_FILE", raising=False)
+    with pytest.raises(RuntimeError, match="MARKETMIND_MCP_TOKEN"):
+        main()
 
 
 def test_it_binds_loopback_unless_told_otherwise(monkeypatch) -> None:
