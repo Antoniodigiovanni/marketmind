@@ -203,6 +203,7 @@ Verify that:
 
 - The overview page loads.
 - Recent job runs appear.
+- `/universe/` lists constituents through MCP using the same web session.
 - Incorrect credentials are rejected.
 - The dashboard is served at `/`, not `/marketmind/dashboard`.
 

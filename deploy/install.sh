@@ -295,10 +295,10 @@ configure_dashboard() {
     default=yes
   fi
 
-  heading "Operations dashboard"
-  say "The optional dashboard shows scheduled-job status and selected logs in a browser."
+  heading "Web dashboard"
+  say "The optional web app shows scheduled jobs, logs, and universe membership."
   say "It is read-only, password protected, and published only on 127.0.0.1:8001."
-  if ! prompt_yes_no "Enable the operations dashboard?" "$default"; then
+  if ! prompt_yes_no "Enable the web dashboard?" "$default"; then
     DASHBOARD_ENABLED=no
     return 0
   fi

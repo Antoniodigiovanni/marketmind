@@ -75,11 +75,9 @@ def test_compose_uses_digest_inputs_and_file_secrets() -> None:
     assert "./state:/var/lib/marketmind" in compose
     assert "read_only: true" in compose
     assert "build:" not in compose
-    assert compose.count("image: ${MARKETMIND_IMAGE:?") == 3
-    assert 'profiles: ["catalog"]' in compose
-    assert "MARKETMIND_CATALOG_TOKEN_FILE: /run/secrets/catalog_token" in compose
-    assert "MARKETMIND_CATALOG_MCP_URL: http://marketmind:" in compose
-    assert "127.0.0.1:${MARKETMIND_CATALOG_PORT:-8002}" in compose
+    assert compose.count("image: ${MARKETMIND_IMAGE:?") == 2
+    assert "  catalog:" not in compose
+    assert "8002" not in compose
     assert "  postgres:" not in compose
     assert "depends_on:" not in compose
     assert "external: true" in compose
@@ -146,13 +144,15 @@ def test_release_bundle_and_runbook_need_no_source_checkout() -> None:
     assert "docker create" not in runbook
 
 
-def test_dashboard_is_loopback_and_has_only_read_credentials() -> None:
+def test_web_app_is_loopback_and_has_only_scoped_credentials() -> None:
     compose = COMPOSE.read_text(encoding="utf-8")
     dashboard = compose.split("  dashboard:", maxsplit=1)[1].split("\nsecrets:", maxsplit=1)[0]
     assert '"127.0.0.1:${MARKETMIND_DASHBOARD_PORT:-8001}' in dashboard
     assert "read_only: true" in dashboard
     assert "./state:/var/lib/marketmind:ro" in dashboard
     assert "MARKETMIND_DASHBOARD_TOKEN_FILE" in dashboard
+    assert "MARKETMIND_WEB_MCP_URL: http://marketmind:" in dashboard
+    assert "MARKETMIND_MCP_TOKEN_FILE: /run/secrets/mcp_token" in dashboard
     assert "PGPASSFILE: /run/secrets/dashboard_pgpass" in dashboard
     assert "MARKETMIND_DATABASE_DSN" not in dashboard
     assert "AI_API_KEY_FILE" not in dashboard
@@ -198,17 +198,17 @@ def test_resolved_dashboard_environment_excludes_write_credentials() -> None:
     assert {item["source"] for item in dashboard["secrets"]} == {
         "dashboard_pgpass",
         "dashboard_token",
+        "mcp_token",
     }
     for forbidden in (
         "MARKETMIND_DATABASE_DSN",
         "PGPASSWORD",
         "AI_API_KEY",
-        "MARKETMIND_MCP_TOKEN",
     ):
         assert forbidden not in dashboard_env
 
 
-def test_dashboard_reads_only_the_run_audit_log() -> None:
+def test_web_app_reads_run_history_and_calls_mcp_for_market_data() -> None:
     allowed = {"data.credentials", "data.db.pool", "data.db.runs"}
     for path in (ROOT / "dashboard").rglob("*.py"):
         source = path.read_text(encoding="utf-8")
@@ -287,7 +287,7 @@ def test_interactive_installer_discovers_owner_and_configures_schedules() -> Non
     assert "rclone listremotes" in installer
     assert "rclone config" in installer
     assert "rclone lsd" in installer
-    assert 'prompt_yes_no "Enable the operations dashboard?"' in installer
+    assert 'prompt_yes_no "Enable the web dashboard?"' in installer
     assert 'prompt_yes_no "Expose the dashboard privately through Tailscale Serve?"' in installer
     assert '"$INSTALL_DIR/deploy/dashboard.sh" tailscale enable' in installer
 

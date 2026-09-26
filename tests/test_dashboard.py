@@ -33,7 +33,7 @@ def client(monkeypatch, tmp_path: Path) -> TestClient:
 
 
 def test_every_route_requires_the_shared_secret(client: TestClient) -> None:
-    for path in ("/", "/logs/daily.log"):
+    for path in ("/", "/logs/daily.log", "/universe/"):
         response = client.get(path)
         assert response.status_code == 401
         assert response.headers["www-authenticate"].startswith("Basic")
@@ -76,7 +76,7 @@ def test_overview_renders_and_flags_jobs_that_never_ran(client: TestClient) -> N
 
     assert response.status_code == 200
     assert "never run" in response.text
-    assert "href='http://127.0.0.1:8002/'" in response.text
+    assert "href='/universe/'" in response.text
     for job in EXPECTED_JOBS:
         assert job in response.text
 
@@ -116,9 +116,8 @@ def test_a_traversing_request_is_not_served(client: TestClient, tmp_path: Path) 
 
 
 def test_navigation_is_available_on_both_operations_pages(
-    client: TestClient, tmp_path: Path, monkeypatch
+    client: TestClient, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv(config.UNIVERSE_URL_ENV, "/universe/")
     (tmp_path / "daily.log").write_text("ok", encoding="utf-8")
     for path in ("/", "/logs/daily.log"):
         response = client.get(path, headers=_auth())

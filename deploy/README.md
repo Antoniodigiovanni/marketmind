@@ -70,7 +70,7 @@ database service, starts the application, and installs the schedule.
 The generated job services run as that account. Existing secrets, data, and
 timer choices are retained when the installer is run again.
 
-The installer also offers the read-only operations dashboard. With the bundled
+The installer also offers the read-only web dashboard. With the bundled
 shared PostgreSQL service, it creates a separate `marketmind_ro` login, limits
 that login to `SELECT` on `agent_runs`, generates the browser token and database
 password, and starts the optional Compose profile. With an existing PostgreSQL
@@ -376,41 +376,18 @@ sudo systemctl enable --now marketmind-daily.timer marketmind-universe.timer \
 systemctl list-timers 'marketmind-*'
 ```
 
-Optional read-only universe browser: create a separate browser password at
-`secrets/catalog_token` (owner-only, readable by the container UID), for example
-`(umask 077; openssl rand -hex 32 > secrets/catalog_token)`
-(run as the Marketmind data-directory owner). Then run
-`docker compose -f docker-compose.prod.yml --profile catalog up -d catalog`.
-It is available at `http://127.0.0.1:8002/` via a local browser or SSH tunnel;
-use any Basic-auth username and the catalog token as password. It lists
-point-in-time universe CSV constituents, not all companies with stored prices.
-It calls the authenticated MCP `list_universe` tool; no database credentials
-are mounted. Do not expose its port publicly. The operations dashboard remains
-restricted to audit rows and logs. Editing membership is not enabled yet.
+The optional web app serves job history and logs at `http://127.0.0.1:8001/`
+and the point-in-time universe at `http://127.0.0.1:8001/universe/` from the
+same container, port and browser session. The universe lists CSV constituents,
+not every company with stored prices; it queries MCP, not the database role
+used for job history. Editing membership is not enabled yet. There is no
+separate catalog service or browser credential.
 
-Both pages have shared navigation. For a single Caddy hostname, route `/` to
-operations (8001) and `/universe/` to the catalog (8002), stripping the latter
-prefix before forwarding. Set `MARKETMIND_CATALOG_PUBLIC_URL=/universe/` and
-`MARKETMIND_DASHBOARD_PUBLIC_URL=/` in `.env` before recreating both services.
-A suggested Caddy site block (review against the live host configuration; do
-not expose it beyond the tailnet):
-
-```caddyfile
-marketmind.homelab.antovanni.com {
-    redir /universe /universe/ 308
-    handle_path /universe/* {
-        reverse_proxy 127.0.0.1:8002
-    }
-    handle {
-        reverse_proxy 127.0.0.1:8001
-    }
-}
-```
-
-This is a configuration example, not an applied host change. Verify Caddy's
+For private remote access through Caddy, a single hostname can proxy all
+paths to `127.0.0.1:8001`. Review the live Caddyfile before changing it;
+repository documentation does not deploy host configuration. Verify Caddy's
 80/443 listeners, firewall and tailnet ACLs first: tailnet DNS alone does not
-ensure only tailnet devices can reach the host. The two browser credentials
-remain separate; opening the other section may require a second sign-in.
+ensure only tailnet devices can reach the host.
 
 Daily refresh, including SEC filings, runs at 06:10; universe refresh Monday at
 06:00; profiles on 5 January at 06:30; financials on 1 February, May, August,
@@ -423,7 +400,7 @@ systemctl status marketmind-daily.timer
 journalctl -u marketmind-daily.service -n 100 --no-pager
 ```
 
-## Optional operations dashboard
+## Optional web dashboard
 
 The interactive installer performs this section automatically when the
 dashboard is selected. On an existing installation that uses the bundled

@@ -1,4 +1,4 @@
-"""Browser authentication, pagination, escaping and MCP universe contract."""
+"""Unified web app authentication, universe pagination and MCP contract."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import polars as pl
 import pytest
 from starlette.testclient import TestClient
 
-from catalog.app import build_app
+from dashboard.app import build_app
 from server import mcp as mcp_mod
 
 
@@ -39,40 +39,40 @@ def client(monkeypatch) -> TestClient:
             else [],
         }
 
-    monkeypatch.setattr("catalog.app.fetch_universe", fake_fetch)
+    monkeypatch.setattr("dashboard.universe.fetch_universe", fake_fetch)
     return TestClient(build_app("secret"))
 
 
 def test_browser_is_authenticated_and_escapes_data(client: TestClient) -> None:
-    assert client.get("/").status_code == 401
-    assert client.get("/", headers={"Authorization": "Basic !!!"}).status_code == 401
-    assert client.post("/", headers=_auth()).status_code == 405
-    response = client.get("/?as_of=2026-01-01", headers=_auth())
+    assert client.get("/universe/").status_code == 401
+    assert client.get("/universe/", headers={"Authorization": "Basic !!!"}).status_code == 401
+    assert client.post("/universe/", headers=_auth()).status_code == 405
+    response = client.get("/universe/?as_of=2026-01-01", headers=_auth())
     assert response.status_code == 200
     assert "&lt;script&gt;" in response.text
     assert "<script>" not in response.text
     assert "A &amp; B" in response.text
     assert "offset=50" in response.text
-    assert "href='http://127.0.0.1:8001/'" in response.text
+    assert "href='/'" in response.text
+    assert "href='/universe/' aria-current='page'" in response.text
     assert "aria-current='page'" in response.text
 
 
 def test_paging_and_invalid_inputs(client: TestClient) -> None:
-    response = client.get("/?as_of=2026-01-01&offset=50", headers=_auth())
+    response = client.get("/universe/?as_of=2026-01-01&offset=50", headers=_auth())
     assert response.status_code == 200
     assert "Previous" in response.text
     assert "No stocks match" in response.text
     assert "href='?as_of=2026-01-01" in response.text
-    assert "action='./'" in response.text
+    assert "action='/universe/'" in response.text
     for query in ("as_of=2026-02-30", "offset=-1", "q=" + "x" * 101):
-        assert client.get("/?" + query, headers=_auth()).status_code == 400
+        assert client.get("/universe/?" + query, headers=_auth()).status_code == 400
 
 
-def test_catalog_link_uses_configured_dashboard_url(client: TestClient, monkeypatch) -> None:
-    monkeypatch.setenv("MARKETMIND_DASHBOARD_PUBLIC_URL", "/")
-    response = client.get("/?as_of=2026-01-01", headers=_auth())
-    assert "href='/'" in response.text
-    assert "href='./' aria-current='page'" in response.text
+def test_universe_route_redirects_to_trailing_slash(client: TestClient) -> None:
+    response = client.get("/universe?as_of=2026-01-01", headers=_auth(), follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"].endswith("/universe/?as_of=2026-01-01")
 
 
 def test_universe_tool_searches_and_bounds_pages(monkeypatch) -> None:

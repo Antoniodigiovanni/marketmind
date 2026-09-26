@@ -1,4 +1,4 @@
-"""Server-rendered HTML for the operations dashboard."""
+"""Server-rendered HTML shared by the web app pages."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ pre.log { background: var(--card); border: 1px solid var(--line); border-radius:
 
 
 def render_navigation(*, active: str, operations_url: str, universe_url: str) -> str:
-    """Render shared navigation between the isolated browser services."""
+    """Render navigation between jobs and MCP-backed universe pages."""
     links = []
     for name, label, url in (
         ("operations", "Jobs & logs", operations_url),
@@ -70,9 +70,9 @@ def render_navigation(*, active: str, operations_url: str, universe_url: str) ->
     return f"<nav class='site-nav' aria-label='Marketmind sections'>{''.join(links)}</nav>"
 
 
-def _page(title: str, body: str, *, universe_url: str) -> str:
+def _page(title: str, body: str) -> str:
     """Wrap operations markup in the shared document shell and navigation."""
-    nav = render_navigation(active="operations", operations_url="/", universe_url=universe_url)
+    nav = render_navigation(active="operations", operations_url="/", universe_url="/universe/")
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
@@ -121,7 +121,6 @@ def render_overview(
     logs: list[dict[str, Any]],
     problems: list[str],
     db_error: str | None = None,
-    universe_url: str = "http://127.0.0.1:8002/",
 ) -> str:
     """Render the run overview page.
 
@@ -132,7 +131,6 @@ def render_overview(
         logs: Log file descriptors from dashboard.logs.list_logs.
         problems: Human-readable log directory problems.
         db_error: Message shown instead of run data when the query failed.
-        universe_url: Browser URL for the universe section.
 
     Returns:
         A complete HTML document.
@@ -208,19 +206,16 @@ def render_overview(
         f"<th>Size</th><th>Modified</th></tr></thead><tbody>{log_rows}</tbody></table></div>"
         f"{notes}"
     )
-    return _page("marketmind — scheduled jobs", body, universe_url=universe_url)
+    return _page("marketmind — scheduled jobs", body)
 
 
-def render_log(
-    *, name: str, text: str, truncated: bool, universe_url: str = "http://127.0.0.1:8002/"
-) -> str:
+def render_log(*, name: str, text: str, truncated: bool) -> str:
     """Render one log file's tail.
 
     Args:
         name: Log file name.
         text: Tail contents.
         truncated: Whether earlier content was omitted.
-        universe_url: Browser URL for the universe section.
 
     Returns:
         A complete HTML document.
@@ -236,4 +231,4 @@ def render_log(
         f"{note}"
         f"<pre class='log'>{html.escape(text)}</pre>"
     )
-    return _page(f"{name} — marketmind", body, universe_url=universe_url)
+    return _page(f"{name} — marketmind", body)

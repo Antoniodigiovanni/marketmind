@@ -4,8 +4,8 @@
 
 marketmind is a market-memory service for Hermes. It stores historical equity
 prices, benchmarks, macro observations, news, filings, versioned facts, and
-immutable market views. Market data and writes are exposed through MCP. A
-separate, read-only operations dashboard shows job history and logs.
+immutable market views. MCP is the market-data and write interface. An
+optional read-only web app shows job history, logs, and MCP-backed data pages.
 
 Production runs on one Linux host with Docker Compose and a published image;
 the VPS does not need a source checkout. A versioned GitHub release bundles
@@ -63,7 +63,8 @@ Always use `uv run` for Python commands. In containers and systemd jobs, use
   extraction, view structuring, and the daily chain. Prompt templates live
   in `agent/prompts/*.md`.
 - `server/mcp.py` is the market-data and write interface. `dashboard/`
-  serves only run history and logs through a separate read-only database role.
+  serves job history and logs through a read-only database role, and retrieves
+  market data through MCP; it must not query market tables directly.
 
 ## Code and data conventions
 
@@ -92,12 +93,14 @@ Always use `uv run` for Python commands. In containers and systemd jobs, use
 - MCP uses authenticated streamable HTTP, published on a loopback host port.
   Every request needs `MARKETMIND_MCP_TOKEN`. Tool docstrings must describe
   arguments and returned rows.
-- The optional operations dashboard uses the `dashboard` Compose profile.
-  It may read only `agent_runs` and selected job logs. Its container receives
-  only its own DSN/password and browser token, never the main database
-  password or source credentials. Publish it on loopback; remote access goes
-  through an encrypted, restricted tunnel. `dashboard.sh` may configure a
-  private Tailscale Serve mapping, but never Tailscale Funnel.
+- The optional web app uses the `dashboard` Compose profile. It may read
+  `agent_runs` and selected job logs through its SELECT-only role; market-data
+  pages use authenticated MCP tools. Its container receives only its read-only
+  DSN/password and the credentials needed for browser access and MCP, never
+  the main database password or source credentials. Publish it on loopback;
+  remote access goes through an encrypted, restricted tunnel or private
+  reverse proxy. `dashboard.sh` may configure a private Tailscale Serve
+  mapping, but never Tailscale Funnel.
 - `deploy/install.sh` owns first-host configuration. Routine releases use
   `deploy/update.sh`, which preserves runtime configuration, credentials,
   state, timer choices, and the independent PostgreSQL service. Dashboard
@@ -142,7 +145,7 @@ Always use `uv run` for Python commands. In containers and systemd jobs, use
   comments. Avoid model or orchestration branding in project communications.
 - Historical data only. No live feeds, paper trading, execution layer,
   options, derivatives, or paid market-data dependencies.
-- MCP remains the only interface for market data and writes. The dashboard
-  is restricted to operational status and logs.
+- MCP remains the only interface for market data and writes. The web app may
+  present MCP results but must not query market tables or write directly.
 - Do not commit `.env`, `secrets/`, raw data, `state/`, database dumps, or notebooks
   with embedded outputs.
