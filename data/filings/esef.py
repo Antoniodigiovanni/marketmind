@@ -18,7 +18,7 @@ from data.db.pool import close_pool, open_pool
 from data.sources.xbrlorg import XbrlorgClient
 from data.universe.loader import UNIVERSE_DIR
 
-ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+RAW_ARCHIVE_DIR = Path(__file__).resolve().parents[1] / "raw"
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -116,7 +116,7 @@ async def _run(client: XbrlorgClient, countries: tuple[str, ...]) -> dict[str, i
     pool = await open_pool()
     try:
         async with pool.connection() as conn:
-            return await backfill_esef(conn, client, ROOT_DIR, countries=countries)
+            return await backfill_esef(conn, client, RAW_ARCHIVE_DIR, countries=countries)
     finally:
         await close_pool(pool)
 

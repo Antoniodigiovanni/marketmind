@@ -29,3 +29,13 @@ def test_daily_fetch_script_does_not_shadow_standard_library_modules() -> None:
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_filing_jobs_write_to_the_mounted_raw_archive() -> None:
+    """Keep filing defaults inside the production container's writable mount."""
+    from data.filings.esef import RAW_ARCHIVE_DIR as ESEF_ARCHIVE_DIR
+    from data.filings.fetch import RAW_ARCHIVE_DIR as SEC_ARCHIVE_DIR
+
+    expected = ROOT / "data" / "raw"
+    assert expected == SEC_ARCHIVE_DIR
+    assert expected == ESEF_ARCHIVE_DIR

@@ -43,7 +43,7 @@ COVERED_FORMS = DOCUMENT_FORMS | OWNERSHIP_FORMS | {"13F-HR", "13F-HR/A", "DEF 1
 # no new observations. The quarterly sweep covers anything this misses.
 FINANCIAL_REPORT_FORMS = {"10-K", "10-Q", "20-F", "6-K"}
 INITIAL_LOOKBACK_DAYS = 7
-ROOT_DIR = Path(__file__).resolve().parents[2]
+RAW_ARCHIVE_DIR = Path(__file__).resolve().parents[1] / "raw"
 ProgressCallback = Callable[[int, int, dict[str, int]], None]
 
 
@@ -365,7 +365,10 @@ def main() -> None:
     run_date = dt.date.fromisoformat(args.run_date).isoformat()
     counts = asyncio.run(
         run_daily_fetch_with_pool(
-            EdgardClient(), run_date=run_date, root=ROOT_DIR, universe=get_universe(run_date)
+            EdgardClient(),
+            run_date=run_date,
+            root=RAW_ARCHIVE_DIR,
+            universe=get_universe(run_date),
         )
     )
     logger.info(f"filings fetch complete: {counts}")
