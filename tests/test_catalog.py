@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import socket
 from base64 import b64encode
 
 import polars as pl
 import pytest
+import uvicorn
 from starlette.testclient import TestClient
 
 from dashboard.app import build_app
+from dashboard.universe import fetch_universe, render_universe
 from server import mcp as mcp_mod
 
 
@@ -65,6 +69,7 @@ def test_paging_and_invalid_inputs(client: TestClient) -> None:
     assert "No stocks match" in response.text
     assert "href='?as_of=2026-01-01" in response.text
     assert "action='/universe/'" in response.text
+    assert "51 stocks" in response.text
     for query in ("as_of=2026-02-30", "offset=-1", "q=" + "x" * 101):
         assert client.get("/universe/?" + query, headers=_auth()).status_code == 400
 
@@ -88,8 +93,6 @@ def test_universe_tool_searches_and_bounds_pages(monkeypatch) -> None:
         }
     )
     monkeypatch.setattr(mcp_mod, "get_universe", lambda date: frame)
-    import asyncio
-
     page = asyncio.run(mcp_mod.list_universe("2026-01-01", offset=1, limit=1))
     assert page["total"] == 3
     assert [row["ticker"] for row in page["rows"]] == ["OLD"]
@@ -97,3 +100,29 @@ def test_universe_tool_searches_and_bounds_pages(monkeypatch) -> None:
     for kwargs in ({"limit": 101}, {"offset": -1}, {"as_of": "2026-02-30"}):
         with pytest.raises(ValueError):
             asyncio.run(mcp_mod.list_universe(**kwargs))
+
+
+async def test_universe_page_client_uses_authenticated_mcp_http(monkeypatch) -> None:
+    """Exercise the real MCP client/server contract without a database or external calls."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    app = mcp_mod.mcp.streamable_http_app()
+    app.add_middleware(mcp_mod._BearerAuthMiddleware, token="local-test-token")
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+    task = asyncio.create_task(server.serve())
+    try:
+        for _ in range(100):
+            if server.started:
+                break
+            await asyncio.sleep(0.05)
+        assert server.started
+        monkeypatch.setenv("MARKETMIND_MCP_TOKEN", "local-test-token")
+        monkeypatch.setenv("MARKETMIND_WEB_MCP_URL", f"http://127.0.0.1:{port}/mcp")
+        result = await fetch_universe("2026-09-26", "AAPL", 0)
+        assert result["total"] >= 1
+        assert any(row["ticker"] == "AAPL" for row in result["rows"])
+        assert "1 stock · showing 1–1" in render_universe("2026-09-26", "AAPL", 0, result)
+    finally:
+        server.should_exit = True
+        await task

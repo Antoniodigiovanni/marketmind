@@ -7,7 +7,6 @@ import html
 import os
 from urllib.parse import urlencode
 
-import httpx
 from loguru import logger
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
@@ -27,8 +26,11 @@ async def fetch_universe(date: str, query: str, offset: int) -> dict[str, object
         raise RuntimeError("MARKETMIND_MCP_TOKEN must be set")
     url = os.getenv("MARKETMIND_WEB_MCP_URL", "http://127.0.0.1:8000/mcp")
     async with (
-        httpx.AsyncClient(headers={"Authorization": f"Bearer {token}"}) as client,
-        streamablehttp_client(url, http_client=client) as (read, write, _),
+        streamablehttp_client(url, headers={"Authorization": f"Bearer {token}"}) as (
+            read,
+            write,
+            _,
+        ),
         ClientSession(read, write) as session,
     ):
         await session.initialize()
@@ -69,6 +71,7 @@ def render_universe(date: str, query: str, offset: int, data: dict[str, object])
     if offset + PAGE_SIZE < total:
         links.append(link(offset + PAGE_SIZE, "Next →"))
     navigation = " · ".join(links)
+    count_label = "stock" if total == 1 else "stocks"
     section_nav = render_navigation(
         active="universe", operations_url="/", universe_url="/universe/"
     )
@@ -79,13 +82,13 @@ def render_universe(date: str, query: str, offset: int, data: dict[str, object])
         f"<style>{STYLE}</style></head><body><main>{section_nav}"
         "<h1>Marketmind — universe</h1>"
         "<p class='sub'>Read-only constituents as of the selected date.</p>"
-        "<form method='get' action='/universe/'>"
-        "<label for='as_of'>As of</label> "
-        f"<input id='as_of' name='as_of' type='date' required value='{html.escape(date, quote=True)}'> "
-        "<label for='q'>Ticker or name</label> "
-        f"<input id='q' name='q' type='search' maxlength='100' value='{html.escape(query, quote=True)}'> "
+        "<form class='filters' method='get' action='/universe/'>"
+        "<div><label for='as_of'>As of</label>"
+        f"<input id='as_of' name='as_of' type='date' required value='{html.escape(date, quote=True)}'></div>"
+        "<div><label for='q'>Ticker or name</label>"
+        f"<input id='q' name='q' type='search' maxlength='100' value='{html.escape(query, quote=True)}'></div>"
         "<button type='submit'>Search</button></form>"
-        f"<p role='status'>{total:,} stocks · showing {offset + 1 if rows else 0}"
+        f"<p role='status'>{total:,} {count_label} · showing {offset + 1 if rows else 0}"
         f"–{offset + len(rows) if rows else 0}</p>"
         "<div class='scroll'><table><thead><tr><th>Ticker</th><th>Name</th><th>Universe</th>"
         "<th>Country</th><th>Sector</th><th>Added</th></tr></thead>"

@@ -33,6 +33,11 @@ a { color: inherit; }
 .site-nav { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 24px;
   padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .site-nav a[aria-current='page'] { font-weight: 700; text-decoration: none; }
+.filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 16px 0; }
+.filters label { display: block; margin-bottom: 4px; }
+.filters input, .filters button { font: inherit; min-height: 34px; }
+.filters input[type='search'] { width: min(240px, 100%); }
+.filters input[type='date'] { max-width: 100%; }
 .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
 .card .job { font-weight: 600; margin-bottom: 6px; }
