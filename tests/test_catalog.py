@@ -1,10 +1,9 @@
-"""Unified web app authentication, universe pagination and MCP contract."""
+"""Unified web app universe pagination and MCP contract."""
 
 from __future__ import annotations
 
 import asyncio
 import socket
-from base64 import b64encode
 
 import polars as pl
 import pytest
@@ -14,10 +13,6 @@ from starlette.testclient import TestClient
 from dashboard.app import build_app
 from dashboard.universe import fetch_universe, render_universe
 from server import mcp as mcp_mod
-
-
-def _auth() -> dict[str, str]:
-    return {"Authorization": "Basic " + b64encode(b"reader:secret").decode()}
 
 
 @pytest.fixture
@@ -44,14 +39,12 @@ def client(monkeypatch) -> TestClient:
         }
 
     monkeypatch.setattr("dashboard.universe.fetch_universe", fake_fetch)
-    return TestClient(build_app("secret"))
+    return TestClient(build_app())
 
 
-def test_browser_is_authenticated_and_escapes_data(client: TestClient) -> None:
-    assert client.get("/universe/").status_code == 401
-    assert client.get("/universe/", headers={"Authorization": "Basic !!!"}).status_code == 401
-    assert client.post("/universe/", headers=_auth()).status_code == 405
-    response = client.get("/universe/?as_of=2026-01-01", headers=_auth())
+def test_browser_escapes_data(client: TestClient) -> None:
+    assert client.post("/universe/").status_code == 405
+    response = client.get("/universe/?as_of=2026-01-01")
     assert response.status_code == 200
     assert "&lt;script&gt;" in response.text
     assert "<script>" not in response.text
@@ -63,7 +56,7 @@ def test_browser_is_authenticated_and_escapes_data(client: TestClient) -> None:
 
 
 def test_paging_and_invalid_inputs(client: TestClient) -> None:
-    response = client.get("/universe/?as_of=2026-01-01&offset=50", headers=_auth())
+    response = client.get("/universe/?as_of=2026-01-01&offset=50")
     assert response.status_code == 200
     assert "Previous" in response.text
     assert "No stocks match" in response.text
@@ -71,11 +64,11 @@ def test_paging_and_invalid_inputs(client: TestClient) -> None:
     assert "action='/universe/'" in response.text
     assert "51 stocks" in response.text
     for query in ("as_of=2026-02-30", "offset=-1", "q=" + "x" * 101):
-        assert client.get("/universe/?" + query, headers=_auth()).status_code == 400
+        assert client.get("/universe/?" + query).status_code == 400
 
 
 def test_universe_route_redirects_to_trailing_slash(client: TestClient) -> None:
-    response = client.get("/universe?as_of=2026-01-01", headers=_auth(), follow_redirects=False)
+    response = client.get("/universe?as_of=2026-01-01", follow_redirects=False)
     assert response.status_code == 307
     assert response.headers["location"].endswith("/universe/?as_of=2026-01-01")
 

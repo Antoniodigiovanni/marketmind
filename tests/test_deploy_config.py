@@ -150,7 +150,7 @@ def test_web_app_is_loopback_and_has_only_scoped_credentials() -> None:
     assert '"127.0.0.1:${MARKETMIND_DASHBOARD_PORT:-8001}' in dashboard
     assert "read_only: true" in dashboard
     assert "./state:/var/lib/marketmind:ro" in dashboard
-    assert "MARKETMIND_DASHBOARD_TOKEN_FILE" in dashboard
+    assert "MARKETMIND_DASHBOARD_TOKEN_FILE" not in dashboard
     assert "MARKETMIND_WEB_MCP_URL: http://marketmind:" in dashboard
     assert "MARKETMIND_MCP_TOKEN_FILE: /run/secrets/mcp_token" in dashboard
     assert "PGPASSFILE: /run/secrets/dashboard_pgpass" in dashboard
@@ -197,7 +197,6 @@ def test_resolved_dashboard_environment_excludes_write_credentials() -> None:
     assert dashboard_env["PGPASSFILE"] == "/run/secrets/dashboard_pgpass"
     assert {item["source"] for item in dashboard["secrets"]} == {
         "dashboard_pgpass",
-        "dashboard_token",
         "mcp_token",
     }
     for forbidden in (
@@ -436,7 +435,7 @@ def test_dashboard_command_generates_shared_credentials(tmp_path: Path) -> None:
         [
             "bash",
             "-c",
-            'source "$DASHBOARD_SCRIPT"; prepare_shared_credentials; prepare_browser_credential',
+            'source "$DASHBOARD_SCRIPT"; prepare_shared_credentials',
         ],
         check=True,
         env=env,
@@ -451,11 +450,9 @@ def test_dashboard_command_generates_shared_credentials(tmp_path: Path) -> None:
     assert (install_dir / "secrets/dashboard_pgpass").read_text(encoding="utf-8") == (
         f"postgres-shared:5432:marketmind:marketmind_ro:{database_password}\n"
     )
-    assert re.fullmatch(
-        r"[0-9a-f]{64}\n", (install_dir / "secrets/dashboard_token").read_text(encoding="utf-8")
-    )
+    assert not (install_dir / "secrets/dashboard_token").exists()
     assert database_password not in result.stdout
-    for filename in ("dashboard_database_password", "dashboard_pgpass", "dashboard_token"):
+    for filename in ("dashboard_database_password", "dashboard_pgpass"):
         assert (install_dir / f"secrets/{filename}").stat().st_mode & 0o777 == 0o600
 
 
@@ -483,7 +480,7 @@ def test_dashboard_command_manages_only_its_tailscale_mapping(tmp_path: Path) ->
     )
     fake_sudo.chmod(0o755)
     fake_curl = fake_bin / "curl"
-    fake_curl.write_text("#!/usr/bin/env bash\nprintf '401'\n", encoding="utf-8")
+    fake_curl.write_text("#!/usr/bin/env bash\nprintf '200'\n", encoding="utf-8")
     fake_curl.chmod(0o755)
     env = {
         **os.environ,

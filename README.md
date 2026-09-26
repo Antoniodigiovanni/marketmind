@@ -124,7 +124,6 @@ services that need them. Locally, export values in your shell or pass
 | `MARKETMIND_MCP_PORT` | Port the MCP server listens on (default 8000) |
 | `MARKETMIND_REFRESH_DIR` | Shared refresh lock/status/log directory (production: `/var/lib/marketmind/refresh`) |
 | `MARKETMIND_UID` / `MARKETMIND_GID` | Numeric owner used by the production app container for its bind-mounted data tree |
-| `MARKETMIND_DASHBOARD_TOKEN_FILE` | Path to mounted dashboard HTTP Basic password |
 | `MARKETMIND_DASHBOARD_DSN` | SELECT-only Postgres DSN used for run history in the web app |
 | `PGPASSFILE` | Owner-only PostgreSQL password file mounted per service |
 | `MARKETMIND_DASHBOARD_PORT` | Dashboard listen port (default 8001) |
@@ -170,9 +169,9 @@ The optional web app (`dashboard/`) serves job history and logs at `/` and
 point-in-time universe membership at `/universe/` on one port (8001). Audit
 rows use a SELECT-only database role granted a single table; the universe
 page calls the authenticated MCP tool instead of querying market tables.
-The browser uses one HTTP Basic credential. The service binds to loopback on
-the host; reach it through a private reverse proxy or SSH tunnel. It has no
-browser-exposed write path; membership editing is a later step.
+The service binds to loopback on the host; reach it through a constrained
+private path such as Tailscale Serve with tailnet ACLs or an SSH tunnel. It has
+no browser-exposed write path; membership editing is a later step.
 
 Full operational detail — schedule table, MCP client wiring (the client
 now connects to `http://127.0.0.1:8000/mcp` as a streamable-http client

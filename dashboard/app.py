@@ -6,16 +6,12 @@ market data; it exposes no database writes or direct market-data queries.
 
 from __future__ import annotations
 
-import secrets
-from base64 import b64decode
-
 import uvicorn
 from loguru import logger
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, Response
 from starlette.routing import Route
-from starlette.types import ASGIApp, Receive, Scope, Send
 
 from dashboard import config, logs, render
 from dashboard.universe import universe_page
@@ -27,50 +23,6 @@ from data.db.runs import list_recent_runs
 # shown as missing instead of merely being absent from the history.
 EXPECTED_JOBS = ["daily_refresh", "fetch", "news", "views", "filings", "profiles"]
 RUN_HISTORY_LIMIT = 100
-
-
-class BasicAuthMiddleware:
-    """Require HTTP Basic credentials whose password matches the token.
-
-    Basic rather than bearer because the only client is a browser: it makes
-    the native credential prompt do the work instead of adding a login page
-    and a session cookie to a service that holds no session state. The
-    username is ignored; the password is the shared secret.
-    """
-
-    def __init__(self, app: ASGIApp, token: str) -> None:
-        """Wrap `app`, rejecting requests without the matching secret."""
-        self._app = app
-        self._token = token
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Check credentials for http scopes; pass everything else through."""
-        if scope["type"] != "http":
-            await self._app(scope, receive, send)
-            return
-        headers = dict(scope.get("headers") or [])
-        presented = headers.get(b"authorization", b"").decode("latin-1")
-        if not self._authorized(presented):
-            response = PlainTextResponse(
-                "unauthorized",
-                status_code=401,
-                headers={"WWW-Authenticate": 'Basic realm="marketmind"'},
-            )
-            await response(scope, receive, send)
-            return
-        await self._app(scope, receive, send)
-
-    def _authorized(self, header: str) -> bool:
-        """Return True when the header carries the expected shared secret."""
-        scheme, _, encoded = header.partition(" ")
-        if scheme.lower() != "basic" or not encoded:
-            return False
-        try:
-            decoded = b64decode(encoded, validate=True).decode("utf-8")
-        except Exception:  # noqa: BLE001 - any malformed header is simply unauthorized
-            return False
-        _, _, password = decoded.partition(":")
-        return secrets.compare_digest(password, self._token)
 
 
 async def _recent_runs() -> tuple[list[dict[str, object]], str | None]:
@@ -114,14 +66,13 @@ async def log_file(request: Request) -> Response:
     return HTMLResponse(render.render_log(name=name, text=text, truncated=truncated))
 
 
-def build_app(token: str) -> Starlette:
-    """Build the authenticated dashboard application.
-
-    Args:
-        token: Shared secret required as the Basic-auth password.
+def build_app() -> Starlette:
+    """Build the dashboard application.
 
     Returns:
-        A Starlette app serving only GET routes.
+        A Starlette app serving only GET routes. Network access is constrained
+        by loopback binding and optional Tailscale ACLs, not app-level browser
+        credentials.
     """
     app = Starlette(
         routes=[
@@ -130,21 +81,21 @@ def build_app(token: str) -> Starlette:
             Route("/logs/{name:str}", log_file, methods=["GET"]),
         ]
     )
-    app.add_middleware(BasicAuthMiddleware, token=token)
     return app
 
 
 def main() -> None:
     """Run the dashboard.
 
-    Binds loopback by default: reaching it from another machine is an SSH
-    port-forward, not an open port. Set MARKETMIND_DASHBOARD_HOST only when
-    a reverse proxy terminating TLS sits in front of it.
+    Binds loopback by default: reaching it from another machine requires a
+    constrained private path such as Tailscale Serve with ACLs or SSH. Set
+    MARKETMIND_DASHBOARD_HOST only when that private access layer sits in
+    front of it.
     """
     config.dsn()
     if not credential("MARKETMIND_MCP_TOKEN"):
         raise RuntimeError("MARKETMIND_MCP_TOKEN is required for the universe page")
-    app = build_app(config.token())
+    app = build_app()
     uvicorn.run(app, host=config.host(), port=config.port(), log_level="info")
 
 
