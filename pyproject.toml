@@ -70,4 +70,4 @@ indent-style = "space"
 omit = ["tests/*", "*/prompts/*"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["agent", "data", "server"]
+packages = ["agent", "data", "server", "dashboard"]

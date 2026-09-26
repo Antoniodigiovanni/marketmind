@@ -56,9 +56,8 @@ services:
       - llm_api_key
       - fred_api_key
 
-  # Read-only operations dashboard. Deliberately a separate service from the
-  # MCP server: it holds no write path, reads through a SELECT-only database
-  # role, and never becomes a second interface to the market-memory data.
+  # Single read-only web app. Audit rows use a SELECT-only database role;
+  # universe data is fetched through MCP, not a direct database query.
   dashboard:
     image: ${MARKETMIND_IMAGE:?set MARKETMIND_IMAGE in .env}
     restart: unless-stopped
@@ -73,6 +72,8 @@ services:
       MARKETMIND_DASHBOARD_PORT: ${MARKETMIND_DASHBOARD_PORT:-8001}
       MARKETMIND_DASHBOARD_HOST: "0.0.0.0"
       MARKETMIND_DASHBOARD_LOG_DIRS: /var/lib/marketmind/refresh/logs:/var/log/marketmind
+      MARKETMIND_WEB_MCP_URL: http://marketmind:${MARKETMIND_MCP_PORT:-8000}/mcp
+      MARKETMIND_MCP_TOKEN_FILE: /run/secrets/mcp_token
       HOME: /tmp/marketmind
       UV_CACHE_DIR: /tmp/uv-cache
       PYTHONDONTWRITEBYTECODE: "1"
@@ -96,6 +97,7 @@ services:
     secrets:
       - dashboard_pgpass
       - dashboard_token
+      - mcp_token
 
 secrets:
   app_pgpass:

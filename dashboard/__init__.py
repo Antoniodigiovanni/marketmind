@@ -1,1 +1,1 @@
-"""Read-only operational dashboard for scheduled-job runs and their logs."""
+"""Read-only web app for operations and MCP-backed market-data pages."""

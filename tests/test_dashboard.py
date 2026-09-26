@@ -10,7 +10,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from dashboard import config, logs, render
-from dashboard.app import EXPECTED_JOBS, build_app
+from dashboard.app import EXPECTED_JOBS, build_app, main
 
 TOKEN = "dashboard-secret"
 
@@ -33,7 +33,7 @@ def client(monkeypatch, tmp_path: Path) -> TestClient:
 
 
 def test_every_route_requires_the_shared_secret(client: TestClient) -> None:
-    for path in ("/", "/logs/daily.log"):
+    for path in ("/", "/logs/daily.log", "/universe/"):
         response = client.get(path)
         assert response.status_code == 401
         assert response.headers["www-authenticate"].startswith("Basic")
@@ -64,6 +64,14 @@ def test_the_dashboard_refuses_to_use_an_unset_database_dsn(monkeypatch) -> None
         config.dsn()
 
 
+def test_web_app_requires_mcp_at_startup(monkeypatch) -> None:
+    monkeypatch.setenv(config.DSN_ENV, "postgresql://marketmind_ro@localhost/test")
+    monkeypatch.delenv("MARKETMIND_MCP_TOKEN", raising=False)
+    monkeypatch.delenv("MARKETMIND_MCP_TOKEN_FILE", raising=False)
+    with pytest.raises(RuntimeError, match="MARKETMIND_MCP_TOKEN"):
+        main()
+
+
 def test_it_binds_loopback_unless_told_otherwise(monkeypatch) -> None:
     monkeypatch.delenv(config.HOST_ENV, raising=False)
     assert config.host() == "127.0.0.1"
@@ -76,6 +84,7 @@ def test_overview_renders_and_flags_jobs_that_never_ran(client: TestClient) -> N
 
     assert response.status_code == 200
     assert "never run" in response.text
+    assert "href='/universe/'" in response.text
     for job in EXPECTED_JOBS:
         assert job in response.text
 
@@ -112,6 +121,17 @@ def test_a_traversing_request_is_not_served(client: TestClient, tmp_path: Path) 
 
     assert response.status_code == 404
     assert "private" not in response.text
+
+
+def test_navigation_is_available_on_both_operations_pages(
+    client: TestClient, tmp_path: Path
+) -> None:
+    (tmp_path / "daily.log").write_text("ok", encoding="utf-8")
+    for path in ("/", "/logs/daily.log"):
+        response = client.get(path, headers=_auth())
+        assert response.status_code == 200
+        assert "href='/universe/'" in response.text
+        assert "href='/' aria-current='page'" in response.text
 
 
 def test_a_log_file_is_served_from_its_tail(client: TestClient, tmp_path: Path) -> None:

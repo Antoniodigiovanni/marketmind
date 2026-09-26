@@ -1,4 +1,4 @@
-"""Environment configuration for the read-only operations dashboard."""
+"""Environment configuration for the read-only web app."""
 
 from __future__ import annotations
 

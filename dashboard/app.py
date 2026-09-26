@@ -1,9 +1,7 @@
-"""Read-only operations dashboard for marketmind's scheduled jobs.
+"""Single read-only web app for job status and MCP-backed universe discovery.
 
-A separate service from the MCP server: it opens no write path, exposes no
-marketmind data beyond run audit rows and job logs, and is expected to run
-under a PostgreSQL role with SELECT-only rights. It is not, and must not
-become, a second interface to the market-memory database itself.
+The application uses a SELECT-only role for audit rows and invokes MCP for
+market data; it exposes no database writes or direct market-data queries.
 """
 
 from __future__ import annotations
@@ -20,6 +18,8 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from dashboard import config, logs, render
+from dashboard.universe import universe_page
+from data.credentials import credential
 from data.db.pool import close_pool, open_pool
 from data.db.runs import list_recent_runs
 
@@ -126,6 +126,7 @@ def build_app(token: str) -> Starlette:
     app = Starlette(
         routes=[
             Route("/", overview, methods=["GET"]),
+            Route("/universe/", universe_page, methods=["GET"]),
             Route("/logs/{name:str}", log_file, methods=["GET"]),
         ]
     )
@@ -141,6 +142,8 @@ def main() -> None:
     a reverse proxy terminating TLS sits in front of it.
     """
     config.dsn()
+    if not credential("MARKETMIND_MCP_TOKEN"):
+        raise RuntimeError("MARKETMIND_MCP_TOKEN is required for the universe page")
     app = build_app(config.token())
     uvicorn.run(app, host=config.host(), port=config.port(), log_level="info")
 

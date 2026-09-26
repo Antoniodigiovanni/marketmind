@@ -70,7 +70,7 @@ database service, starts the application, and installs the schedule.
 The generated job services run as that account. Existing secrets, data, and
 timer choices are retained when the installer is run again.
 
-The installer also offers the read-only operations dashboard. With the bundled
+The installer also offers the read-only web dashboard. With the bundled
 shared PostgreSQL service, it creates a separate `marketmind_ro` login, limits
 that login to `SELECT` on `agent_runs`, generates the browser token and database
 password, and starts the optional Compose profile. With an existing PostgreSQL
@@ -376,6 +376,19 @@ sudo systemctl enable --now marketmind-daily.timer marketmind-universe.timer \
 systemctl list-timers 'marketmind-*'
 ```
 
+The optional web app serves job history and logs at `http://127.0.0.1:8001/`
+and the point-in-time universe at `http://127.0.0.1:8001/universe/` from the
+same container, port and browser session. The universe lists CSV constituents,
+not every company with stored prices; it queries MCP, not the database role
+used for job history. Editing membership is not enabled yet. There is no
+separate catalog service or browser credential.
+
+For private remote access through Caddy, a single hostname can proxy all
+paths to `127.0.0.1:8001`. Review the live Caddyfile before changing it;
+repository documentation does not deploy host configuration. Verify Caddy's
+80/443 listeners, firewall and tailnet ACLs first: tailnet DNS alone does not
+ensure only tailnet devices can reach the host.
+
 Daily refresh, including SEC filings, runs at 06:10; universe refresh Monday at
 06:00; profiles on 5 January at 06:30; financials on 1 February, May, August,
 and November at 04:00; and European filings on the first of each month at
@@ -387,7 +400,7 @@ systemctl status marketmind-daily.timer
 journalctl -u marketmind-daily.service -n 100 --no-pager
 ```
 
-## Optional operations dashboard
+## Optional web dashboard
 
 The interactive installer performs this section automatically when the
 dashboard is selected. On an existing installation that uses the bundled

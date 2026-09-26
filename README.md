@@ -125,11 +125,12 @@ services that need them. Locally, export values in your shell or pass
 | `MARKETMIND_REFRESH_DIR` | Shared refresh lock/status/log directory (production: `/var/lib/marketmind/refresh`) |
 | `MARKETMIND_UID` / `MARKETMIND_GID` | Numeric owner used by the production app container for its bind-mounted data tree |
 | `MARKETMIND_DASHBOARD_TOKEN_FILE` | Path to mounted dashboard HTTP Basic password |
-| `MARKETMIND_DASHBOARD_DSN` | SELECT-only Postgres DSN used by the dashboard |
+| `MARKETMIND_DASHBOARD_DSN` | SELECT-only Postgres DSN used for run history in the web app |
 | `PGPASSFILE` | Owner-only PostgreSQL password file mounted per service |
 | `MARKETMIND_DASHBOARD_PORT` | Dashboard listen port (default 8001) |
 | `MARKETMIND_DASHBOARD_HOST` | Dashboard bind address (default `127.0.0.1`) |
 | `MARKETMIND_DASHBOARD_LOG_DIRS` | Colon-separated directories whose `.log` files the dashboard may serve |
+| `MARKETMIND_WEB_MCP_URL` | Internal MCP endpoint used for universe membership (default `http://127.0.0.1:8000/mcp`) |
 
 ## Commands
 
@@ -145,7 +146,7 @@ uv run python -m data.filings.backfill --financials  # Company Facts backfill / 
 uv run python -m data.filings.esef            # European ESEF filings (monthly)
 uv run python -m agent.refresh {YYYY-MM-DD}   # complete lock-protected daily pipeline
 uv run python -m server.mcp                   # run the MCP server (streamable-http, 127.0.0.1:8000)
-uv run python -m dashboard.app                # run the read-only ops dashboard (127.0.0.1:8001)
+uv run python -m dashboard.app                # run the web app (jobs + universe, 127.0.0.1:8001)
 uv run ruff check . && uv run ruff format .   # lint + format
 ```
 
@@ -163,15 +164,15 @@ running; systemd timers launch scheduled jobs from the same pinned image.
 Only loopback ports are published. The [deployment guide](deploy/README.md)
 covers credentials, an optional offsite backup restore drill, scheduling, and updates.
 
-### Operations dashboard
+### Web dashboard
 
-A read-only web view of `agent_runs` and job logs, in its own container
-(`dashboard/`). It shows why a scheduled job failed at 06:10. It runs under a
-SELECT-only database role
-granted a single table, is HTTP Basic authenticated, and binds `127.0.0.1` —
-reach it with an SSH port-forward, or place a TLS-terminating reverse proxy
-in front of it. It serves no market data, holds no write path, and is not
-consumed by the harness.
+The optional web app (`dashboard/`) serves job history and logs at `/` and
+point-in-time universe membership at `/universe/` on one port (8001). Audit
+rows use a SELECT-only database role granted a single table; the universe
+page calls the authenticated MCP tool instead of querying market tables.
+The browser uses one HTTP Basic credential. The service binds to loopback on
+the host; reach it through a private reverse proxy or SSH tunnel. It has no
+browser-exposed write path; membership editing is a later step.
 
 Full operational detail — schedule table, MCP client wiring (the client
 now connects to `http://127.0.0.1:8000/mcp` as a streamable-http client
@@ -184,6 +185,7 @@ The MCP server (`server/mcp.py`) exposes the following tools:
 
 | Tool | Args | Returns |
 |---|---|---|
+| `list_universe` | `as_of?`, `query?`, `offset?`, `limit?` | Bounded page of point-in-time constituents and total matches |
 | `get_prices` | `ticker`, `start?`, `end?`, `to_currency?` | Daily `{date, open, high, low, close, volume}` for an equity or benchmark Yahoo symbol |
 | `get_benchmarks` | `kind?`, `region?` | Configured series metadata and stored date coverage |
 | `get_volatility` | `ticker`, `start?`, `end?` | `{date, ticker, rv_20d, rv_60d}` (annualised %) or vol-index close for `^VIX` / `^VSTOXX` |
