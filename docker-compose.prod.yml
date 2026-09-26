@@ -73,6 +73,7 @@ services:
       MARKETMIND_DASHBOARD_PORT: ${MARKETMIND_DASHBOARD_PORT:-8001}
       MARKETMIND_DASHBOARD_HOST: "0.0.0.0"
       MARKETMIND_DASHBOARD_LOG_DIRS: /var/lib/marketmind/refresh/logs:/var/log/marketmind
+      MARKETMIND_CATALOG_PUBLIC_URL: ${MARKETMIND_CATALOG_PUBLIC_URL:-http://127.0.0.1:8002/}
       HOME: /tmp/marketmind
       UV_CACHE_DIR: /tmp/uv-cache
       PYTHONDONTWRITEBYTECODE: "1"
@@ -106,6 +107,7 @@ services:
     command: ["uv", "run", "--frozen", "--no-sync", "python", "-m", "catalog.app"]
     environment:
       MARKETMIND_CATALOG_MCP_URL: http://marketmind:${MARKETMIND_MCP_PORT:-8000}/mcp
+      MARKETMIND_DASHBOARD_PUBLIC_URL: ${MARKETMIND_DASHBOARD_PUBLIC_URL:-http://127.0.0.1:8001/}
       MARKETMIND_CATALOG_TOKEN_FILE: /run/secrets/catalog_token
       MARKETMIND_MCP_TOKEN_FILE: /run/secrets/mcp_token
       MARKETMIND_CATALOG_HOST: "0.0.0.0"

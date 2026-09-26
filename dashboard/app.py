@@ -97,6 +97,7 @@ async def overview(request: Request) -> Response:
             logs=files,
             problems=problems,
             db_error=db_error,
+            universe_url=config.universe_url(),
         )
     )
 
@@ -111,7 +112,11 @@ async def log_file(request: Request) -> Response:
         text, truncated = logs.tail(path)
     except (OSError, PermissionError) as exc:
         return PlainTextResponse(f"cannot read {name}: {exc.strerror or exc}", status_code=403)
-    return HTMLResponse(render.render_log(name=name, text=text, truncated=truncated))
+    return HTMLResponse(
+        render.render_log(
+            name=name, text=text, truncated=truncated, universe_url=config.universe_url()
+        )
+    )
 
 
 def build_app(token: str) -> Starlette:

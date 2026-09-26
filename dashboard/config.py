@@ -12,6 +12,7 @@ PORT_ENV = "MARKETMIND_DASHBOARD_PORT"
 TOKEN_ENV = "MARKETMIND_DASHBOARD_TOKEN"
 DSN_ENV = "MARKETMIND_DASHBOARD_DSN"
 LOG_DIRS_ENV = "MARKETMIND_DASHBOARD_LOG_DIRS"
+UNIVERSE_URL_ENV = "MARKETMIND_CATALOG_PUBLIC_URL"
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8001
@@ -54,6 +55,11 @@ def dsn() -> str:
     if not value:
         raise RuntimeError(f"{DSN_ENV} must be set to a nonblank value")
     return value
+
+
+def universe_url() -> str:
+    """Return the browser-facing link to the universe section."""
+    return os.getenv(UNIVERSE_URL_ENV, "http://127.0.0.1:8002/")
 
 
 def log_dirs() -> list[Path]:

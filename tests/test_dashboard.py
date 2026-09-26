@@ -76,6 +76,7 @@ def test_overview_renders_and_flags_jobs_that_never_ran(client: TestClient) -> N
 
     assert response.status_code == 200
     assert "never run" in response.text
+    assert "href='http://127.0.0.1:8002/'" in response.text
     for job in EXPECTED_JOBS:
         assert job in response.text
 
@@ -112,6 +113,18 @@ def test_a_traversing_request_is_not_served(client: TestClient, tmp_path: Path) 
 
     assert response.status_code == 404
     assert "private" not in response.text
+
+
+def test_navigation_is_available_on_both_operations_pages(
+    client: TestClient, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv(config.UNIVERSE_URL_ENV, "/universe/")
+    (tmp_path / "daily.log").write_text("ok", encoding="utf-8")
+    for path in ("/", "/logs/daily.log"):
+        response = client.get(path, headers=_auth())
+        assert response.status_code == 200
+        assert "href='/universe/'" in response.text
+        assert "href='/' aria-current='page'" in response.text
 
 
 def test_a_log_file_is_served_from_its_tail(client: TestClient, tmp_path: Path) -> None:

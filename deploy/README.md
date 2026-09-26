@@ -388,6 +388,30 @@ It calls the authenticated MCP `list_universe` tool; no database credentials
 are mounted. Do not expose its port publicly. The operations dashboard remains
 restricted to audit rows and logs. Editing membership is not enabled yet.
 
+Both pages have shared navigation. For a single Caddy hostname, route `/` to
+operations (8001) and `/universe/` to the catalog (8002), stripping the latter
+prefix before forwarding. Set `MARKETMIND_CATALOG_PUBLIC_URL=/universe/` and
+`MARKETMIND_DASHBOARD_PUBLIC_URL=/` in `.env` before recreating both services.
+A suggested Caddy site block (review against the live host configuration; do
+not expose it beyond the tailnet):
+
+```caddyfile
+marketmind.homelab.antovanni.com {
+    redir /universe /universe/ 308
+    handle_path /universe/* {
+        reverse_proxy 127.0.0.1:8002
+    }
+    handle {
+        reverse_proxy 127.0.0.1:8001
+    }
+}
+```
+
+This is a configuration example, not an applied host change. Verify Caddy's
+80/443 listeners, firewall and tailnet ACLs first: tailnet DNS alone does not
+ensure only tailnet devices can reach the host. The two browser credentials
+remain separate; opening the other section may require a second sign-in.
+
 Daily refresh, including SEC filings, runs at 06:10; universe refresh Monday at
 06:00; profiles on 5 January at 06:30; financials on 1 February, May, August,
 and November at 04:00; and European filings on the first of each month at

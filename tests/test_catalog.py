@@ -53,6 +53,8 @@ def test_browser_is_authenticated_and_escapes_data(client: TestClient) -> None:
     assert "<script>" not in response.text
     assert "A &amp; B" in response.text
     assert "offset=50" in response.text
+    assert "href='http://127.0.0.1:8001/'" in response.text
+    assert "aria-current='page'" in response.text
 
 
 def test_paging_and_invalid_inputs(client: TestClient) -> None:
@@ -60,8 +62,17 @@ def test_paging_and_invalid_inputs(client: TestClient) -> None:
     assert response.status_code == 200
     assert "Previous" in response.text
     assert "No stocks match" in response.text
+    assert "href='?as_of=2026-01-01" in response.text
+    assert "action='./'" in response.text
     for query in ("as_of=2026-02-30", "offset=-1", "q=" + "x" * 101):
         assert client.get("/?" + query, headers=_auth()).status_code == 400
+
+
+def test_catalog_link_uses_configured_dashboard_url(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setenv("MARKETMIND_DASHBOARD_PUBLIC_URL", "/")
+    response = client.get("/?as_of=2026-01-01", headers=_auth())
+    assert "href='/'" in response.text
+    assert "href='./' aria-current='page'" in response.text
 
 
 def test_universe_tool_searches_and_bounds_pages(monkeypatch) -> None:

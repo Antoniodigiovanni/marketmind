@@ -30,6 +30,9 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
   color: var(--muted); margin: 40px 0 12px; font-weight: 600; }
 .sub { color: var(--muted); margin: 0 0 8px; }
 a { color: inherit; }
+.site-nav { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 24px;
+  padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.site-nav a[aria-current='page'] { font-weight: 700; text-decoration: none; }
 .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
 .card .job { font-weight: 600; margin-bottom: 6px; }
@@ -55,13 +58,26 @@ pre.log { background: var(--card); border: 1px solid var(--line); border-radius:
 """
 
 
-def _page(title: str, body: str) -> str:
-    """Wrap rendered body markup in the shared document shell."""
+def render_navigation(*, active: str, operations_url: str, universe_url: str) -> str:
+    """Render shared navigation between the isolated browser services."""
+    links = []
+    for name, label, url in (
+        ("operations", "Jobs & logs", operations_url),
+        ("universe", "Universe", universe_url),
+    ):
+        current = " aria-current='page'" if name == active else ""
+        links.append(f"<a href='{html.escape(url, quote=True)}'{current}>{label}</a>")
+    return f"<nav class='site-nav' aria-label='Marketmind sections'>{''.join(links)}</nav>"
+
+
+def _page(title: str, body: str, *, universe_url: str) -> str:
+    """Wrap operations markup in the shared document shell and navigation."""
+    nav = render_navigation(active="operations", operations_url="/", universe_url=universe_url)
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
         f"<title>{html.escape(title)}</title><style>{STYLE}</style></head>"
-        f"<body><main>{body}</main></body></html>"
+        f"<body><main>{nav}{body}</main></body></html>"
     )
 
 
@@ -105,6 +121,7 @@ def render_overview(
     logs: list[dict[str, Any]],
     problems: list[str],
     db_error: str | None = None,
+    universe_url: str = "http://127.0.0.1:8002/",
 ) -> str:
     """Render the run overview page.
 
@@ -115,6 +132,7 @@ def render_overview(
         logs: Log file descriptors from dashboard.logs.list_logs.
         problems: Human-readable log directory problems.
         db_error: Message shown instead of run data when the query failed.
+        universe_url: Browser URL for the universe section.
 
     Returns:
         A complete HTML document.
@@ -190,16 +208,19 @@ def render_overview(
         f"<th>Size</th><th>Modified</th></tr></thead><tbody>{log_rows}</tbody></table></div>"
         f"{notes}"
     )
-    return _page("marketmind — scheduled jobs", body)
+    return _page("marketmind — scheduled jobs", body, universe_url=universe_url)
 
 
-def render_log(*, name: str, text: str, truncated: bool) -> str:
+def render_log(
+    *, name: str, text: str, truncated: bool, universe_url: str = "http://127.0.0.1:8002/"
+) -> str:
     """Render one log file's tail.
 
     Args:
         name: Log file name.
         text: Tail contents.
         truncated: Whether earlier content was omitted.
+        universe_url: Browser URL for the universe section.
 
     Returns:
         A complete HTML document.
@@ -215,4 +236,4 @@ def render_log(*, name: str, text: str, truncated: bool) -> str:
         f"{note}"
         f"<pre class='log'>{html.escape(text)}</pre>"
     )
-    return _page(f"{name} — marketmind", body)
+    return _page(f"{name} — marketmind", body, universe_url=universe_url)
