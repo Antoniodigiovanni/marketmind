@@ -19,7 +19,7 @@ from data.filings.companyfacts import ingest_companyfacts
 from data.filings.fetch import (
     DOCUMENT_FORMS,
     OWNERSHIP_FORMS,
-    ROOT_DIR,
+    RAW_ARCHIVE_DIR,
     _edgar_url,
     _process_13f,
     _process_document,
@@ -222,7 +222,7 @@ async def _run(args: argparse.Namespace) -> None:
                         await backfill_issuer(
                             conn,
                             client,
-                            ROOT_DIR,
+                            RAW_ARCHIVE_DIR,
                             ticker=ticker,
                             cik=cik,
                             full_text_since=full_text_since,
@@ -234,7 +234,7 @@ async def _run(args: argparse.Namespace) -> None:
                 await backfill_13f(
                     conn,
                     client,
-                    ROOT_DIR,
+                    RAW_ARCHIVE_DIR,
                     start=args.backfill_13f_start,
                     end=args.backfill_13f_end,
                 )
