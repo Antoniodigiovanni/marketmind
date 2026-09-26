@@ -67,7 +67,7 @@ mcp = FastMCP(
     port=MCP_PORT,
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
-        allowed_hosts=["127.0.0.1:*", "localhost:*"],
+        allowed_hosts=["127.0.0.1:*", "localhost:*", "marketmind:*"],
         allowed_origins=["http://127.0.0.1:*", "http://localhost:*"],
     ),
 )
@@ -122,6 +122,52 @@ def _jsonify_pg_row(row: dict[str, object]) -> dict[str, object]:
         else:
             result[key] = value
     return result
+
+
+@mcp.tool()
+async def list_universe(
+    as_of: str | None = None,
+    query: str = "",
+    offset: int = 0,
+    limit: int = 50,
+) -> dict[str, object]:
+    """List point-in-time universe constituents in stable, bounded pages.
+
+    Args:
+        as_of: ISO date (YYYY-MM-DD); today when omitted.
+        query: Case-insensitive substring of the ticker or company name.
+        offset: Number of matching rows to skip, starting at zero.
+        limit: Number of rows to return, between 1 and 100.
+
+    Returns:
+        Dict with as_of, total matching rows, and rows containing ticker,
+        name, country, sector, universe, added_date, and removed_date.
+
+    Raises:
+        ValueError: If date or paging/filter arguments are invalid.
+    """
+    date = as_of or dt.date.today().isoformat()
+    if not _valid_date(date) or dt.date.fromisoformat(date).isoformat() != date:
+        raise ValueError("as_of must be a valid YYYY-MM-DD date")
+    if offset < 0 or not 1 <= limit <= 100 or len(query) > 100:
+        raise ValueError("offset must be nonnegative, limit 1..100, query at most 100 characters")
+    frame = get_universe(date)
+    if query.strip():
+        needle = query.strip().lower()
+        frame = frame.filter(
+            pl.col("ticker").str.to_lowercase().str.contains(needle, literal=True)
+            | pl.col("name").str.to_lowercase().str.contains(needle, literal=True)
+        )
+    frame = frame.sort(["ticker", "universe", "name"])
+    columns = ["ticker", "name", "country", "sector", "universe", "added_date", "removed_date"]
+    rows = [
+        {
+            key: value.isoformat() if isinstance(value, dt.date) else value
+            for key, value in row.items()
+        }
+        for row in frame.slice(offset, limit).select(columns).to_dicts()
+    ]
+    return {"as_of": date, "total": frame.height, "rows": rows}
 
 
 @mcp.tool()

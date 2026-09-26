@@ -376,6 +376,18 @@ sudo systemctl enable --now marketmind-daily.timer marketmind-universe.timer \
 systemctl list-timers 'marketmind-*'
 ```
 
+Optional read-only universe browser: create a separate browser password at
+`secrets/catalog_token` (owner-only, readable by the container UID), for example
+`(umask 077; openssl rand -hex 32 > secrets/catalog_token)`
+(run as the Marketmind data-directory owner). Then run
+`docker compose -f docker-compose.prod.yml --profile catalog up -d catalog`.
+It is available at `http://127.0.0.1:8002/` via a local browser or SSH tunnel;
+use any Basic-auth username and the catalog token as password. It lists
+point-in-time universe CSV constituents, not all companies with stored prices.
+It calls the authenticated MCP `list_universe` tool; no database credentials
+are mounted. Do not expose its port publicly. The operations dashboard remains
+restricted to audit rows and logs. Editing membership is not enabled yet.
+
 Daily refresh, including SEC filings, runs at 06:10; universe refresh Monday at
 06:00; profiles on 5 January at 06:30; financials on 1 February, May, August,
 and November at 04:00; and European filings on the first of each month at

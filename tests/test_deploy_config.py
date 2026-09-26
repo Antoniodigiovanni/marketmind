@@ -75,7 +75,11 @@ def test_compose_uses_digest_inputs_and_file_secrets() -> None:
     assert "./state:/var/lib/marketmind" in compose
     assert "read_only: true" in compose
     assert "build:" not in compose
-    assert compose.count("image: ${MARKETMIND_IMAGE:?") == 2
+    assert compose.count("image: ${MARKETMIND_IMAGE:?") == 3
+    assert 'profiles: ["catalog"]' in compose
+    assert "MARKETMIND_CATALOG_TOKEN_FILE: /run/secrets/catalog_token" in compose
+    assert "MARKETMIND_CATALOG_MCP_URL: http://marketmind:" in compose
+    assert "127.0.0.1:${MARKETMIND_CATALOG_PORT:-8002}" in compose
     assert "  postgres:" not in compose
     assert "depends_on:" not in compose
     assert "external: true" in compose
