@@ -52,18 +52,13 @@ from data.db.runs import list_recent_runs
 from data.universe.loader import get_universe
 
 MCP_PORT = int(os.getenv("MARKETMIND_MCP_PORT", "8000"))
+MCP_HOST = os.getenv("MARKETMIND_MCP_HOST", "0.0.0.0")
 
-# The process binds 0.0.0.0 -- Docker's port publishing forwards to a
-# container's network interface, not its own internal 127.0.0.1, so a
-# process bound only to loopback inside the container is unreachable even
-# from the host despite `docker-compose.prod.yml` mapping the port to
-# 127.0.0.1. That host-side mapping (not this bind address) is what keeps
-# the service unreachable off-box; DNS-rebinding protection is configured
-# explicitly here since FastMCP only auto-enables it when host is a
-# loopback name, which "0.0.0.0" is not.
+# Native host units explicitly set MARKETMIND_MCP_HOST=127.0.0.1. Keep
+# DNS-rebinding protection enabled for the MCP transport.
 mcp = FastMCP(
     "marketmind",
-    host="0.0.0.0",  # noqa: S104 -- see comment above; loopback-only enforced by the host port mapping
+    host=MCP_HOST,
     port=MCP_PORT,
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
@@ -1294,7 +1289,7 @@ def main() -> None:
         raise RuntimeError("MARKETMIND_MCP_TOKEN must be set to a nonblank value")
     app = mcp.streamable_http_app()
     app.add_middleware(_BearerAuthMiddleware, token=token)
-    uvicorn.run(app, host="0.0.0.0", port=MCP_PORT, log_level="info")  # noqa: S104 -- see mcp's construction comment above
+    uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, log_level="info")
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised by the container entry point

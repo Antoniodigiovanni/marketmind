@@ -7,16 +7,16 @@ prices, benchmarks, macro observations, news, filings, versioned facts, and
 immutable market views. MCP is the market-data and write interface. An
 optional read-only web app shows job history, logs, and MCP-backed data pages.
 
-Production runs on one Linux host with Docker Compose and a published image;
-the VPS does not need a source checkout. A versioned GitHub release bundles
-Compose and host scripts with the application and PostgreSQL image digests.
-The normal deployment connects to a shared PostgreSQL instance using a
-dedicated database and role. On a new host, the installer creates that shared
-service as an independent Compose project under `/srv/postgres`; Marketmind
-does not own its lifecycle. Later projects receive their own databases and
-roles on the same instance. PostgreSQL with pgvector is the only structured,
-queryable store. systemd timers invoke one-off jobs from the same image as the
-long-running MCP server.
+Production runs on Debian/Ubuntu with versioned native Python releases and
+systemd services/timers; Docker is not required on the host. A versioned
+GitHub release bundles the application, locked dependencies, and host scripts.
+The normal deployment connects to an existing PostgreSQL instance with a
+dedicated database and role. On a new host, the installer can explicitly offer
+to install PostgreSQL with pgvector through apt. PostgreSQL remains an
+independent host service; Marketmind does not own its lifecycle. Later projects
+receive their own databases and roles. PostgreSQL with pgvector is the only
+structured, queryable store. systemd timers run jobs from the same versioned
+release as the long-running MCP server.
 Local development and CI use a disposable PostgreSQL database.
 
 ## Commands
@@ -36,17 +36,17 @@ uv run python -m data.filings.backfill --financials
 uv run python -m data.filings.esef
 uv run python -m agent.refresh {YYYY-MM-DD}          # complete daily job
 uv run python -m server.mcp                           # authenticated HTTP MCP
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
+./deploy/install.sh                                   # first host install (release archive)
 ./deploy/dashboard.sh enable|disable|status           # dashboard lifecycle
 marketmind update                                    # install newest production release
 marketmind update vX.Y.Z                             # install a selected release
-# The independent shared database stack lives under /srv/postgres.
+# PostgreSQL is an independent host service or an existing remote server.
 ```
 
-Always use `uv run` for Python commands. In containers and systemd jobs, use
-`uv run --frozen --no-sync`. The production runbook is `deploy/README.md`;
-`docker-compose.yml` is only the disposable local test database.
+Always use `uv run` for development Python commands. Native systemd jobs use
+the locked virtual environment in `releases/current`. The production runbook
+is `deploy/README.md`; `docker-compose.yml` is only the disposable local test
+database.
 
 ## Layout and storage
 
@@ -93,7 +93,7 @@ Always use `uv run` for Python commands. In containers and systemd jobs, use
 - MCP uses authenticated streamable HTTP, published on a loopback host port.
   Every request needs `MARKETMIND_MCP_TOKEN`. Tool docstrings must describe
   arguments and returned rows.
-- The optional web app uses the `dashboard` Compose profile. It may read
+- The optional web app runs as a separate systemd service. It may read
   `agent_runs` and selected job logs through its SELECT-only role; market-data
   pages use authenticated MCP tools. Its container receives only its read-only
   DSN/password and MCP credential, never the main database password or source
@@ -110,9 +110,9 @@ Always use `uv run` for Python commands. In containers and systemd jobs, use
   indexes run monthly because each pass re-scans country indexes.
 - `agent.catchup` processes missed daily dates from the last successful audit
   row, up to seven days. Longer gaps require an operator-selected backfill.
-- Keep credentials in untracked `secrets/` files, mounted only into the service
-  that needs each one. `.env` contains Compose interpolation and non-secret
-  settings. libpq passwords use owner-only `.pgpass` files.
+- Keep credentials in untracked `secrets/` files, exposed only to the service
+  that needs each one. `.env` contains only non-secret settings. libpq passwords
+  use owner-only `.pgpass` files.
 
 ## Testing and release checks
 

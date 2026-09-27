@@ -1,191 +1,202 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-release_source=${1:-}
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-INSTALL_DIR="${MARKETMIND_INSTALL_DIR:-$(dirname "$SCRIPT_DIR")}"
-staging=
-temporary_container=
+source_arg=${1:-latest}
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+install_dir=${MARKETMIND_INSTALL_DIR:-$(dirname "$script_dir")}
+repo=${MARKETMIND_RELEASE_REPOSITORY:-Antoniodigiovanni/marketmind}
+staging= previous= switched= new_dir= service_installed= override_installed=
+service=marketmind-mcp.service
 
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
-ok() { printf '✓ %s\n' "$*"; }
-info() { printf '› %s\n' "$*"; }
+value() { awk -F= -v key="$2" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "$1"; }
+valid_tag() { [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9][A-Za-z0-9.-]*)?$ ]]; }
 
-cleanup() {
-  if [[ -n "$temporary_container" ]]; then
-    docker rm -f "$temporary_container" >/dev/null 2>&1 || true
+rollback() {
+  local status=$?
+  if (( status != 0 )) && [[ -n "$switched" ]]; then
+    printf 'Update failed; restoring previous release.\n' >&2
+    if [[ -n "$previous" ]]; then
+      ln -sfn "$previous" "$install_dir/releases/.rollback-link"
+      mv -Tf "$install_dir/releases/.rollback-link" "$install_dir/releases/current"
+      sudo systemctl restart "$service" || true
+    else
+      sudo systemctl stop "$service" || true
+      rm -f "$install_dir/releases/current"
+      if [[ -n "$service_installed" ]]; then
+        sudo systemctl disable "$service" || true
+        sudo rm -f "/etc/systemd/system/$service"
+        sudo systemctl daemon-reload || true
+      fi
+    fi
   fi
+  if (( status != 0 )) && [[ -n "$override_installed" ]]; then
+    sudo rm -f "/etc/systemd/system/$service.d/native-release.conf"
+    sudo systemctl daemon-reload || true
+    if [[ -z "$service_installed" ]]; then sudo systemctl restart "$service" || true; fi
+  fi
+  if (( status != 0 )) && [[ -n "$new_dir" ]]; then rm -rf "$new_dir"; fi
   if [[ -n "$staging" ]]; then rm -rf "$staging"; fi
+  exit "$status"
 }
+trap rollback EXIT
 
-release_value() {
-  local file=$1 key=$2
-  awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "$file"
-}
-
-set_env() {
-  local key=$1 value=$2 tmp
-  tmp=$(mktemp)
-  awk -v key="$key" -v value="$value" '
-    BEGIN { found = 0 }
-    $0 ~ "^" key "=" { print key "=" value; found = 1; next }
-    { print }
-    END { if (!found) print key "=" value }
-  ' "$INSTALL_DIR/.env" > "$tmp"
-  cat "$tmp" > "$INSTALL_DIR/.env"
-  rm -f "$tmp"
-}
-
-stage_archive() {
-  local archive=$1 archive_dir archive_name checksum checksum_target entry normalized
-  archive_dir=$(cd -- "$(dirname -- "$archive")" && pwd)
-  archive_name=$(basename -- "$archive")
-  archive="$archive_dir/$archive_name"
-  checksum="$archive.sha256"
-  [[ -f "$archive" ]] || die "release archive not found: $archive"
-  [[ -f "$checksum" ]] || die "release checksum not found: $checksum"
-
-  checksum_target=$(awk 'NR == 1 {name=$2; sub(/^\*/, "", name); print name}' "$checksum")
-  [[ "$checksum_target" == "$archive_name" ]] || \
-    die "checksum file does not describe $archive_name"
-  [[ $(awk 'END {print NR}' "$checksum") -eq 1 ]] || \
-    die "checksum file must contain one entry"
-  (cd "$archive_dir" && sha256sum --check "$(basename -- "$checksum")")
-
-  mapfile -t archive_entries < <(tar -tzf "$archive")
-  for entry in "${archive_entries[@]}"; do
-    normalized=${entry#./}
-    case "$entry" in /*) die "unsafe path in release archive: $entry" ;; esac
-    case "/$normalized/" in
-      *'/../'*) die "unsafe path in release archive: $entry" ;;
-    esac
-  done
-  tar -xzf "$archive" -C "$staging"
-
-  release_tag=$(release_value "$staging/release.env" RELEASE_TAG)
-  [[ "$archive_name" == "marketmind-$release_tag-deploy.tar.gz" ]] || \
-    die "archive name does not match RELEASE_TAG=$release_tag"
-}
-
-stage_image() {
-  local selector=$1 current_image image_repository tagged_image resolved_image postgres_image
-  local image_release_tag
-  if [[ "$selector" != latest ]]; then
-    [[ "$selector" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9][A-Za-z0-9.-]*)?$ ]] || \
-      die "invalid release tag: $selector"
-  fi
-  [[ -f "$INSTALL_DIR/release.env" ]] || \
-    die "$INSTALL_DIR/release.env is missing; use a release archive for the first install"
-
-  current_image=$(release_value "$INSTALL_DIR/release.env" MARKETMIND_IMAGE)
-  postgres_image=$(release_value "$INSTALL_DIR/release.env" MARKETMIND_POSTGRES_IMAGE)
-  [[ "$current_image" == *@sha256:* ]] || \
-    die "current MARKETMIND_IMAGE is not pinned by digest"
-  [[ -n "$postgres_image" ]] || die "current release.env has no MARKETMIND_POSTGRES_IMAGE"
-  image_repository=${current_image%@sha256:*}
-  tagged_image="$image_repository:$selector"
-
-  info "Pulling $tagged_image"
-  docker pull "$tagged_image" || \
-    die "image pull failed; authenticate with docker login ghcr.io and rerun"
-  resolved_image=$(docker image inspect \
-    --format '{{range .RepoDigests}}{{println .}}{{end}}' "$tagged_image" | \
-    awk -v repository="$image_repository" 'index($0, repository "@sha256:") == 1 {print; exit}')
-  [[ "$resolved_image" == "$image_repository@sha256:"* ]] || \
-    die "could not resolve $tagged_image to a repository digest"
-  image_release_tag=$(docker image inspect \
-    --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$tagged_image")
-  [[ "$image_release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9][A-Za-z0-9.-]*)?$ ]] || \
-    die "$tagged_image has no valid release-version label"
-  if [[ "$selector" != latest && "$selector" != "$image_release_tag" ]]; then
-    die "$tagged_image identifies itself as $image_release_tag"
-  fi
-
-  temporary_container=$(docker create --entrypoint /bin/true "$resolved_image")
-  docker cp "$temporary_container:/app/.env.example" "$staging/.env.example"
-  docker cp "$temporary_container:/app/docker-compose.prod.yml" \
-    "$staging/docker-compose.prod.yml"
-  docker cp "$temporary_container:/app/docker-compose.postgres.yml" \
-    "$staging/docker-compose.postgres.yml"
-  docker cp "$temporary_container:/app/deploy" "$staging/deploy"
-  docker rm "$temporary_container" >/dev/null
-  temporary_container=
-  printf 'MARKETMIND_IMAGE=%s\nMARKETMIND_POSTGRES_IMAGE=%s\nRELEASE_TAG=%s\n' \
-    "$resolved_image" "$postgres_image" "$image_release_tag" > "$staging/release.env"
-  ok "Prepared $image_release_tag from its digest-pinned container image"
-}
-
-[[ $(id -u) -ne 0 ]] || die "Run this as the deployment account, not with sudo."
-[[ -n "$release_source" ]] || \
-  die "usage: update.sh latest | vX.Y.Z | marketmind-vX.Y.Z-deploy.tar.gz"
-for command in awk cp curl date docker flock install mktemp sha256sum sudo tar; do
-  command -v "$command" >/dev/null 2>&1 || die "required command not found: $command"
+for cmd in awk curl flock install ln mktemp mv python3 sha256sum sudo systemctl tar uv; do
+  command -v "$cmd" >/dev/null || die "required command not found: $cmd"
 done
-[[ -f "$INSTALL_DIR/.env" ]] || die "$INSTALL_DIR/.env does not exist; run install.sh first"
-
+[[ $(id -u) -ne 0 ]] || die 'Run as the deployment account, not root.'
+[[ -f "$install_dir/.env" ]] || die 'missing runtime .env; configure the native host first'
+[[ -d "$install_dir/data/raw" ]] || die 'missing shared data/raw directory'
+[[ "$install_dir" != *[[:space:]]* ]] || die 'installation path cannot contain spaces'
+install -d -m 0700 "$install_dir/state/refresh"
+install -d -m 0755 "$install_dir/releases"
+exec 9> "$install_dir/state/refresh/deployment.lock"
+flock -n 9 || die 'another update is running'
 staging=$(mktemp -d)
-trap cleanup EXIT
-case "$release_source" in
-  latest|v*) stage_image "$release_source" ;;
-  *) stage_archive "$release_source" ;;
-esac
-for required in release.env .env.example docker-compose.prod.yml docker-compose.postgres.yml \
-  deploy/install.sh deploy/dashboard.sh deploy/update.sh deploy/marketmind.sh; do
-  [[ -f "$staging/$required" ]] || die "release archive is missing $required"
-done
 
-release_tag=$(release_value "$staging/release.env" RELEASE_TAG)
-release_image=$(release_value "$staging/release.env" MARKETMIND_IMAGE)
-[[ "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9][A-Za-z0-9.-]*)?$ ]] || \
-  die "release.env has an invalid RELEASE_TAG"
-[[ "$release_image" == *@sha256:* ]] || \
-  die "release.env MARKETMIND_IMAGE is not pinned by digest"
+if [[ "$source_arg" == latest || "$source_arg" == v* ]]; then
+  [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die 'invalid release repository'
+  if [[ "$source_arg" == latest ]]; then
+    tag=$(curl -fsSL --retry 3 "https://api.github.com/repos/$repo/releases/latest" | \
+      python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')
+  else
+    tag=$source_arg
+  fi
+  valid_tag "$tag" || die "invalid release tag: $tag"
+  base="https://github.com/$repo/releases/download/$tag/marketmind-$tag-native.tar.gz"
+  archive="$staging/marketmind-$tag-native.tar.gz"
+  curl -fL --retry 3 -o "$archive" "$base"
+  curl -fL --retry 3 -o "$archive.sha256" "$base.sha256"
+else
+  archive=$source_arg
+  [[ -f "$archive" && -f "$archive.sha256" ]] || die 'archive and matching .sha256 required'
+  cp -p -- "$archive" "$archive.sha256" "$staging/"
+  archive="$staging/$(basename -- "$archive")"
+fi
 
-install -d -m 0700 "$INSTALL_DIR/state/refresh" "$INSTALL_DIR/state/deployment-releases"
-exec 9> "$INSTALL_DIR/state/refresh/deployment.lock"
-flock -n 9 || die "another deployment update is running"
+name=$(basename -- "$archive")
+[[ "$name" =~ ^marketmind-(v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9][A-Za-z0-9.-]*)?)-native\.tar\.gz$ ]] || die 'invalid archive name'
+tag=${BASH_REMATCH[1]}
+[[ $(wc -l < "$archive.sha256") -eq 1 ]] || die 'checksum must contain one line'
+[[ $(awk '{print $2}' "$archive.sha256") == "$name" ]] || die 'checksum filename mismatch'
+(cd "$staging" && sha256sum -c -- "$name.sha256") || die 'checksum verification failed'
 
-current_tag=$(release_value "$INSTALL_DIR/release.env" RELEASE_TAG 2>/dev/null || true)
-current_tag=${current_tag:-unknown}
-backup_dir="$INSTALL_DIR/state/deployment-releases/${current_tag}-$(date +%Y%m%dT%H%M%S)"
-install -d -m 0700 "$backup_dir"
-for path in release.env .env.example docker-compose.prod.yml docker-compose.postgres.yml deploy; do
-  if [[ -e "$INSTALL_DIR/$path" ]]; then cp -a "$INSTALL_DIR/$path" "$backup_dir/"; fi
-done
-cp -a "$INSTALL_DIR/.env" "$backup_dir/runtime.env"
-ok "Saved previous deployment files under $backup_dir"
+# Never extract links, devices, hardlinks, duplicates, or paths outside the release root.
+python3 - "$archive" <<'PY'
+import sys
+import tarfile
+from pathlib import PurePosixPath
 
-install -m 0644 "$staging/release.env" "$INSTALL_DIR/release.env"
-install -m 0644 "$staging/.env.example" "$INSTALL_DIR/.env.example"
-install -m 0644 "$staging/docker-compose.prod.yml" "$INSTALL_DIR/docker-compose.prod.yml"
-install -m 0644 "$staging/docker-compose.postgres.yml" \
-  "$INSTALL_DIR/docker-compose.postgres.yml"
-cp -a "$staging/deploy/." "$INSTALL_DIR/deploy/"
-set_env MARKETMIND_IMAGE "$release_image"
+with tarfile.open(sys.argv[1], 'r:gz') as archive:
+    seen = set()
+    for member in archive:
+        path = PurePosixPath(member.name)
+        if (path.is_absolute() or '..' in path.parts or not path.parts
+                or path.parts[0] != 'marketmind' or member.name in seen
+                or not (member.isfile() or member.isdir())):
+            raise SystemExit(f'unsafe archive member: {member.name}')
+        seen.add(member.name)
+PY
+mkdir "$staging/unpacked"
+tar -xzf "$archive" -C "$staging/unpacked" --no-same-owner --no-same-permissions
+payload="$staging/unpacked/marketmind"
+[[ -f "$payload/pyproject.toml" && -f "$payload/uv.lock" && \
+   -f "$payload/deploy/native-run.sh" && -f "$payload/deploy/install.sh" && \
+   -f "$payload/release.env" ]] || die 'incomplete archive'
+[[ $(value "$payload/release.env" RELEASE_TAG) == "$tag" ]] || die 'release tag mismatch'
+[[ ! -e "$install_dir/releases/$tag" ]] || die "release $tag is already staged"
 
-cd "$INSTALL_DIR"
-info "Pulling $release_image"
-docker pull "$release_image" || \
-  die "image pull failed; authenticate with docker login ghcr.io and rerun"
-docker compose -f docker-compose.prod.yml config --quiet
-docker compose -f docker-compose.prod.yml pull marketmind
-docker compose -f docker-compose.prod.yml up -d --wait --wait-timeout 120 marketmind
+new_dir="$install_dir/releases/$tag"
+install -d -m 0755 "$new_dir"
+cp -a "$payload/." "$new_dir/"
+ln -s "$install_dir/data/raw" "$new_dir/data/raw"
+(cd "$new_dir" && uv sync --frozen --no-dev --python 3.12)
+[[ -x "$new_dir/.venv/bin/python" ]] || die 'dependency installation failed'
 
-mcp_status=
-for ((attempt = 1; attempt <= 30; attempt++)); do
-  mcp_status=$(curl -sS -o /dev/null -w '%{http_code}' \
-    http://127.0.0.1:8000/mcp 2>/dev/null || true)
-  if [[ "$mcp_status" == 401 ]]; then break; fi
+# The native unit uses the existing runtime configuration and secrets.
+unit="$staging/marketmind.service"
+cat > "$unit" <<EOF
+[Unit]
+Description=Marketmind MCP server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=$(id -un)
+Group=$(id -gn)
+EnvironmentFile=$install_dir/.env
+Environment=MARKETMIND_INSTALL_DIR=$install_dir
+ExecStart=$install_dir/releases/current/deploy/native-run.sh server
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=$install_dir/state $install_dir/data/raw
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+EOF
+# Keep runtime configuration and secrets untouched.
+if [[ ! -f "/etc/systemd/system/$service" ]]; then
+  sudo install -m 0644 "$unit" "/etc/systemd/system/$service"
+  service_installed=1
+else
+  override="/etc/systemd/system/$service.d"
+  sudo install -d -m 0755 "$override"
+  if [[ -f "$override/native-release.conf" ]]; then
+    grep -qF "ExecStart=$install_dir/releases/current/deploy/native-run.sh server" \
+      "$override/native-release.conf" || die 'incompatible native service override'
+  else
+    printf '[Service]\nUser=%s\nGroup=%s\nEnvironmentFile=%s/.env\nEnvironment=MARKETMIND_INSTALL_DIR=%s\nWorkingDirectory=%s/releases/current\nExecStart=\nExecStart=%s/releases/current/deploy/native-run.sh server\n' \
+      "$(id -un)" "$(id -gn)" "$install_dir" "$install_dir" "$install_dir" "$install_dir" | \
+      sudo tee "$override/native-release.conf" >/dev/null
+    override_installed=1
+  fi
+fi
+sudo systemctl daemon-reload
+if [[ -L "$install_dir/releases/current" ]]; then
+  previous=$(readlink "$install_dir/releases/current")
+fi
+ln -s "$tag" "$install_dir/releases/.next-link"
+mv -Tf "$install_dir/releases/.next-link" "$install_dir/releases/current"
+switched=1
+sudo systemctl enable "$service"
+sudo systemctl restart "$service"
+
+port=$(awk -F= '$1 == "MARKETMIND_MCP_PORT" {print $2; exit}' "$install_dir/.env")
+port=${port:-8000}
+[[ "$port" =~ ^[0-9]+$ ]] || die 'invalid MCP port'
+ready=
+for ((attempt=1; attempt<=30; attempt++)); do
+  status=$(curl -sS --max-time 2 -o /dev/null -w '%{http_code}' \
+    "http://127.0.0.1:$port/mcp" 2>/dev/null || true)
+  if [[ "$status" == 401 ]]; then ready=1; break; fi
   sleep 2
 done
-[[ "$mcp_status" == 401 ]] || die "updated MCP server did not become ready within 60 seconds"
+[[ -n "$ready" ]] || die 'MCP health check failed'
 
-if [[ $(cat state/dashboard-enabled 2>/dev/null || true) == yes ]]; then
-  ./deploy/dashboard.sh enable
-fi
-./deploy/install.sh --refresh-systemd
-printf '%s\n' "$release_tag" > state/current-release
-
-ok "Updated Marketmind to $release_tag"
-docker compose -f docker-compose.prod.yml ps
-info "Application logs: docker compose -f docker-compose.prod.yml logs --tail=100 marketmind"
+# Override only the execution command; leave timer schedules and enablement unchanged.
+for job in daily universe profiles financials esef initial-backfill; do
+  [[ -f "/etc/systemd/system/marketmind-$job.service" ]] || continue
+  override="/etc/systemd/system/marketmind-$job.service.d"
+  sudo install -d -m 0755 "$override"
+  job_arg=$job
+  [[ "$job" == initial-backfill ]] && job_arg=backfill
+  printf '[Service]\nEnvironmentFile=%s/.env\nEnvironment=MARKETMIND_INSTALL_DIR=%s\nExecStart=\nExecStart=%s/deploy/native-run.sh %s\n' \
+    "$install_dir" "$install_dir" "$install_dir/releases/current" "$job_arg" | \
+    sudo tee "$override/native.conf" >/dev/null
+done
+sudo systemctl daemon-reload
+printf '%s\n' "$tag" > "$install_dir/state/current-release"
+# Refresh host scripts after readiness; never overwrite runtime configuration.
+for script in install.sh update.sh dashboard.sh run-job.sh native-run.sh \
+  provision-marketmind-db.sh provision-dashboard-db.sh backup-set.sh restore-check.sh \
+  marketmind.sh; do
+  install -m 0755 "$new_dir/deploy/$script" "$install_dir/deploy/$script.next"
+  mv -f "$install_dir/deploy/$script.next" "$install_dir/deploy/$script"
+done
+switched=
+printf 'Updated Marketmind to %s (native service).\n' "$tag"

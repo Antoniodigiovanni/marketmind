@@ -5,8 +5,7 @@ action=${1:-}
 subaction=${2:-}
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${MARKETMIND_INSTALL_DIR:-$(dirname "$SCRIPT_DIR")}"
-POSTGRES_INSTALL_DIR="${MARKETMIND_POSTGRES_DIR:-/srv/postgres}"
-COMPOSE=(docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" --profile dashboard)
+DASHBOARD_UNIT=marketmind-dashboard.service
 
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 ok() { printf '✓ %s\n' "$*"; }
@@ -30,9 +29,10 @@ write_secret() {
 }
 
 env_value() {
-  local key=$1
+  local key=$1 file="$INSTALL_DIR/.env"
+  if [[ -n "${CREDENTIALS_DIRECTORY:-}" ]]; then file="$CREDENTIALS_DIRECTORY/dashboard_env"; fi
   awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); gsub(/^"|"$/, ""); print; exit}' \
-    "$INSTALL_DIR/.env"
+    "$file"
 }
 
 set_env() {
@@ -49,10 +49,11 @@ set_env() {
 }
 
 prepare_shared_credentials() {
+  local dashboard_dsn=$1
   local password=
   if [[ ! -s "$INSTALL_DIR/secrets/dashboard_database_password" ]]; then
     password=$(awk -F: \
-      '$1 == "postgres-shared" && $3 == "marketmind" && $4 == "marketmind_ro" \
+      '$3 == "marketmind" && $4 == "marketmind_ro" \
         {print $5; exit}' "$INSTALL_DIR/secrets/dashboard_pgpass" 2>/dev/null || true)
     if [[ ! "$password" =~ ^[0-9a-f]+$ ]]; then
       password=$(openssl rand -hex 32)
@@ -60,8 +61,14 @@ prepare_shared_credentials() {
     write_secret "$INSTALL_DIR/secrets/dashboard_database_password" "$password"
   fi
   password=$(< "$INSTALL_DIR/secrets/dashboard_database_password")
+  local authority host port
+  authority=${dashboard_dsn#*://}
+  authority=${authority%%/*}
+  host=${authority%%:*}
+  port=${authority#*:}
+  if [[ "$port" == "$authority" ]]; then port=5432; fi
   write_secret "$INSTALL_DIR/secrets/dashboard_pgpass" \
-    "postgres-shared:5432:marketmind:marketmind_ro:$password"
+    "$host:$port:marketmind:marketmind_ro:$password"
   unset password
 }
 
@@ -91,32 +98,34 @@ prepare_external_credentials() {
 enable_dashboard() {
   local mode dashboard_dsn
   local command
-  for command in awk curl docker install mktemp openssl; do
+  for command in awk curl install mktemp openssl psql systemctl; do
     command -v "$command" >/dev/null 2>&1 || die "$command is required"
   done
-  docker info >/dev/null 2>&1 || die "the current account cannot access the Docker daemon"
   [[ -f "$INSTALL_DIR/.env" ]] || die "$INSTALL_DIR/.env does not exist"
-  [[ -f "$INSTALL_DIR/docker-compose.prod.yml" ]] || \
-    die "$INSTALL_DIR/docker-compose.prod.yml does not exist"
   install -d -m 0700 "$INSTALL_DIR/secrets" "$INSTALL_DIR/state"
 
   dashboard_dsn=$(env_value MARKETMIND_DASHBOARD_DSN)
   if [[ -z "$dashboard_dsn" ]]; then
-    dashboard_dsn=postgresql://marketmind_ro@postgres-shared:5432/marketmind
-    set_env MARKETMIND_DASHBOARD_DSN "$dashboard_dsn"
+    die "set MARKETMIND_DASHBOARD_DSN to a host-reachable read-only database address"
   fi
   mode=$(cat "$INSTALL_DIR/state/deployment-mode" 2>/dev/null || true)
   if [[ "$mode" == shared-local ]]; then
-    prepare_shared_credentials
+    prepare_shared_credentials "$dashboard_dsn"
+    export MARKETMIND_ADMIN_SERVICE=local-postgres
     "$SCRIPT_DIR/provision-dashboard-db.sh" \
-      "$POSTGRES_INSTALL_DIR" "$INSTALL_DIR/secrets/dashboard_database_password"
+      "$INSTALL_DIR/secrets/dashboard_database_password"
   elif [[ ! -s "$INSTALL_DIR/secrets/dashboard_pgpass" ]]; then
     prepare_external_credentials "$dashboard_dsn"
   fi
   chmod 0600 "$INSTALL_DIR/secrets/dashboard_pgpass"
-
-  "${COMPOSE[@]}" config --quiet
-  "${COMPOSE[@]}" up -d --wait --wait-timeout 60 dashboard
+  command -v setfacl >/dev/null || die "install the acl package to enable read-only dashboard logs"
+  sudo setfacl -m u:marketmind-dashboard:x "$INSTALL_DIR/state" \
+    "$INSTALL_DIR/state/refresh"
+  install -d -m 0700 "$INSTALL_DIR/state/refresh/logs"
+  sudo setfacl -R -m u:marketmind-dashboard:rX "$INSTALL_DIR/state/refresh/logs"
+  sudo setfacl -d -m u:marketmind-dashboard:rX "$INSTALL_DIR/state/refresh/logs"
+  sudo systemctl enable "$DASHBOARD_UNIT"
+  sudo systemctl restart "$DASHBOARD_UNIT"
   wait_until_ready
   printf 'yes\n' > "$INSTALL_DIR/state/dashboard-enabled"
   ok "Dashboard is running at http://127.0.0.1:8001"
@@ -125,14 +134,14 @@ enable_dashboard() {
 }
 
 disable_dashboard() {
-  "${COMPOSE[@]}" stop dashboard >/dev/null 2>&1 || true
+  sudo systemctl stop "$DASHBOARD_UNIT"
   install -d -m 0700 "$INSTALL_DIR/state"
   printf 'no\n' > "$INSTALL_DIR/state/dashboard-enabled"
   ok "Dashboard is disabled; its database credential was retained."
 }
 
 dashboard_status() {
-  "${COMPOSE[@]}" ps dashboard
+  systemctl status --no-pager "$DASHBOARD_UNIT"
 }
 
 tailscale_connected() {
@@ -202,9 +211,31 @@ disable_dashboard_and_exposure() {
   disable_dashboard
 }
 
+serve_dashboard() {
+  [[ -n "${CREDENTIALS_DIRECTORY:-}" ]] || die "systemd credentials are required"
+  export MARKETMIND_DASHBOARD_DSN="$(env_value MARKETMIND_DASHBOARD_DSN)"
+  [[ -n "$MARKETMIND_DASHBOARD_DSN" ]] || die "dashboard DSN is not configured"
+  [[ "$MARKETMIND_DASHBOARD_DSN" == *marketmind_ro@* ]] || \
+    die "dashboard DSN must use marketmind_ro"
+  export MARKETMIND_DASHBOARD_HOST=127.0.0.1
+  export MARKETMIND_DASHBOARD_PORT="$(env_value MARKETMIND_DASHBOARD_PORT)"
+  export MARKETMIND_DASHBOARD_PORT="${MARKETMIND_DASHBOARD_PORT:-8001}"
+  export MARKETMIND_WEB_MCP_URL="http://127.0.0.1:$(env_value MARKETMIND_MCP_PORT)/mcp"
+  if [[ "$MARKETMIND_WEB_MCP_URL" == 'http://127.0.0.1:/mcp' ]]; then
+    export MARKETMIND_WEB_MCP_URL=http://127.0.0.1:8000/mcp
+  fi
+  export MARKETMIND_DASHBOARD_LOG_DIRS="$INSTALL_DIR/state/refresh/logs:/var/log/marketmind"
+  export PGPASSFILE="$CREDENTIALS_DIRECTORY/dashboard_pgpass"
+  export MARKETMIND_MCP_TOKEN_FILE="$CREDENTIALS_DIRECTORY/mcp_token"
+  export HOME=/tmp UV_CACHE_DIR=/tmp/marketmind-uv-cache PYTHONDONTWRITEBYTECODE=1
+  cd "$INSTALL_DIR/releases/current"
+  exec .venv/bin/python -m dashboard.app
+}
+
 main() {
   [[ $(id -u) -ne 0 ]] || die "run this as the deployment account, not with sudo"
   case "$action" in
+    serve) serve_dashboard ;;
     enable) enable_dashboard ;;
     disable) disable_dashboard_and_exposure ;;
     status) dashboard_status ;;

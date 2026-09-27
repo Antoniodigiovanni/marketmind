@@ -1,41 +1,56 @@
 #!/bin/sh
 set -eu
 
-set_dir="${1:?usage: restore-check.sh /path/to/marketmind-*.ready}"
-install_dir="${MARKETMIND_INSTALL_DIR:-/srv/marketmind}"
-cd "$set_dir"
-sha256sum --check SHA256SUMS
-temp_dir="$(mktemp -d)"
-restore_container="marketmind-restore-$(date +%s)-$$"
+[ "$#" -eq 1 ] || { echo 'usage: restore-check.sh /path/to/marketmind-*.ready' >&2; exit 2; }
+[ "$(id -u)" -ne 0 ] || {
+  echo 'run as an unprivileged account, not root (initdb refuses root)' >&2; exit 1;
+}
+set_dir="$(cd "$1" && pwd -P)"
+(cd "$set_dir" && sha256sum --check SHA256SUMS)
+major="$(awk -F= '$1 == "pg_major" {print $2}' "$set_dir/MANIFEST")"
+case "$major" in *[!0-9]* | '') echo 'invalid pg_major in MANIFEST' >&2; exit 1 ;; esac
+bin_dir="/usr/lib/postgresql/$major/bin"
+for command in initdb pg_ctl createdb pg_restore psql; do
+  [ -x "$bin_dir/$command" ] || {
+    echo "missing $bin_dir/$command; install PostgreSQL $major and postgresql-$major-pgvector" >&2
+    exit 1
+  }
+done
+[ -f "/usr/share/postgresql/$major/extension/vector.control" ] || {
+  echo "postgresql-$major-pgvector is required for restore" >&2; exit 1;
+}
+# A private, unprivileged cluster with no TCP listener: never create a
+# database in the production server, even when it is on this same host.
+umask 077
+temp_dir="$(mktemp -d /tmp/marketmind-restore.XXXXXXXX)"
+mkdir "$temp_dir/socket" "$temp_dir/files"
 cleanup() {
-  docker rm -fv "$restore_container" >/dev/null 2>&1 || true
+  if [ -f "$temp_dir/db/postmaster.pid" ]; then
+    "$bin_dir/pg_ctl" -D "$temp_dir/db" -m immediate -w stop >/dev/null || true
+  fi
   rm -rf -- "$temp_dir"
 }
 trap 'exit 1' HUP INT TERM
 trap cleanup EXIT
-tar -xzf files.tar.gz -C "$temp_dir"
-test -d "$temp_dir/data/raw"
-test -d "$temp_dir/state"
-cd "$install_dir"
-. ./release.env
-: "${MARKETMIND_POSTGRES_IMAGE:?release.env has no PostgreSQL image}"
-docker run --detach --name "$restore_container" \
-  -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=marketmind_restore \
-  "$MARKETMIND_POSTGRES_IMAGE" >/dev/null
-attempt=0
-until docker exec "$restore_container" pg_isready -U postgres -d marketmind_restore \
-  >/dev/null 2>&1; do
-  attempt=$((attempt + 1))
-  if [ "$attempt" -ge 30 ]; then
-    echo "temporary PostgreSQL did not become ready" >&2
-    exit 1
-  fi
-  sleep 1
-done
-docker exec -i "$restore_container" \
-  pg_restore -U postgres -d marketmind_restore --exit-on-error --no-owner --no-acl \
-  < "$set_dir/postgres.dump"
-docker exec "$restore_container" \
-  psql -U postgres -d marketmind_restore -Atc 'SELECT count(*) FROM agent_runs' >/dev/null
-trap - EXIT HUP INT TERM
-cleanup
+# Do not restore file ownership, permission bits, or absolute paths from an
+# archive. SHA256SUMS verifies transfer integrity, not source authenticity.
+if tar -tzf "$set_dir/files.tar.gz" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+  echo 'unsafe files archive paths' >&2; exit 1
+fi
+tar -xzf "$set_dir/files.tar.gz" --no-same-owner --no-same-permissions -C "$temp_dir/files"
+[ -d "$temp_dir/files/data/raw" ] && [ -d "$temp_dir/files/state" ] || {
+  echo 'file archive missing data/raw or state' >&2; exit 1;
+}
+"$bin_dir/initdb" -D "$temp_dir/db" -U restore_check --auth-local=trust \
+  --auth-host=reject --no-instructions >/dev/null
+"$bin_dir/pg_ctl" -D "$temp_dir/db" -o \
+  "-c listen_addresses= -c unix_socket_directories=$temp_dir/socket -p 5432" \
+  -l "$temp_dir/postgres.log" -w start >/dev/null
+export PGHOST="$temp_dir/socket" PGPORT=5432 PGUSER=restore_check
+unset PGSERVICE PGPASSFILE PGPASSWORD PGDATABASE PGHOSTADDR PGOPTIONS || true
+"$bin_dir/createdb" -w marketmind_restore
+"$bin_dir/pg_restore" -w -d marketmind_restore --exit-on-error --no-owner --no-acl \
+  "$set_dir/postgres.dump"
+"$bin_dir/psql" -X -w -v ON_ERROR_STOP=1 -d marketmind_restore -Atqc \
+  'SELECT count(*) FROM public.agent_runs' >/dev/null
+printf 'Isolated database and files restore passed: %s\n' "$set_dir"

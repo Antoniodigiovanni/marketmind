@@ -1,0 +1,22 @@
+[Unit]
+Description=marketmind authenticated MCP server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=marketmind
+Group=marketmind
+WorkingDirectory=/srv/marketmind
+Environment=MARKETMIND_MCP_HOST=127.0.0.1
+ExecStart=/srv/marketmind/deploy/run-job.sh mcp
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/marketmind/state /srv/marketmind/data/raw
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

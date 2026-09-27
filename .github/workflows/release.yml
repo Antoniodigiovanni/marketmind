@@ -6,7 +6,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   check:
@@ -54,44 +53,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set registry name
-        id: registry
-        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-      - name: Log in to container registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and publish application image
-        id: image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64
-          tags: |
-            ${{ steps.registry.outputs.image }}:${{ github.ref_name }}
-            ${{ steps.registry.outputs.image }}:latest
-          labels: org.opencontainers.image.version=${{ github.ref_name }}
-      - name: Create matching host bundle
+      - name: Create native application archive
         env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
-          IMAGE_NAME: ${{ steps.registry.outputs.image }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          docker pull pgvector/pgvector:pg16
-          postgres_ref="$(docker image inspect pgvector/pgvector:pg16 --format '{{index .RepoDigests 0}}')"
-          test -n "$postgres_ref"
-          mkdir -p bundle/deploy
-          cp docker-compose.prod.yml docker-compose.postgres.yml .env.example bundle/
-          cp deploy/*.sh deploy/logrotate deploy/README.md bundle/deploy/
-          cp -R deploy/systemd bundle/deploy/
-          printf 'MARKETMIND_IMAGE=%s@%s\nMARKETMIND_POSTGRES_IMAGE=%s\nRELEASE_TAG=%s\n' \
-            "$IMAGE_NAME" "$IMAGE_DIGEST" "$postgres_ref" "$RELEASE_TAG" > bundle/release.env
-          tar -czf "marketmind-${RELEASE_TAG}-deploy.tar.gz" -C bundle .
-          sha256sum "marketmind-${RELEASE_TAG}-deploy.tar.gz" > "marketmind-${RELEASE_TAG}-deploy.tar.gz.sha256"
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9][A-Za-z0-9.-]*)?$ ]]
+          mkdir -p bundle/marketmind
+          git archive HEAD agent data server dashboard deploy .env.example pyproject.toml uv.lock | \
+            tar -xf - -C bundle/marketmind
+          printf 'RELEASE_TAG=%s\n' "$RELEASE_TAG" > bundle/marketmind/release.env
+          tar -czf "marketmind-${RELEASE_TAG}-native.tar.gz" -C bundle marketmind
+          sha256sum "marketmind-${RELEASE_TAG}-native.tar.gz" > \
+            "marketmind-${RELEASE_TAG}-native.tar.gz.sha256"
       - name: Publish release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -99,6 +73,6 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "$RELEASE_TAG" \
-            "marketmind-${RELEASE_TAG}-deploy.tar.gz" \
-            "marketmind-${RELEASE_TAG}-deploy.tar.gz.sha256" \
-            --verify-tag --notes "Container image and matching VPS configuration for $RELEASE_TAG."
+            "marketmind-${RELEASE_TAG}-native.tar.gz" \
+            "marketmind-${RELEASE_TAG}-native.tar.gz.sha256" \
+            --verify-tag --notes "Native Debian/Ubuntu application archive for $RELEASE_TAG."

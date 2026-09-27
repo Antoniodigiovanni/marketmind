@@ -1,553 +1,140 @@
-# Marketmind deployment
+# Marketmind on Debian/Ubuntu
 
-Marketmind connects to a shared PostgreSQL instance through its own database
-and role. On a new homelab, the installer creates PostgreSQL as an independent
-Compose project under `/srv/postgres`. Other projects can use that instance,
-and Marketmind updates or shutdowns cannot stop it.
-
-A `v*` Git tag publishes an amd64 application image to GHCR and attaches a
-matching deployment archive to the GitHub release. The archive contains the
-application and shared-PostgreSQL Compose files, `.env.example`, an interactive
-installer, host scripts, systemd units, and `release.env`.
-The server does not need a source checkout or a local build.
+Marketmind runs as a Python application under systemd. **Docker is not needed
+on the host.** PostgreSQL is a separate host service (or an existing reachable
+server); Marketmind owns one database and role, not the PostgreSQL lifecycle.
+The dashboard is optional and runs as a separate, read-only system user.
 
 ## Requirements
 
-- Linux amd64 with Bash 4+, Docker Engine, Compose, systemd, `curl`, `flock`,
-  `sha256sum`, `tar`, and `logrotate`.
-- An external Docker network shared with PostgreSQL. This guide calls it
-  `postgres-network`; it publishes no port.
-- PostgreSQL 16 or later with pgvector installed. The bundled shared image
-  includes pgvector.
-- A deployment account with Docker access and ownership of Marketmind's local
-  state and secret files.
+- Debian/Ubuntu, systemd, Bash 4+, `sudo`, `curl`, `tar`, `sha256sum`, `openssl`,
+  `flock`, `python3`, and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+  The installer can install `postgresql-client` through apt if missing. uv
+  installs the pinned Python 3.12 runtime and locked dependencies into a
+  versioned release directory, so no system Python replacement is needed.
+- PostgreSQL 16+ with pgvector, reachable over TCP (or use the explicit local
+  PostgreSQL installation offer). Provide a distinct `marketmind` database and
+  role; do not reuse another project's database. `pg_trgm` is also required.
+- A non-root deployment account owning `/srv/marketmind` and its `data/raw`,
+  `state`, and `secrets` directories. The installer uses `sudo` for systemd and
+  optional apt packages. Only the MCP service binds `127.0.0.1:8000`.
 
-`jq`, `rclone`, and an off-host destination are needed only for Marketmind's
-optional backup job. When that job is selected, the installer installs missing
-`jq` and `rclone` packages through the host package manager. You still need an
-account or reachable storage location for the off-host destination. Keep the
-timer disabled until a restore has been tested.
+PostgreSQL and the application have independent lifecycles. A local cluster
+installed by apt is **not** stopped or upgraded by Marketmind updates. The
+installer refuses to install a second cluster when PostgreSQL is already
+present. The installer selects the apt default PostgreSQL major version (16+)
+and requires its matching `postgresql-<major>-pgvector` package. If unavailable,
+configure a trusted package repository or attach to an existing pgvector server. Package installation is never automatic.
 
-## 1. Download and verify a release
+## First installation
 
-Replace `vX.Y.Z` with a published release tag:
+Download both assets for a release (use an authenticated workstation for a
+private repository), verify them, then extract the archive:
 
 ```bash
 sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" /srv/marketmind
 cd /srv/marketmind
-release_tag=vX.Y.Z
-release_base="https://github.com/Antoniodigiovanni/marketmind/releases/download/$release_tag"
-curl -fLO "$release_base/marketmind-$release_tag-deploy.tar.gz"
-curl -fLO "$release_base/marketmind-$release_tag-deploy.tar.gz.sha256"
-sha256sum --check "marketmind-$release_tag-deploy.tar.gz.sha256"
-tar -tzf "marketmind-$release_tag-deploy.tar.gz"
-tar -xzf "marketmind-$release_tag-deploy.tar.gz"
-cat release.env
-```
-
-Confirm that `RELEASE_TAG` matches the requested tag. A private repository
-returns `404` to unauthenticated `curl`; download the two assets with an
-authenticated `gh release download` on a trusted workstation and copy them to
-the host. A private package also requires `docker login ghcr.io` with
-read-package access. Updating the bundle leaves `.env`, `secrets/`, `data/raw/`,
-and `state/` alone.
-
-## 2. Run the interactive installer
-
-Run the installer as the normal deployment account, not through `sudo`:
-
-```bash
-cd /srv/marketmind
+release=vX.Y.Z
+base="https://github.com/Antoniodigiovanni/marketmind/releases/download/$release"
+curl -fLO "$base/marketmind-$release-native.tar.gz"
+curl -fLO "$base/marketmind-$release-native.tar.gz.sha256"
+sha256sum -c "marketmind-$release-native.tar.gz.sha256"
+tar -xzf "marketmind-$release-native.tar.gz" --strip-components=1
 ./deploy/install.sh
 ```
 
-The installer checks Docker access before asking configuration questions. It
-requests `sudo` when it installs optional system packages or writes host-level
-systemd and logrotate files. It discovers the current account's UID and GID,
-prepares the local directories, copies the release's pinned image into `.env`,
-creates missing random secrets, creates or connects to the independent shared
-database service, starts the application, and installs the schedule.
-The generated job services run as that account. Existing secrets, data, and
-timer choices are retained when the installer is run again.
-
-The installer also offers the read-only web dashboard. With the bundled
-shared PostgreSQL service, it creates a separate `marketmind_ro` login, limits
-that login to `SELECT` on `agent_runs`, generates the database password, and
-starts the optional Compose profile. With an existing PostgreSQL instance, its
-administrator must create `marketmind_ro` first; the installer then records
-that role's password and starts the dashboard. Choosing no stops a
-previously enabled dashboard without deleting its database credential.
-
-When Tailscale is installed and connected, the installer also offers to publish
-the dashboard privately through Tailscale Serve. The default is HTTPS port 443;
-another port can be selected when that endpoint is already used. The mapping is
-persistent across reboots and is reachable only subject to the tailnet's access
-rules. Marketmind never enables Tailscale Funnel or public internet access.
-
-For every recurring job, the installer explains its work and expected cost,
-asks whether to enable it, and presents the current schedule as the default.
-A custom value can be any calendar expression accepted by
-`systemd-analyze calendar`. The bundled defaults are:
-
-| Job | Enabled | Default schedule |
-|---|---:|---|
-| Daily refresh | Yes | Every day at 06:10 |
-| Universe refresh | Yes | Monday at 06:00 |
-| Company profiles | Yes | 5 January at 06:30 |
-| Company financials | Yes | 1 February, May, August, and November at 04:00 |
-| European filings | Yes | First day of each month at 05:00 |
-| Off-host backup | No | Every day at 02:30 |
-
-The installer also offers to run the initial historical filing backfill. Its
-default is a persistent, one-time systemd timer for the next 22:00 local time;
-`now`, a custom calendar time, and `skip` are also available. Installation does
-not wait for the backfill. The four stages run in order under a shared lock,
-are resumable after interruption, and write a completion marker only after all
-stages succeed.
+Use a fresh directory for a first installation; do not unpack a release over
+an existing application. An existing Docker deployment requires a separate
+migration: verify an off-host backup, stop old timers/services, migrate or
+attach its database, and update host-reachable DSNs and pgpass entries before
+running the native installer. Do not run both stacks against the same state.
+The installer stages the verified archive again in
+`releases/<tag>`, creates its locked virtual environment, starts the MCP service,
+and checks for an authenticated HTTP `401` on the loopback `/mcp` endpoint.
+Application schema migrations run during MCP startup. Downloads and state
+remain outside the versioned release. Secrets are 0600 files and do not enter
+release artifacts. The daily and periodic timers are installed with their
+bundled schedules, but remain disabled on a new host; backup is also disabled.
+Existing timer choices are preserved on reruns. Verify authenticated MCP
+initialization and logs before enabling jobs. An initial historical backfill
+is manual:
 
 ```bash
+sudo systemctl enable --now marketmind-daily.timer  # only after verifying MCP
+sudo systemctl start marketmind-initial-backfill.service
 journalctl -fu marketmind-initial-backfill.service
 ```
 
-## 3. Connect Hermes through MCP
+### Existing PostgreSQL
 
-When Hermes runs directly on the same homelab, add this entry to the
-`~/.hermes/config.yaml` belonging to the account that runs Hermes:
-
-```yaml
-mcp_servers:
-  marketmind:
-    url: "http://127.0.0.1:8000/mcp"
-    headers:
-      Authorization: "Bearer ${MARKETMIND_MCP_TOKEN}"
-    timeout: 300
-    supports_parallel_tool_calls: false
-```
-
-Put the contents of `/srv/marketmind/secrets/mcp_token` in that account's
-`~/.hermes/.env` without adding the value to `config.yaml`:
-
-```dotenv
-MARKETMIND_MCP_TOKEN=<contents of /srv/marketmind/secrets/mcp_token>
-```
-
-Keep both files owner-only, restart Hermes, and verify discovery:
-
-```bash
-chmod 0600 ~/.hermes/config.yaml ~/.hermes/.env
-hermes mcp test marketmind
-```
-
-The URL uses loopback deliberately. If the client runs on another machine,
-forward the endpoint first with
-`ssh -N -L 8000:127.0.0.1:8000 <deploy-user>@<host>`, then use the same URL locally.
-If Hermes runs inside a container, its `127.0.0.1` is a different network
-namespace and it needs explicit container-network wiring instead.
-
-The rest of this document is the manual equivalent and operational reference.
-
-## Manual installation reference
-
-### Prepare local directories
-
-```bash
-cd /srv/marketmind
-install -d -m 0700 data/raw state state/universe state/processed state/refresh secrets
-sudo install -d -m 0700 -o root -g root /var/log/marketmind
-cp -n .env.example .env
-chmod 0600 .env
-docker network inspect postgres-network >/dev/null 2>&1 || \
-  docker network create postgres-network
-```
-
-Copy `MARKETMIND_IMAGE` from `release.env` into `.env`. Set
-`MARKETMIND_UID=$(id -u)`, `MARKETMIND_GID=$(id -g)`, and the SEC contact
-values. `.env` contains non-secret configuration; passwords belong in files
-under `secrets/`.
-
-Choose exactly one database path below.
-
-### Attach to an existing PostgreSQL instance
-
-This is the recommended path when several projects share one PostgreSQL
-instance. Give each project a separate database and owner role:
-
-```text
-one PostgreSQL instance
-├── marketmind database / marketmind role
-├── project_b database / project_b role
-└── project_c database / project_c role
-```
-
-Add the existing PostgreSQL container to the external network in the Compose
-project that owns it. The persistent form is:
-
-```yaml
-services:
-  postgres:
-    networks:
-      marketmind_database:
-        aliases:
-          - postgres-shared
-
-networks:
-  postgres_network:
-    external: true
-    name: postgres-network
-```
-
-Recreate that PostgreSQL service after changing its Compose file. As a
-temporary test, the equivalent command is:
-
-```bash
-docker network connect --alias postgres-shared postgres-network <postgres-container>
-```
-
-Use the database administrator account to create Marketmind's role, database,
-and extensions. Generate a password with `openssl rand -hex 32`, save it in a
-password manager, and enter the same value at the `\password` prompt:
+Provide `MARKETMIND_ADMIN_SERVICE` as the name of a libpq service entry with
+superuser access to the **maintenance** database (`postgres`) to let the
+installer provision the dedicated role, database, and extensions. Store the
+service and its `.pgpass` outside the release directory with owner-only
+permissions. Do not place administrator credentials in `.env` or the
+application's secret files. Alternatively have the PostgreSQL administrator
+prepare the database and role before installation:
 
 ```sql
 CREATE ROLE marketmind LOGIN;
-\password marketmind
+-- Set its password using psql's interactive \password marketmind.
 CREATE DATABASE marketmind OWNER marketmind;
 \connect marketmind
 CREATE EXTENSION vector;
 CREATE EXTENSION pg_trgm;
 ```
 
-The server package must provide pgvector before `CREATE EXTENSION vector` can
-succeed. Marketmind owns only its database. Do not point it at a database that
-already contains another project's tables.
+The existing-server path asks for the assigned application role password and
+writes `secrets/app_pgpass` for the DSN host and port. Select a hostname
+reachable **from the host**, not a Docker network alias. Install/verify the
+pgvector server package before creating the extension. PostgreSQL must permit
+password authentication from the application's host. If `app_pgpass` already
+exists it is retained; update it yourself when changing a DSN or password.
+For a new local cluster accepted at the installer prompt, `local-postgres`
+uses `sudo -u postgres psql` over the peer-authenticated local socket to
+provision only the Marketmind role/database; it does not export a superuser
+password. The application connects to `127.0.0.1` using its own role.
 
-Set these values in `.env`:
-
-```dotenv
-MARKETMIND_DATABASE_NETWORK=postgres-network
-MARKETMIND_DATABASE_DSN=postgresql://marketmind@postgres-shared:5432/marketmind
-MARKETMIND_DASHBOARD_DSN=postgresql://marketmind_ro@postgres-shared:5432/marketmind
-```
-
-Create `secrets/app_pgpass` using the exact DSN hostname and database password:
-
-```text
-postgres-shared:5432:marketmind:marketmind:<database-password>
-```
-
-### Bootstrap the independent shared PostgreSQL instance
-
-Use this path when the homelab does not have PostgreSQL yet. The database stack
-lives under `/srv/postgres`, separately from every application:
-
-```text
-/srv/postgres/       shared PostgreSQL lifecycle and administrator secret
-/srv/marketmind/     Marketmind application and its database-role secret
-```
-
-Prepare the shared stack using the PostgreSQL image from `release.env`:
+## Daily operation and updates
 
 ```bash
-sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" /srv/postgres
-install -d -m 0700 /srv/postgres/secrets
-install -m 0644 docker-compose.postgres.yml /srv/postgres/docker-compose.yml
-cat > /srv/postgres/.env <<EOF
-POSTGRES_IMAGE=<MARKETMIND_POSTGRES_IMAGE from release.env>
-POSTGRES_NETWORK=postgres-network
-POSTGRES_DATA_VOLUME=postgres-shared-data
-EOF
-openssl rand -hex 32 > /srv/postgres/secrets/postgres_admin_password
-chmod 0600 /srv/postgres/.env
-chmod 0644 /srv/postgres/secrets/postgres_admin_password
-docker compose --project-directory /srv/postgres \
-  -f /srv/postgres/docker-compose.yml up -d --wait
-```
-
-Generate Marketmind's separate role password and provision its database:
-
-```bash
-openssl rand -hex 32 > secrets/marketmind_database_password
-chmod 0600 secrets/marketmind_database_password
-./deploy/provision-marketmind-db.sh \
-  /srv/postgres /srv/marketmind/secrets/marketmind_database_password
-```
-
-The shared service publishes the same `postgres-shared` network alias used for
-an existing instance, so the application configuration remains:
-
-```dotenv
-MARKETMIND_DATABASE_NETWORK=postgres-network
-MARKETMIND_DATABASE_DSN=postgresql://marketmind@postgres-shared:5432/marketmind
-MARKETMIND_DASHBOARD_DSN=postgresql://marketmind_ro@postgres-shared:5432/marketmind
-```
-
-Use the Marketmind role password in `secrets/app_pgpass`:
-
-```text
-postgres-shared:5432:marketmind:marketmind:<marketmind-database-password>
-```
-
-The shared PostgreSQL volume persists across container replacement. The
-provisioning script enables `vector` and `pg_trgm` only in Marketmind's
-database. Later projects join `postgres-network` and receive a separate role
-and database. Manage PostgreSQL from `/srv/postgres`, independently of any one
-application.
-
-### Create application secrets
-
-For either database path, create these files after running `umask 077`:
-
-| File | Content |
-|---|---|
-| `app_pgpass` | libpq password line shown in the selected database path |
-| `mcp_token` | independent random bearer token |
-| `llm_api_key` | model-provider key |
-| `fred_api_key` | FRED key |
-
-Generate random values with `openssl rand -hex 32`. Make the files readable
-only by the numeric UID configured in `.env`; libpq rejects an `.pgpass` file
-with permissive permissions:
-
-```bash
-chmod 0600 secrets/app_pgpass secrets/mcp_token secrets/llm_api_key secrets/fred_api_key
-```
-
-Keep `marketmind_database_password` and `app_pgpass` at `0600`. The PostgreSQL
-administrator password belongs only under `/srv/postgres/secrets`; Marketmind
-does not mount or retain it.
-
-### Start and verify Marketmind
-
-```bash
-docker compose -f docker-compose.prod.yml config --quiet
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
-```
-
-Then inspect the application:
-
-```bash
-docker compose -f docker-compose.prod.yml ps
-docker compose -f docker-compose.prod.yml logs --tail=100 marketmind
-```
-
-The MCP service applies versioned migrations on startup. It will fail if the
-database is unreachable, an extension is missing, or the role lacks DDL rights
-in its own database. Send an authenticated MCP `initialize` request to
-`http://127.0.0.1:8000/mcp` with `Authorization: Bearer <mcp_token>`. The port
-is bound to loopback.
-
-Before enabling timers on a new database, populate filing history. The daily
-SEC job starts from a short checkpoint window and cannot recover older filings
-that preceded the deployment. These resumable commands first resolve company
-identities, then load issuer filings and 13F history, complete Company Facts
-history, and European filings:
-
-```bash
-docker compose -f docker-compose.prod.yml run --rm marketmind \
-  uv run --frozen --no-sync python -m data.universe.resolve
-docker compose -f docker-compose.prod.yml run --rm marketmind \
-  uv run --frozen --no-sync python -m data.filings.backfill --issuers
-docker compose -f docker-compose.prod.yml run --rm marketmind \
-  uv run --frozen --no-sync python -m data.filings.backfill --financials
-docker compose -f docker-compose.prod.yml run --rm marketmind \
-  uv run --frozen --no-sync python -m data.filings.esef
-```
-
-The issuer and financial commands can take a long time for the complete
-universe. Re-run either command after an interruption; stored filings and
-checkpoints prevent completed work from being inserted again.
-
-### Install the schedule
-
-Install timers only after the MCP smoke test succeeds. On a host with an older
-installation, remove its cron entry and disable old timers first:
-
-```bash
-sudo rm -f /etc/cron.d/marketmind
-sudo systemctl disable --now marketmind-daily.timer marketmind-universe.timer \
-  marketmind-profiles.timer marketmind-financials.timer marketmind-esef.timer \
-  marketmind-backup.timer \
-  2>/dev/null || true
-sudo install -o root -g root -m 0644 deploy/systemd/* /etc/systemd/system/
-sudo install -o root -g root -m 0644 deploy/logrotate /etc/logrotate.d/marketmind
-sudo systemctl daemon-reload
-sudo systemctl enable --now marketmind-daily.timer marketmind-universe.timer \
-  marketmind-profiles.timer marketmind-financials.timer marketmind-esef.timer
+systemctl status marketmind-mcp.service
+journalctl -u marketmind-mcp.service -n 100
 systemctl list-timers 'marketmind-*'
+marketmind update                  # latest published native release
+marketmind update vX.Y.Z          # selected tag
 ```
 
-The optional web app serves job history and logs at `http://127.0.0.1:8001/`
-and the point-in-time universe at `http://127.0.0.1:8001/universe/` from the
-same container, port and browser session. The universe lists CSV constituents,
-not every company with stored prices; it queries MCP, not the database role
-used for job history. Editing membership is not enabled yet. There is no
-separate catalog service or browser credential; constrain remote access with
-Tailscale ACLs, an SSH tunnel, or an equivalent private access control.
+For a private repository, transfer the two release assets from an authenticated
+workstation and run `./deploy/update.sh /path/to/marketmind-vX.Y.Z-native.tar.gz`.
+`marketmind update` verifies the release archive and checksum, installs locked
+dependencies into a new versioned directory, switches `releases/current`, and
+checks MCP readiness. It restores the previous release if readiness fails.
+Database migrations are not automatically rolled back; take a verified backup
+before upgrades. `.env`, credentials, raw data, state, timer schedules, and the
+PostgreSQL service remain untouched. Updates require network access to GitHub
+and package indexes unless dependencies are already cached. The application
+runs as the deployment account; do not store other projects' secrets in that
+account. Keep PostgreSQL access limited to the host or a private network.
 
-For private remote access through Caddy, a single hostname can proxy all
-paths to `127.0.0.1:8001`. Review the live Caddyfile before changing it;
-repository documentation does not deploy host configuration. Verify Caddy's
-80/443 listeners, firewall and tailnet ACLs first: tailnet DNS alone does not
-ensure only tailnet devices can reach the host.
+## Optional dashboard and backups
 
-Daily refresh, including SEC filings, runs at 06:10; universe refresh Monday at
-06:00; profiles on 5 January at 06:30; financials on 1 February, May, August,
-and November at 04:00; and European filings on the first of each month at
-05:00, in the host timezone. Persistent timers start one missed activation
-after reboot. Daily catch-up is ordered and capped at seven days.
+`marketmind dashboard enable` provisions a `marketmind_ro` login only if the
+installer bootstrapped the local database; with an existing server, an
+administrator must create that login with `CONNECT` on `marketmind`, `USAGE`
+on `public`, and `SELECT` on `agent_runs` only. The dashboard service runs as
+`marketmind-dashboard` with systemd credentials and filesystem read ACLs for
+job logs; install the `acl` package before enabling. It binds to
+`127.0.0.1:8001`. Use SSH forwarding or a private Tailscale Serve mapping,
+never a public tunnel. `marketmind dashboard disable` stops the service.
 
-```bash
-systemctl status marketmind-daily.timer
-journalctl -u marketmind-daily.service -n 100 --no-pager
-```
-
-## Optional web dashboard
-
-The interactive installer performs this section automatically when the
-dashboard is selected. On an existing installation that uses the bundled
-shared PostgreSQL service, the equivalent operation is one command:
-
-```bash
-cd /srv/marketmind
-./deploy/dashboard.sh enable
-```
-
-Use `./deploy/dashboard.sh status` to inspect it and
-`./deploy/dashboard.sh disable` to stop it without deleting the database credential. The
-commands below remain the manual reference for an externally managed
-PostgreSQL instance.
-
-If Tailscale is installed and connected, manage private HTTPS access with:
-
-```bash
-marketmind dashboard tailscale enable
-marketmind dashboard tailscale status
-marketmind dashboard tailscale disable
-```
-
-The enable command uses HTTPS port 443 by default. Pass another port when
-needed, for example `marketmind dashboard tailscale enable 8443`. Disabling it
-removes only the protocol, port, and root-path mapping recorded by Marketmind;
-it does not reset unrelated Tailscale Serve configuration.
-
-Create a separate read-only role through the shared instance's normal
-administration path. Use a different password from the application role:
-
-```sql
-CREATE ROLE marketmind_ro LOGIN;
-\password marketmind_ro
-GRANT CONNECT ON DATABASE marketmind TO marketmind_ro;
-\connect marketmind
-GRANT USAGE ON SCHEMA public TO marketmind_ro;
-GRANT SELECT ON agent_runs TO marketmind_ro;
-```
-
-Create `secrets/dashboard_pgpass` with the hostname selected above:
-
-```text
-postgres-shared:5432:marketmind:marketmind_ro:<read-only-password>
-```
-
-Make `secrets/dashboard_pgpass` mode `0600`, and start the profile:
-
-```bash
-chmod 0600 secrets/dashboard_pgpass
-docker compose -f docker-compose.prod.yml --profile dashboard up -d dashboard
-```
-
-The dashboard itself remains bound to loopback and receives only the read-only
-role and MCP token. Tailscale Serve with tailnet ACLs is the preferred
-remote-access path; an SSH tunnel remains available when Tailscale is not
-configured.
-
-```bash
-ssh -N -L 8001:127.0.0.1:8001 <deploy-user>@<host>
-```
-
-## Optional backups
-
-Leave `marketmind-backup.timer` disabled for now. When PostgreSQL is shared,
-the preferred design is a centralized backup of every database plus a tested
-per-database restore. Marketmind's optional job also produces a coordinated
-set containing a custom-format dump of only the `marketmind` database and its
-local `data/raw` and `state` directories.
-
-When the backup timer is selected, the interactive installer installs missing
-`jq` and `rclone` packages on supported apt, dnf, yum, zypper, and pacman hosts.
-It opens `rclone config` if the named remote does not exist and verifies access
-before saving the destination. The remote is configured for the deployment
-account because the backup service runs as that account.
-
-For the manual path, install `jq` and `rclone`, configure the deployment
-account's rclone remote, create `/srv/marketmind-backups`, and write:
-
-```bash
-sudo install -d -m 0700 /etc/marketmind /srv/marketmind-backups
-printf 'MARKETMIND_BACKUP_REMOTE=offsite:marketmind\n' | \
-  sudo tee /etc/marketmind/backup.conf >/dev/null
-sudo chmod 0600 /etc/marketmind/backup.conf
-sudo systemctl start marketmind-backup.service
-```
-
-The backup script runs the pinned PostgreSQL image as a client on the shared
-database network; it does not assume Marketmind owns the server container.
-After fetching a `.ready` set, test it in an isolated temporary PostgreSQL
-container:
-
-```bash
-sudo /srv/marketmind/deploy/restore-check.sh \
-  /srv/marketmind-backups/marketmind-<stamp>.ready
-```
-
-Enable the timer only after that restore succeeds:
-
-```bash
-sudo systemctl enable --now marketmind-backup.timer
-```
-
-## Updating and rollback
-
-After a release is published, run the operator command as the deployment
-account. The Docker login saved during installation supplies the
-package-registry credential:
-
-```bash
-marketmind update
-```
-
-This installs the newest published release. Use
-`marketmind update vX.Y.Z` when you deliberately want a particular release.
-The updater pulls the selected image from GHCR, resolves it to an immutable
-digest, and copies the matching Compose files and host scripts out of a stopped
-temporary container. It saves the current deployment files under
-`state/deployment-releases/`, installs the new bundle, updates the pinned image,
-recreates the application and enabled dashboard, and refreshes systemd service
-definitions while preserving enabled timers and their schedules. It does not
-replace `.env`, secrets, raw data, state, or the independent PostgreSQL stack.
-
-The release archive remains an offline fallback. Copy the archive and its
-`.sha256` file into `/srv/marketmind`, then pass the archive path instead:
-
-```bash
-cd /srv/marketmind
-./deploy/update.sh marketmind-vX.Y.Z-deploy.tar.gz
-```
-
-That path verifies both the checksum and archive structure before changing the
-installation. The registry path needs only the package-read PAT already stored
-by `docker login`; it does not need authenticated access to GitHub release
-assets.
-
-Inspect the result with:
-
-```bash
-cat state/current-release
-docker compose -f docker-compose.prod.yml ps
-docker compose -f docker-compose.prod.yml logs --tail=100 marketmind
-systemctl list-timers 'marketmind-*'
-```
-
-The old container image and saved deployment files remain available for a
-code-only rollback. A rollback across incompatible database migrations also
-requires restoring the matching database and local files; treat the image,
-database dump, and files as one set.
+The backup timer is deliberately disabled. To enable, install `jq`, `rclone`,
+and the PostgreSQL client utilities, configure an off-host rclone remote, put
+`MARKETMIND_BACKUP_REMOTE=remote:path` in root-owned
+`/etc/marketmind/backup.conf`, and prepare `/srv/marketmind-backups` writable
+by the deployment account. Run a manual backup and restore it to a separate
+empty database and file directory using `deploy/restore-check.sh`; only then
+`sudo systemctl enable --now marketmind-backup.timer`. Backups include a
+`pg_dump` of only Marketmind's database and an archive of raw/state files,
+checksums, and an off-host verification. Never point a restore check at the
+production database or state directory.

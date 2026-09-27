@@ -1,7 +1,7 @@
 [Unit]
 Description=marketmind company profile refresh
 Wants=network-online.target
-After=network-online.target docker.service
+After=network-online.target
 
 [Service]
 Type=oneshot
