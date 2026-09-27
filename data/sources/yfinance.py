@@ -67,23 +67,32 @@ def fetch_ohlcv(
             if ticker not in data.columns.get_level_values(0):
                 continue
             sub = data[ticker].reset_index().copy()
+            if sub.empty:
+                continue
             sub.insert(0, "ticker", ticker)
             frames.append(sub)
     else:
         frame = data.reset_index().copy()
-        frame.insert(0, "ticker", tickers[0])
-        frames.append(frame)
+        if not frame.empty:
+            frame.insert(0, "ticker", tickers[0])
+            frames.append(frame)
 
     if not frames:
         return _empty_frame()
 
     long = pd.concat(frames, ignore_index=True).rename(columns=str.lower)
-    long["date"] = pd.to_datetime(long["date"], utc=True)
+    if "date" not in long.columns and "index" in long.columns:
+        long = long.rename(columns={"index": "date"})
     missing = [c for c in COLUMNS if c not in long.columns]
     if missing:
         raise ValueError(f"download missing required columns: {missing}")
+    long["date"] = pd.to_datetime(long["date"], utc=True)
+    long = long.dropna(subset=["close"])
+    if long.empty:
+        return _empty_frame()
+    long["volume"] = long["volume"].astype("Int64")
 
-    frame = pl.from_pandas(long[COLUMNS]).drop_nulls(subset=["close"])
+    frame = pl.from_pandas(long[COLUMNS])
     return frame.with_columns(pl.col("date").dt.convert_time_zone("UTC"))
 
 

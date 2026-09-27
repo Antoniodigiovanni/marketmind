@@ -53,6 +53,34 @@ def _members(tickers: list[str]) -> pl.DataFrame:
     )
 
 
+async def test_rows_from_ohlcv_normalizes_nan_and_float_volume() -> None:
+    frame = pl.DataFrame(
+        {
+            "date": [dt.datetime(2026, 8, 4, 20, 0, tzinfo=dt.UTC), dt.datetime(2026, 8, 5)],
+            "ticker": ["AAPL", "AAPL"],
+            "open": [100.0, float("nan")],
+            "high": [102.0, float("nan")],
+            "low": [99.0, float("nan")],
+            "close": [101.0, float("nan")],
+            "volume": [1000.0, float("nan")],
+        }
+    )
+
+    rows = fetch_mod._rows_from_ohlcv(frame, "AAPL", "USD")
+
+    assert rows == [
+        {
+            "date": dt.date(2026, 8, 4),
+            "open": 100.0,
+            "high": 102.0,
+            "low": 99.0,
+            "close": 101.0,
+            "volume": 1000,
+            "currency": "USD",
+        }
+    ]
+
+
 async def test_resolve_symbol_listing_returns_none_when_unresolved(pg_conn) -> None:
     assert await fetch_mod.resolve_symbol_listing(pg_conn, "NOPE") is None
 
