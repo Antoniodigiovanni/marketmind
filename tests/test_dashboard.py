@@ -1,9 +1,8 @@
-"""Read-only operations dashboard: auth, rendering, and log access limits."""
+"""Read-only operations dashboard rendering and log access limits."""
 
 from __future__ import annotations
 
 import datetime as dt
-from base64 import b64encode
 from pathlib import Path
 
 import pytest
@@ -11,13 +10,6 @@ from starlette.testclient import TestClient
 
 from dashboard import config, logs, render
 from dashboard.app import EXPECTED_JOBS, build_app, main
-
-TOKEN = "dashboard-secret"
-
-
-def _auth(token: str = TOKEN) -> dict[str, str]:
-    encoded = b64encode(f"ops:{token}".encode()).decode()
-    return {"Authorization": f"Basic {encoded}"}
 
 
 @pytest.fixture
@@ -28,31 +20,18 @@ def client(monkeypatch, tmp_path: Path) -> TestClient:
     async def no_runs():
         return [], None
 
+    async def no_universe(_date: str, _query: str, _offset: int) -> dict[str, object]:
+        return {"total": 0, "rows": []}
+
     monkeypatch.setattr("dashboard.app._recent_runs", no_runs)
-    return TestClient(build_app(TOKEN))
+    monkeypatch.setattr("dashboard.universe.fetch_universe", no_universe)
+    return TestClient(build_app())
 
 
-def test_every_route_requires_the_shared_secret(client: TestClient) -> None:
+def test_dashboard_routes_are_available_without_browser_credentials(client: TestClient) -> None:
     for path in ("/", "/logs/daily.log", "/universe/"):
         response = client.get(path)
-        assert response.status_code == 401
-        assert response.headers["www-authenticate"].startswith("Basic")
-
-
-def test_a_wrong_or_malformed_credential_is_rejected(client: TestClient) -> None:
-    assert client.get("/", headers=_auth("not-the-token")).status_code == 401
-    assert client.get("/", headers={"Authorization": "Basic !!!not-base64"}).status_code == 401
-    assert client.get("/", headers={"Authorization": f"Bearer {TOKEN}"}).status_code == 401
-
-
-def test_the_dashboard_refuses_to_start_without_a_token(monkeypatch) -> None:
-    """It serves full run history and error text, so it never runs open."""
-    monkeypatch.delenv(config.TOKEN_ENV, raising=False)
-    with pytest.raises(RuntimeError):
-        config.token()
-    monkeypatch.setenv(config.TOKEN_ENV, "   ")
-    with pytest.raises(RuntimeError):
-        config.token()
+        assert response.status_code != 401
 
 
 def test_the_dashboard_refuses_to_use_an_unset_database_dsn(monkeypatch) -> None:
@@ -80,7 +59,7 @@ def test_it_binds_loopback_unless_told_otherwise(monkeypatch) -> None:
 
 
 def test_overview_renders_and_flags_jobs_that_never_ran(client: TestClient) -> None:
-    response = client.get("/", headers=_auth())
+    response = client.get("/")
 
     assert response.status_code == 200
     assert "never run" in response.text
@@ -96,7 +75,7 @@ def test_overview_survives_a_database_outage(monkeypatch, tmp_path: Path) -> Non
         return [], "Could not read run history: connection refused"
 
     monkeypatch.setattr("dashboard.app._recent_runs", failing)
-    response = TestClient(build_app(TOKEN)).get("/", headers=_auth())
+    response = TestClient(build_app()).get("/")
 
     assert response.status_code == 200
     assert "connection refused" in response.text
@@ -117,7 +96,7 @@ def test_log_names_cannot_escape_the_configured_directories(tmp_path: Path) -> N
 def test_a_traversing_request_is_not_served(client: TestClient, tmp_path: Path) -> None:
     (tmp_path.parent / "secret.log").write_text("private", encoding="utf-8")
 
-    response = client.get("/logs/..%2Fsecret.log", headers=_auth())
+    response = client.get("/logs/..%2Fsecret.log")
 
     assert response.status_code == 404
     assert "private" not in response.text
@@ -128,7 +107,7 @@ def test_navigation_is_available_on_both_operations_pages(
 ) -> None:
     (tmp_path / "daily.log").write_text("ok", encoding="utf-8")
     for path in ("/", "/logs/daily.log"):
-        response = client.get(path, headers=_auth())
+        response = client.get(path)
         assert response.status_code == 200
         assert "href='/universe/'" in response.text
         assert "href='/' aria-current='page'" in response.text
@@ -137,7 +116,7 @@ def test_navigation_is_available_on_both_operations_pages(
 def test_a_log_file_is_served_from_its_tail(client: TestClient, tmp_path: Path) -> None:
     (tmp_path / "daily.log").write_text("first line\nsecond line\n", encoding="utf-8")
 
-    response = client.get("/logs/daily.log", headers=_auth())
+    response = client.get("/logs/daily.log")
 
     assert response.status_code == 200
     assert "second line" in response.text

@@ -290,14 +290,13 @@ configure_dashboard() {
   TAILSCALE_DASHBOARD_PORT=
   if [[ -f "$INSTALL_DIR/state/dashboard-enabled" ]]; then
     default=$(< "$INSTALL_DIR/state/dashboard-enabled")
-  elif [[ -s "$INSTALL_DIR/secrets/dashboard_token" && \
-          -s "$INSTALL_DIR/secrets/dashboard_pgpass" ]]; then
+  elif [[ -s "$INSTALL_DIR/secrets/dashboard_pgpass" ]]; then
     default=yes
   fi
 
   heading "Web dashboard"
   say "The optional web app shows scheduled jobs, logs, and universe membership."
-  say "It is read-only, password protected, and published only on 127.0.0.1:8001."
+  say "It is read-only and published only on 127.0.0.1:8001; use Tailscale ACLs for remote access."
   if ! prompt_yes_no "Enable the web dashboard?" "$default"; then
     DASHBOARD_ENABLED=no
     return 0
@@ -655,7 +654,6 @@ main() {
     else
       info "Dashboard: http://127.0.0.1:8001"
     fi
-    info "Dashboard password file: $INSTALL_DIR/secrets/dashboard_token"
   fi
   if [[ "$BACKFILL_MODE" != skip ]]; then
     info "Follow backfill: journalctl -fu marketmind-initial-backfill.service"

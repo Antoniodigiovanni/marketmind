@@ -68,7 +68,6 @@ services:
       # database password and external-source credentials.
       MARKETMIND_DASHBOARD_DSN: ${MARKETMIND_DASHBOARD_DSN:-}
       PGPASSFILE: /run/secrets/dashboard_pgpass
-      MARKETMIND_DASHBOARD_TOKEN_FILE: /run/secrets/dashboard_token
       MARKETMIND_DASHBOARD_PORT: ${MARKETMIND_DASHBOARD_PORT:-8001}
       MARKETMIND_DASHBOARD_HOST: "0.0.0.0"
       MARKETMIND_DASHBOARD_LOG_DIRS: /var/lib/marketmind/refresh/logs:/var/log/marketmind
@@ -87,8 +86,8 @@ services:
       - ALL
     networks:
       - database
-    # Published on loopback only. Reaching it from another machine is an SSH
-    # port-forward unless a TLS-terminating reverse proxy is put in front.
+    # Published on loopback only. Reaching it from another machine requires
+    # a constrained private path such as Tailscale Serve with ACLs or SSH.
     ports:
       - "127.0.0.1:${MARKETMIND_DASHBOARD_PORT:-8001}:${MARKETMIND_DASHBOARD_PORT:-8001}"
     volumes:
@@ -96,7 +95,6 @@ services:
       - /var/log/marketmind:/var/log/marketmind:ro
     secrets:
       - dashboard_pgpass
-      - dashboard_token
       - mcp_token
 
 secrets:
@@ -110,8 +108,6 @@ secrets:
     file: ./secrets/fred_api_key
   dashboard_pgpass:
     file: ./secrets/dashboard_pgpass
-  dashboard_token:
-    file: ./secrets/dashboard_token
 
 networks:
   database:

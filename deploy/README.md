@@ -72,11 +72,11 @@ timer choices are retained when the installer is run again.
 
 The installer also offers the read-only web dashboard. With the bundled
 shared PostgreSQL service, it creates a separate `marketmind_ro` login, limits
-that login to `SELECT` on `agent_runs`, generates the browser token and database
-password, and starts the optional Compose profile. With an existing PostgreSQL
-instance, its administrator must create `marketmind_ro` first; the installer
-then records that role's password and starts the dashboard. Choosing no stops a
-previously enabled dashboard without deleting its credentials.
+that login to `SELECT` on `agent_runs`, generates the database password, and
+starts the optional Compose profile. With an existing PostgreSQL instance, its
+administrator must create `marketmind_ro` first; the installer then records
+that role's password and starts the dashboard. Choosing no stops a
+previously enabled dashboard without deleting its database credential.
 
 When Tailscale is installed and connected, the installer also offers to publish
 the dashboard privately through Tailscale Serve. The default is HTTPS port 443;
@@ -381,7 +381,8 @@ and the point-in-time universe at `http://127.0.0.1:8001/universe/` from the
 same container, port and browser session. The universe lists CSV constituents,
 not every company with stored prices; it queries MCP, not the database role
 used for job history. Editing membership is not enabled yet. There is no
-separate catalog service or browser credential.
+separate catalog service or browser credential; constrain remote access with
+Tailscale ACLs, an SSH tunnel, or an equivalent private access control.
 
 For private remote access through Caddy, a single hostname can proxy all
 paths to `127.0.0.1:8001`. Review the live Caddyfile before changing it;
@@ -412,7 +413,7 @@ cd /srv/marketmind
 ```
 
 Use `./deploy/dashboard.sh status` to inspect it and
-`./deploy/dashboard.sh disable` to stop it without deleting credentials. The
+`./deploy/dashboard.sh disable` to stop it without deleting the database credential. The
 commands below remain the manual reference for an externally managed
 PostgreSQL instance.
 
@@ -447,16 +448,17 @@ Create `secrets/dashboard_pgpass` with the hostname selected above:
 postgres-shared:5432:marketmind:marketmind_ro:<read-only-password>
 ```
 
-Put an independent browser password in `secrets/dashboard_token`, make both
-files mode `0600`, and start the profile:
+Make `secrets/dashboard_pgpass` mode `0600`, and start the profile:
 
 ```bash
+chmod 0600 secrets/dashboard_pgpass
 docker compose -f docker-compose.prod.yml --profile dashboard up -d dashboard
 ```
 
 The dashboard itself remains bound to loopback and receives only the read-only
-role and its browser token. Tailscale Serve is the preferred remote-access path;
-an SSH tunnel remains available when Tailscale is not configured.
+role and MCP token. Tailscale Serve with tailnet ACLs is the preferred
+remote-access path; an SSH tunnel remains available when Tailscale is not
+configured.
 
 ```bash
 ssh -N -L 8001:127.0.0.1:8001 <deploy-user>@<host>

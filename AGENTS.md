@@ -96,11 +96,10 @@ Always use `uv run` for Python commands. In containers and systemd jobs, use
 - The optional web app uses the `dashboard` Compose profile. It may read
   `agent_runs` and selected job logs through its SELECT-only role; market-data
   pages use authenticated MCP tools. Its container receives only its read-only
-  DSN/password and the credentials needed for browser access and MCP, never
-  the main database password or source credentials. Publish it on loopback;
-  remote access goes through an encrypted, restricted tunnel or private
-  reverse proxy. `dashboard.sh` may configure a private Tailscale Serve
-  mapping, but never Tailscale Funnel.
+  DSN/password and MCP credential, never the main database password or source
+  credentials. Publish it on loopback; remote access goes through an encrypted,
+  restricted tunnel or private reverse proxy. `dashboard.sh` may configure a
+  private Tailscale Serve mapping, but never Tailscale Funnel.
 - `deploy/install.sh` owns first-host configuration. Routine releases use
   `deploy/update.sh`, which preserves runtime configuration, credentials,
   state, timer choices, and the independent PostgreSQL service. Dashboard

@@ -5,11 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from data.credentials import credential
-
 HOST_ENV = "MARKETMIND_DASHBOARD_HOST"
 PORT_ENV = "MARKETMIND_DASHBOARD_PORT"
-TOKEN_ENV = "MARKETMIND_DASHBOARD_TOKEN"
 DSN_ENV = "MARKETMIND_DASHBOARD_DSN"
 LOG_DIRS_ENV = "MARKETMIND_DASHBOARD_LOG_DIRS"
 
@@ -26,19 +23,6 @@ def host() -> str:
 def port() -> int:
     """Return the dashboard listen port."""
     return int(os.getenv(PORT_ENV, str(DEFAULT_PORT)))
-
-
-def token() -> str:
-    """Return the shared secret required on every request.
-
-    Raises:
-        RuntimeError: If the token is unset or blank. The dashboard exposes
-            full run history and error text, so it never serves unauthenticated.
-    """
-    value = credential(TOKEN_ENV)
-    if not value:
-        raise RuntimeError(f"{TOKEN_ENV} must be set to a nonblank value")
-    return value
 
 
 def dsn() -> str:

@@ -17,10 +17,10 @@ wait_until_ready() {
   for ((attempt = 1; attempt <= 30; attempt++)); do
     status=$(curl -sS -o /dev/null -w '%{http_code}' \
       http://127.0.0.1:8001/ 2>/dev/null || true)
-    if [[ "$status" == 401 ]]; then return 0; fi
+    if [[ "$status" == 200 ]]; then return 0; fi
     sleep 2
   done
-  die "dashboard did not respond with HTTP 401 within 60 seconds"
+  die "dashboard did not respond with HTTP 200 within 60 seconds"
 }
 
 write_secret() {
@@ -65,12 +65,6 @@ prepare_shared_credentials() {
   unset password
 }
 
-prepare_browser_credential() {
-  if [[ ! -s "$INSTALL_DIR/secrets/dashboard_token" ]]; then
-    write_secret "$INSTALL_DIR/secrets/dashboard_token" "$(openssl rand -hex 32)"
-  fi
-}
-
 prepare_external_credentials() {
   local dashboard_dsn=$1 authority database_host database_port password escaped_password
   [[ -t 0 ]] || die "create secrets/dashboard_pgpass for the existing marketmind_ro role"
@@ -111,8 +105,6 @@ enable_dashboard() {
     dashboard_dsn=postgresql://marketmind_ro@postgres-shared:5432/marketmind
     set_env MARKETMIND_DASHBOARD_DSN "$dashboard_dsn"
   fi
-  prepare_browser_credential
-
   mode=$(cat "$INSTALL_DIR/state/deployment-mode" 2>/dev/null || true)
   if [[ "$mode" == shared-local ]]; then
     prepare_shared_credentials
@@ -121,8 +113,7 @@ enable_dashboard() {
   elif [[ ! -s "$INSTALL_DIR/secrets/dashboard_pgpass" ]]; then
     prepare_external_credentials "$dashboard_dsn"
   fi
-  chmod 0600 "$INSTALL_DIR/secrets/dashboard_token" \
-    "$INSTALL_DIR/secrets/dashboard_pgpass"
+  chmod 0600 "$INSTALL_DIR/secrets/dashboard_pgpass"
 
   "${COMPOSE[@]}" config --quiet
   "${COMPOSE[@]}" up -d --wait --wait-timeout 60 dashboard
@@ -131,14 +122,13 @@ enable_dashboard() {
   ok "Dashboard is running at http://127.0.0.1:8001"
   printf '  From another computer: ssh -N -L 8001:127.0.0.1:8001 %s@%s\n' \
     "$(id -un)" "$(hostname)"
-  printf '  Browser password: cat %s/secrets/dashboard_token\n' "$INSTALL_DIR"
 }
 
 disable_dashboard() {
   "${COMPOSE[@]}" stop dashboard >/dev/null 2>&1 || true
   install -d -m 0700 "$INSTALL_DIR/state"
   printf 'no\n' > "$INSTALL_DIR/state/dashboard-enabled"
-  ok "Dashboard is disabled; its credentials were retained."
+  ok "Dashboard is disabled; its database credential was retained."
 }
 
 dashboard_status() {
