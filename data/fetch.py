@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime as dt
+import math
 import uuid
 
 import polars as pl
@@ -175,6 +176,15 @@ async def fetch_benchmark_prices(conn, *, as_of: str) -> dict[str, list[str]]:
     return summary
 
 
+def _finite_number(value: object) -> object:
+    """Return None for null/NaN floats, otherwise the original value."""
+    if value is None:
+        return None
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
+
+
 def _rows_from_ohlcv(frame: pl.DataFrame, symbol: str, currency: str) -> list[dict[str, object]]:
     """Convert one symbol's slice of a fetch_ohlcv frame into upsert_prices rows."""
     if frame.is_empty():
@@ -182,17 +192,19 @@ def _rows_from_ohlcv(frame: pl.DataFrame, symbol: str, currency: str) -> list[di
     subset = frame.filter(pl.col("ticker") == symbol)
     rows: list[dict[str, object]] = []
     for row in subset.to_dicts():
-        if row["close"] is None:
+        close = _finite_number(row["close"])
+        if close is None:
             continue
         value = row["date"]
+        volume = _finite_number(row["volume"])
         rows.append(
             {
                 "date": value.date() if hasattr(value, "date") else value,
-                "open": row["open"],
-                "high": row["high"],
-                "low": row["low"],
-                "close": row["close"],
-                "volume": row["volume"],
+                "open": _finite_number(row["open"]),
+                "high": _finite_number(row["high"]),
+                "low": _finite_number(row["low"]),
+                "close": close,
+                "volume": int(volume) if volume is not None else None,
                 "currency": currency,
             }
         )

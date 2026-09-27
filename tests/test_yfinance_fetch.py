@@ -52,3 +52,35 @@ def test_fetch_ohlcv_drops_missing_ticker() -> None:
 
     df = fetch_ohlcv(["AAPL", "MSFT"], "2026-08-01", "2026-08-05", downloader=fake_downloader)
     assert set(df["ticker"].unique().to_list()) == {"AAPL"}
+
+
+def test_fetch_ohlcv_returns_empty_for_empty_single_ticker_download() -> None:
+    def fake_downloader(*args: object, **kwargs: object) -> pd.DataFrame:
+        columns = pd.MultiIndex.from_product([["NOPE"], ["Open", "High", "Low", "Close", "Volume"]])
+        return pd.DataFrame(columns=columns)
+
+    df = fetch_ohlcv(["NOPE"], "2026-08-01", "2026-08-05", downloader=fake_downloader)
+    assert df.is_empty()
+
+
+def test_fetch_ohlcv_drops_nan_close_and_keeps_nullable_integer_volume() -> None:
+    index = pd.to_datetime(["2026-08-03 20:00:00+00:00", "2026-08-04 20:00:00+00:00"]).rename(
+        "Date"
+    )
+    data = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0],
+            "High": [102.0, 103.0],
+            "Low": [99.0, 100.0],
+            "Close": [101.0, float("nan")],
+            "Volume": [1000.0, float("nan")],
+        },
+        index=index,
+    )
+
+    def fake_downloader(*args: object, **kwargs: object) -> pd.DataFrame:
+        return data
+
+    df = fetch_ohlcv(["AAPL"], "2026-08-01", "2026-08-05", downloader=fake_downloader)
+    assert df.height == 1
+    assert df["volume"].to_list() == [1000]
