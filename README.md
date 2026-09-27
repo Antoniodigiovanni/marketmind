@@ -100,32 +100,30 @@ RUN_LIVE_TESTS=1 uv run pytest tests/integration -m live --no-cov
 
 ### Environment variables
 
-`.env` is never committed. In production it contains non-secret Compose
-settings; credentials live in untracked `secrets/` files mounted only into
+`.env` is never committed. In production it contains non-secret host
+settings; credentials live in untracked `secrets/` files exposed only to
 services that need them. Locally, export values in your shell or pass
 `--env-file .env` to `uv run` yourself — no code calls `python-dotenv`.
 
 | Variable | Purpose |
 |---|---|
-| `MARKETMIND_IMAGE` | Published image reference shared by the MCP service, dashboard, and scheduled jobs |
-| `AI_API_KEY_FILE` | Mounted chat API key for extraction / structuring in production |
+| `AI_API_KEY_FILE` | Chat API key file for extraction / structuring in production |
 | `LLM_BASE_URL` | Chat endpoint (default `https://api.deepseek.com`) |
 | `LLM_MODEL` | Model identifier (default `deepseek-chat`) |
 | `LLM_MAX_RETRIES` | Retry attempts for transient chat API failures (default 3) |
 | `LLM_TIMEOUT_SECONDS` | Chat API request timeout (default 60) |
-| `FRED_API_KEY_FILE` | Mounted FRED key in production |
+| `FRED_API_KEY_FILE` | FRED key file in production |
 | `SEC_CONTACT_NAME` | Operator name sent to SEC EDGAR and filings.xbrl.org (required) |
 | `SEC_CONTACT_EMAIL` | Operator email sent with every EDGAR request (required) |
 | `INGEST_MAX_CONSECUTIVE_FAILURES` | Consecutive extraction failures before the ingest run aborts (default 20) |
 | `INGEST_PRE_SCORE_MIN` | Minimum credibility/recency score sent to extraction (default 0.30) |
 | `INGEST_MAX_NEWS_PER_FEED` | Maximum accepted articles from each company feed (default 30) |
 | `MARKETMIND_DATABASE_DSN` | Postgres connection string; unset falls back to the local docker-compose test database |
-| `MARKETMIND_MCP_TOKEN_FILE` | Path to mounted MCP bearer token in production |
+| `MARKETMIND_MCP_TOKEN_FILE` | Path to MCP bearer token file in production |
 | `MARKETMIND_MCP_PORT` | Port the MCP server listens on (default 8000) |
-| `MARKETMIND_REFRESH_DIR` | Shared refresh lock/status/log directory (production: `/var/lib/marketmind/refresh`) |
-| `MARKETMIND_UID` / `MARKETMIND_GID` | Numeric owner used by the production app container for its bind-mounted data tree |
+| `MARKETMIND_REFRESH_DIR` | Shared refresh lock/status/log directory (production: `/srv/marketmind/state/refresh`) |
 | `MARKETMIND_DASHBOARD_DSN` | SELECT-only Postgres DSN used for run history in the web app |
-| `PGPASSFILE` | Owner-only PostgreSQL password file mounted per service |
+| `PGPASSFILE` | Owner-only PostgreSQL password file for the service |
 | `MARKETMIND_DASHBOARD_PORT` | Dashboard listen port (default 8001) |
 | `MARKETMIND_DASHBOARD_HOST` | Dashboard bind address (default `127.0.0.1`) |
 | `MARKETMIND_DASHBOARD_LOG_DIRS` | Colon-separated directories whose `.log` files the dashboard may serve |
@@ -153,15 +151,15 @@ The daily price/macro fetch, universe refresh, symbol resolution, news ingest,
 market-view structuring, filings pipeline, company profiles, and MCP server are
 functional.
 
-## Deployment (generic VPS)
+## Deployment (Debian/Ubuntu)
 
-A `v*` release tag builds and publishes one application image and a matching
-host configuration archive. The archive includes pinned application and
-PostgreSQL image digests. The VPS downloads that archive and pulls the images;
-it does not clone or build the source. Compose keeps PostgreSQL and MCP
-running; systemd timers launch scheduled jobs from the same pinned image.
-Only loopback ports are published. The [deployment guide](deploy/README.md)
-covers credentials, an optional offsite backup restore drill, scheduling, and updates.
+A `v*` release publishes a checksum-verified native application archive with
+locked Python dependencies and host scripts. The VPS needs no Docker or source
+checkout: systemd runs the MCP service and jobs from the versioned release.
+PostgreSQL with pgvector is an independent service, either pre-existing or
+explicitly installed via apt. Only loopback application ports are bound.
+The [deployment guide](deploy/README.md) covers installation, credentials,
+backups, scheduling, and updates.
 
 ### Web dashboard
 

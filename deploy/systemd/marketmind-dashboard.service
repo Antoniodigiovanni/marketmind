@@ -1,0 +1,25 @@
+[Unit]
+Description=marketmind read-only dashboard
+Wants=network-online.target
+After=network-online.target marketmind-mcp.service
+
+[Service]
+Type=simple
+User=marketmind-dashboard
+Group=marketmind-dashboard
+WorkingDirectory=/srv/marketmind
+LoadCredential=dashboard_env:/srv/marketmind/.env
+LoadCredential=dashboard_pgpass:/srv/marketmind/secrets/dashboard_pgpass
+LoadCredential=mcp_token:/srv/marketmind/secrets/mcp_token
+ExecStart=/srv/marketmind/deploy/dashboard.sh serve
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+InaccessiblePaths=/srv/marketmind/secrets /srv/marketmind/.env /srv/marketmind/data/raw
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
