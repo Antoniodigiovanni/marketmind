@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
+import pty
 import subprocess
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -39,6 +43,111 @@ def test_update_preserves_mutable_files_and_rolls_back_on_failed_readiness() -> 
     assert '"$install_dir/secrets"' not in updater
     assert 'cp -a "$payload/." "$new_dir/"' in updater
     assert 'ln -s "$install_dir/data/raw"' in updater
+    assert 'UV_PYTHON_INSTALL_DIR="$install_dir/runtime/python"' in updater
+    assert "uv python install 3.12" in updater
+    assert "uv sync --frozen --no-dev --managed-python --python 3.12" in updater
+    assert '"$python_path" == "$UV_PYTHON_INSTALL_DIR/"*' in updater
+
+
+def test_release_provides_location_independent_installer() -> None:
+    workflow = _text(".github/workflows/release.yml")
+    installer = _text("deploy/bootstrap.sh")
+    assert "install -m 0755 deploy/bootstrap.sh" in workflow
+    assert '"marketmind-${RELEASE_TAG}-install.sh"' in workflow
+    assert 'archive=$(realpath -- "$1")' in installer
+    assert '"$install_dir/deploy/install.sh"' in installer
+    assert '"$archive" != "$install_dir/$name"' in installer
+
+
+def test_bootstrap_accepts_archive_from_another_directory_and_preserves_state(
+    tmp_path: Path,
+) -> None:
+    payload = tmp_path / "source" / "marketmind"
+    (payload / "deploy").mkdir(parents=True)
+    installer = payload / "deploy" / "install.sh"
+    installer.write_text(
+        '#!/bin/sh\nprintf installed > "$(dirname "$(dirname "$0")")/install-result"\n'
+    )
+    installer.chmod(0o755)
+    (payload / "deploy" / "update.sh").write_text("#!/bin/sh\n")
+    (payload / "pyproject.toml").write_text("[project]\n")
+    (payload / "uv.lock").write_text("version = 1\n")
+    (payload / "release.env").write_text("RELEASE_TAG=v0.4.1\n")
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    archive = downloads / "marketmind-v0.4.1-native.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(payload, arcname="marketmind")
+    checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
+    (downloads / f"{archive.name}.sha256").write_text(f"{checksum}  {archive.name}\n")
+
+    target = tmp_path / "installed"
+    (target / "secrets").mkdir(parents=True)
+    (target / "secrets" / "keep").write_text("private")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    sudo = fake_bin / "sudo"
+    sudo.write_text('#!/bin/sh\nexec "$@"\n')
+    sudo.chmod(0o755)
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "MARKETMIND_INSTALL_DIR": str(target),
+    }
+    master, slave = pty.openpty()
+    try:
+        result = subprocess.run(
+            ["bash", str(DEPLOY / "bootstrap.sh"), str(archive)],
+            cwd=tmp_path,
+            env=env,
+            stdin=slave,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    finally:
+        os.close(master)
+        os.close(slave)
+    assert result.returncode == 0, result.stderr
+    assert (target / "install-result").read_text() == "installed"
+    assert (target / "secrets" / "keep").read_text() == "private"
+    assert (target / archive.name).is_file()
+
+
+@pytest.mark.parametrize("unsafe_member", [False, True])
+def test_bootstrap_rejects_bad_checksum_or_unsafe_member(
+    tmp_path: Path, unsafe_member: bool
+) -> None:
+    archive = tmp_path / "marketmind-v0.4.1-native.tar.gz"
+    if unsafe_member:
+        with tarfile.open(archive, "w:gz") as tar:
+            member = tarfile.TarInfo("marketmind/deploy/install.sh")
+            member.type = tarfile.SYMTYPE
+            member.linkname = "/etc/passwd"
+            tar.addfile(member)
+    else:
+        archive.write_bytes(b"invalid release")
+    checksum = hashlib.sha256(archive.read_bytes()).hexdigest() if unsafe_member else "0" * 64
+    (tmp_path / f"{archive.name}.sha256").write_text(f"{checksum}  {archive.name}\n")
+    target = tmp_path / "installed"
+    env = os.environ | {"MARKETMIND_INSTALL_DIR": str(target)}
+    master, slave = pty.openpty()
+    try:
+        result = subprocess.run(
+            ["bash", str(DEPLOY / "bootstrap.sh"), str(archive)],
+            cwd=tmp_path,
+            env=env,
+            stdin=slave,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    finally:
+        os.close(master)
+        os.close(slave)
+    assert result.returncode != 0
+    assert not target.exists()
 
 
 def test_installer_never_manages_an_existing_postgres_cluster() -> None:
@@ -97,6 +206,7 @@ def test_backup_is_a_verified_set_and_restore_is_isolated() -> None:
 @pytest.mark.parametrize(
     "script",
     [
+        "bootstrap.sh",
         "install.sh",
         "update.sh",
         "native-run.sh",

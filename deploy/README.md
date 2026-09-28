@@ -10,8 +10,8 @@ The dashboard is optional and runs as a separate, read-only system user.
 - Debian/Ubuntu, systemd, Bash 4+, `sudo`, `curl`, `tar`, `sha256sum`, `openssl`,
   `flock`, `python3`, and [uv](https://docs.astral.sh/uv/getting-started/installation/).
   The installer can install `postgresql-client` through apt if missing. uv
-  installs the pinned Python 3.12 runtime and locked dependencies into a
-  versioned release directory, so no system Python replacement is needed.
+  installs Python 3.12 under `/srv/marketmind/runtime/python` and locked
+  dependencies in each versioned release; no system Python replacement is needed.
 - PostgreSQL 16+ with pgvector, reachable over TCP (or use the explicit local
   PostgreSQL installation offer). Provide a distinct `marketmind` database and
   role; do not reuse another project's database. `pg_trgm` is also required.
@@ -24,33 +24,34 @@ installed by apt is **not** stopped or upgraded by Marketmind updates. The
 installer refuses to install a second cluster when PostgreSQL is already
 present. The installer selects the apt default PostgreSQL major version (16+)
 and requires its matching `postgresql-<major>-pgvector` package. If unavailable,
-configure a trusted package repository or attach to an existing pgvector server. Package installation is never automatic.
+configure a trusted package repository or attach to an existing pgvector server.
+Package installation requires explicit confirmation.
 
 ## First installation
 
-Download both assets for a release (use an authenticated workstation for a
-private repository), verify them, then extract the archive:
+Download the archive, checksum, installer, and installer checksum to **any**
+directory. For this private repository, use an authenticated `gh` session:
 
 ```bash
-sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" /srv/marketmind
-cd /srv/marketmind
 release=vX.Y.Z
-base="https://github.com/Antoniodigiovanni/marketmind/releases/download/$release"
-curl -fLO "$base/marketmind-$release-native.tar.gz"
-curl -fLO "$base/marketmind-$release-native.tar.gz.sha256"
+gh release download "$release" -R Antoniodigiovanni/marketmind \
+  -p "marketmind-$release-native.tar.gz*" -p "marketmind-$release-install.sh*"
 sha256sum -c "marketmind-$release-native.tar.gz.sha256"
-tar -xzf "marketmind-$release-native.tar.gz" --strip-components=1
-./deploy/install.sh
+sha256sum -c "marketmind-$release-install.sh.sha256"
+./marketmind-$release-install.sh "$(realpath "marketmind-$release-native.tar.gz")"
 ```
 
-Use a fresh directory for a first installation; do not unpack a release over
-an existing application. An existing Docker deployment requires a separate
+Run as the deployment account, not root. The installer verifies the archive,
+creates `/srv/marketmind`, copies the code and archive there, and preserves
+existing `.env`, secrets, raw data, and state on a retry. It does not overwrite
+an already installed release; use `marketmind update` for routine updates. An existing Docker deployment requires a separate
 migration: verify an off-host backup, stop old timers/services, migrate or
 attach its database, and update host-reachable DSNs and pgpass entries before
 running the native installer. Do not run both stacks against the same state.
 The installer stages the verified archive again in
 `releases/<tag>`, creates its locked virtual environment, starts the MCP service,
-and checks for an authenticated HTTP `401` on the loopback `/mcp` endpoint.
+and checks that the loopback `/mcp` endpoint rejects unauthenticated requests
+with HTTP `401`.
 Application schema migrations run during MCP startup. Downloads and state
 remain outside the versioned release. Secrets are 0600 files and do not enter
 release artifacts. The daily and periodic timers are installed with their

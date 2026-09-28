@@ -151,8 +151,12 @@ PGPASSFILE="$install_dir/secrets/app_pgpass" \
 # Install from a verified native release archive. The update command stages a
 # locked environment and atomically switches the MCP service with health check.
 if [[ ! -L "$install_dir/releases/current" ]]; then
-  archive=$(find "$install_dir" -maxdepth 1 -name 'marketmind-v*-native.tar.gz' -print -quit)
-  [[ -n "$archive" && -f "$archive.sha256" ]] || \
+  release_tag=$(awk -F= '$1 == "RELEASE_TAG" {print $2; exit}' \
+    "$install_dir/release.env")
+  [[ "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9][A-Za-z0-9.-]*)?$ ]] || \
+    fail 'Missing or invalid release tag.'
+  archive="$install_dir/marketmind-$release_tag-native.tar.gz"
+  [[ -f "$archive" && -f "$archive.sha256" ]] || \
     fail 'Place the matching native release .tar.gz and .sha256 in the install directory.'
   "$script_dir/update.sh" "$archive"
 else

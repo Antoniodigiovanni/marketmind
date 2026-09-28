@@ -66,6 +66,9 @@ jobs:
           tar -czf "marketmind-${RELEASE_TAG}-native.tar.gz" -C bundle marketmind
           sha256sum "marketmind-${RELEASE_TAG}-native.tar.gz" > \
             "marketmind-${RELEASE_TAG}-native.tar.gz.sha256"
+          install -m 0755 deploy/bootstrap.sh "marketmind-${RELEASE_TAG}-install.sh"
+          sha256sum "marketmind-${RELEASE_TAG}-install.sh" > \
+            "marketmind-${RELEASE_TAG}-install.sh.sha256"
       - name: Publish release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -75,4 +78,6 @@ jobs:
           gh release create "$RELEASE_TAG" \
             "marketmind-${RELEASE_TAG}-native.tar.gz" \
             "marketmind-${RELEASE_TAG}-native.tar.gz.sha256" \
+            "marketmind-${RELEASE_TAG}-install.sh" \
+            "marketmind-${RELEASE_TAG}-install.sh.sha256" \
             --verify-tag --notes "Native Debian/Ubuntu application archive for $RELEASE_TAG."
