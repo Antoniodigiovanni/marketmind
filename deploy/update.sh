@@ -41,7 +41,7 @@ rollback() {
 }
 trap rollback EXIT
 
-for cmd in awk curl flock install ln mktemp mv python3 sha256sum sudo systemctl tar uv; do
+for cmd in awk curl flock install ln mktemp mv python3 readlink sha256sum sudo systemctl tar uv; do
   command -v "$cmd" >/dev/null || die "required command not found: $cmd"
 done
 [[ $(id -u) -ne 0 ]] || die 'Run as the deployment account, not root.'
@@ -49,7 +49,7 @@ done
 [[ -d "$install_dir/data/raw" ]] || die 'missing shared data/raw directory'
 [[ "$install_dir" != *[[:space:]]* ]] || die 'installation path cannot contain spaces'
 install -d -m 0700 "$install_dir/state/refresh"
-install -d -m 0755 "$install_dir/releases"
+install -d -m 0755 "$install_dir/releases" "$install_dir/runtime/python"
 exec 9> "$install_dir/state/refresh/deployment.lock"
 flock -n 9 || die 'another update is running'
 staging=$(mktemp -d)
@@ -110,8 +110,14 @@ new_dir="$install_dir/releases/$tag"
 install -d -m 0755 "$new_dir"
 cp -a "$payload/." "$new_dir/"
 ln -s "$install_dir/data/raw" "$new_dir/data/raw"
-(cd "$new_dir" && uv sync --frozen --no-dev --python 3.12)
-[[ -x "$new_dir/.venv/bin/python" ]] || die 'dependency installation failed'
+# Keep the managed interpreter outside /home: ProtectHome=true otherwise
+# prevents systemd from executing the virtual environment's Python symlink.
+export UV_PYTHON_INSTALL_DIR="$install_dir/runtime/python"
+uv python install 3.12
+(cd "$new_dir" && uv sync --frozen --no-dev --managed-python --python 3.12)
+python_path=$(readlink -f "$new_dir/.venv/bin/python")
+[[ -x "$python_path" && "$python_path" == "$UV_PYTHON_INSTALL_DIR/"* ]] || \
+  die 'virtual environment interpreter must resolve inside the application runtime'
 
 # The native unit uses the existing runtime configuration and secrets.
 unit="$staging/marketmind.service"
