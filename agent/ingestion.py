@@ -33,7 +33,7 @@ from data.db.facts import create_fact, get_current_facts, search_similar_facts
 from data.db.identifiers import create_identifier, resolve_identifier
 from data.db.pool import close_pool, open_pool
 from data.db.runs import finish_run, start_run
-from data.sources.rss import Article, article_to_record, fetch_company_news
+from data.sources.rss import Article, article_to_record, fetch_company_news, parse_publication_iso
 from data.sources.wikipedia import fetch_company_description
 from data.universe.loader import get_universe
 
@@ -94,6 +94,11 @@ def google_window_days(as_of: dt.date, last_published_at: dt.datetime | None) ->
         return MAX_GOOGLE_WINDOW_DAYS
     elapsed = (as_of - last_published_at.date()).days + 1
     return max(1, min(elapsed, MAX_GOOGLE_WINDOW_DAYS))
+
+
+def _publication_utc(value: str) -> dt.datetime | None:
+    """Reject missing, invalid or naive publication times; normalize aware times."""
+    return parse_publication_iso(value)
 
 
 def parse_fact_list_response(text: str) -> list[dict[str, Any]] | None:
@@ -411,6 +416,11 @@ async def run_daily_ingest(
     7. Write an agent_runs audit row (started before the loop, finished
        after — so a killed or crashed run still leaves a trace).
 
+    Publication eligibility requires an aware timestamp before next midnight
+    UTC. This filters current RSS; it does not reconstruct historical coverage.
+    Current descriptions and generated profiles are not point-in-time sources
+    (see README's historical news ingestion limits).
+
     Args:
         conn: An open connection, held for the whole run. Each repository
             call commits its own work independently -- there is no single
@@ -443,6 +453,9 @@ async def run_daily_ingest(
             failures. The run is recorded with status='aborted' first.
     """
     date_as_date = dt.date.fromisoformat(date)
+    publication_end = dt.datetime.combine(
+        date_as_date + dt.timedelta(days=1), dt.time.min, tzinfo=dt.UTC
+    )
     if llm is None:
         raise ValueError("llm callable is required")
     if not 0.0 <= MIN_PRE_SCORE <= 1.0:
@@ -533,6 +546,14 @@ async def run_daily_ingest(
 
             if not profiles_only:
                 feed_checkpoints = await get_feed_checkpoints(conn, company_id=company_id)
+                # A later run's checkpoint must not suppress historical candidates.
+                # Leave persisted high-water marks intact; database updates are monotonic.
+                feed_checkpoints = {
+                    source: published
+                    for source, value in feed_checkpoints.items()
+                    if (published := _publication_utc(value.isoformat())) is not None
+                    and published < publication_end
+                }
                 try:
                     articles = (
                         news_fetcher(ticker, name)
@@ -550,8 +571,16 @@ async def run_daily_ingest(
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(f"news fetch failed for {ticker}: {exc}")
                     articles = []
-                archive.append(articles)
                 summary["articles_fetched"] += len(articles)
+                eligible_articles: list[Article] = []
+                for article in articles:
+                    published = _publication_utc(article.published_at)
+                    if published is None or published >= publication_end:
+                        summary["articles_filtered"] += 1
+                        continue
+                    eligible_articles.append(article)
+                articles = eligible_articles
+                archive.append(articles)
 
                 published_by_source: dict[str, dt.datetime] = {}
 

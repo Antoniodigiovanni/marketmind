@@ -98,6 +98,81 @@ def test_parse_feed_honours_limit() -> None:
     assert len(articles) == 1
 
 
+@pytest.mark.parametrize(
+    "publication",
+    [
+        "2026-08-04T23:30:00",
+        "Tue, 04 Aug 2026 23:30:00",
+        "Tue, 04 Aug 2026 23:30:00 XYZ",
+        "2026-08-04T23:30:00+25:00",
+        "Wed, 05 Aug 2026 00:30:00 +0060 (comment)",
+        "Tue, 04 Aug 2026 23:30:00 0",
+        "Tue, 04 Aug 2026 23:30:00 0 (comment)",
+        "Tue, 04 Aug 2026 23:30:00 +0060",
+        "Tue, 04 Aug 2026 23:30:00 +2400",
+        "Tue, 04 Aug 2026 23:30:00 +000",
+        "Tue, 04 Aug 2026 23:30:00 +00000",
+        "Wed, 05 Aug 2026 00:30:00 +0060 00:00 GMT",
+        "Wed, 05 Aug 2026 00:30:00 +0200 00:00 GMT",
+        "Wed, 05 Aug 2026 00:30:00 GMT 00:00 +0200",
+        "Wed, 05 Aug 2026 00:30:00 +0200 GMT",
+        "extra Wed, 05 Aug 2026 00:30:00 GMT",
+        "Wed, 05 Aug 2026 00:30:00 GMT extra",
+        "Wed, 05 Aug 2026 00:30:00 GMT (comment)",
+        "Wed, (comment) 05 Aug 2026 00:30:00 GMT",
+        "Bad, 05 Aug 2026 00:30:00 GMT",
+        "Wed, 00 Aug 2026 00:30:00 GMT",
+        "Wed, 32 Aug 2026 00:30:00 GMT",
+        "Wed, 05 Unknown 2026 00:30:00 GMT",
+        "Wed, 05 Aug 26 00:30:00 GMT",
+        "Wed, 05 Aug 2026 24:30:00 GMT",
+        "Wed, 05 Aug 2026 00:60:00 GMT",
+        "Wed, 05 Aug 2026 00:30:60 GMT",
+    ],
+)
+def test_parse_feed_rejects_publication_without_valid_timezone(publication: str) -> None:
+    content = _feed_bytes("https://example.com/story").replace(
+        b"Tue, 04 Aug 2026 09:00:00 GMT", publication.encode()
+    )
+
+    assert parse_feed(content, "google-news", "AAPL", limit=10) == []
+
+
+@pytest.mark.parametrize(
+    ("publication", "expected"),
+    [
+        ("Tue, 04 Aug 2026 09:00:00 GMT", "2026-08-04T09:00:00+00:00"),
+        ("Tue, 04 Aug 2026 09:00:00 EST", "2026-08-04T14:00:00+00:00"),
+        ("Tue, 04 Aug 2026 09:00:00 +0230", "2026-08-04T06:30:00+00:00"),
+        ("Tue, 04 Aug 2026 09:00:00 -0330", "2026-08-04T12:30:00+00:00"),
+        ("Tue, 04 Aug 2026 09:00:00 +0000", "2026-08-04T09:00:00+00:00"),
+        ("Tue, 04 Aug 2026 09:00:00 UT", "2026-08-04T09:00:00+00:00"),
+        ("Tue, 04 Aug 2026 09:00:00 UTC", "2026-08-04T09:00:00+00:00"),
+        ("Tue, 04 Aug 2026 09:00:00 PDT", "2026-08-04T16:00:00+00:00"),
+        ("4 Aug 2026 09:00 GMT", "2026-08-04T09:00:00+00:00"),
+        ("04 Aug 2026 09:00:00 +2359", "2026-08-03T09:01:00+00:00"),
+        ("2026-08-04T09:00:00Z", "2026-08-04T09:00:00+00:00"),
+        ("2026-08-04T09:00:00+02:30", "2026-08-04T06:30:00+00:00"),
+    ],
+)
+def test_parse_feed_preserves_valid_publication(publication: str, expected: str) -> None:
+    if publication.startswith("2026"):
+        content = (
+            '<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Title</title>'
+            '<link href="https://example.com/story"/>'
+            f"<published>{publication}</published></entry></feed>"
+        ).encode()
+    else:
+        content = _feed_bytes("https://example.com/story").replace(
+            b"Tue, 04 Aug 2026 09:00:00 GMT", publication.encode()
+        )
+
+    articles = parse_feed(content, "google-news", "AAPL", limit=10)
+
+    assert len(articles) == 1
+    assert articles[0].published_at == expected
+
+
 def test_parse_feed_drops_entries_at_or_below_high_water() -> None:
     articles = parse_feed(
         _feed_bytes("https://example.com/1"),
