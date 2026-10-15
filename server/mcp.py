@@ -936,6 +936,9 @@ async def save_fact(
         ValueError: If ticker does not resolve to a tracked company as of
             `valid_from`, confidence is outside [0, 1], or source_article_id
             / supersedes_id is not a well-formed UUID string.
+            Also if a supplied supersedes_id identifies a missing fact, a fact
+            for another company, a closed/superseded fact, or a fact starting
+            on or after valid_from.
     """
     valid_from_date = dt.date.fromisoformat(valid_from)
     source_article_uuid = uuid.UUID(source_article_id)
