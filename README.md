@@ -336,3 +336,24 @@ Conventions (full detail in [AGENTS.md](AGENTS.md)):
 - [AGENTS.md](AGENTS.md) — project conventions, commands, and hard constraints
 - [ROADMAP.md](ROADMAP.md) — phase plan and current status
 - [docs/](docs/) — design specs and implementation plans
+
+### Historical news ingestion limits
+
+News ingestion accepts only articles with a valid, timezone-aware publication
+instant before the exclusive next midnight UTC of the requested date. Same-day
+late publications remain eligible. Missing, invalid, and naive timestamps are
+excluded before archival, registration, extraction, or checkpoint updates; RSS
+entries without a parseable publication date are dropped rather than assigned a
+fetch timestamp. Checkpoints beyond that boundary are ignored for fetching,
+without rewriting existing checkpoint history.
+
+Current RSS feeds and their bounded query windows do not reconstruct missing
+historical coverage. This cutoff prevents future publications from creating facts
+on an earlier run date; it does not establish complete historical knowledge.
+Existing archives, facts, and checkpoints are not repaired by this change.
+Company descriptions still come from current Wikipedia/cache, and generated
+profiles can still be assigned the requested run date, including annual profile
+refreshes. These are not historical reconstructions and can introduce later
+knowledge into extraction context. Point-in-time profile/description sourcing
+remains unresolved; the publication cutoff alone does not make historical facts
+fully point-in-time safe.

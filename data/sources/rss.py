@@ -6,6 +6,7 @@ import datetime as dt
 import hashlib
 import re
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qs, quote, urlparse
 
 import feedparser
@@ -16,6 +17,18 @@ GOOGLE_NEWS_FEED_URL = "https://news.google.com/rss/search"
 YAHOO_FINANCE_FEED_URL = "https://finance.yahoo.com/rss/headline"
 DEFAULT_MAX_PER_FEED = 30
 MAX_GOOGLE_WINDOW_DAYS = 7
+_PUBLICATION_ISO = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"
+    r"(?:\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):?[0-5][0-9])"
+)
+_PUBLICATION_RFC = re.compile(
+    r"(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),[ \t]+)?"
+    r"(?:0?[1-9]|[12][0-9]|3[01])[ \t]+"
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[ \t]+[0-9]{4}[ \t]+"
+    r"(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9])?[ \t]+"
+    r"(?:[+-](?:[01][0-9]|2[0-3])[0-5][0-9]|UT|UTC|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT)",
+    re.IGNORECASE | re.ASCII,
+)
 
 
 def _sha256(text: str) -> str:
@@ -109,12 +122,45 @@ def yahoo_finance_url(symbol: str) -> str:
     return f"{YAHOO_FINANCE_FEED_URL}?s={quote(symbol)}"
 
 
-def _published_iso(entry: feedparser.FeedParserDict) -> str | None:
-    """Convert a feed entry's publish time to ISO 8601 UTC, if present."""
-    parsed = getattr(entry, "published_parsed", None)
-    if parsed is None:
+def parse_publication_iso(value: str) -> dt.datetime | None:
+    """Validate a supported ISO publication timestamp and normalize it to UTC.
+
+    Args:
+        value: Calendar timestamp with seconds and Z or a numeric HH:MM/HHMM zone.
+
+    Returns:
+        UTC datetime, or None for invalid or unsupported syntax.
+    """
+    if not isinstance(value, str) or _PUBLICATION_ISO.fullmatch(value) is None:
         return None
-    return dt.datetime(*parsed[:6], tzinfo=dt.UTC).isoformat()
+    try:
+        return dt.datetime.fromisoformat(value).astimezone(dt.UTC)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _published_iso(entry: feedparser.FeedParserDict) -> str | None:
+    """Validate the original publication timezone before converting to UTC."""
+    raw = entry.get("published", "").strip()
+    if not raw:
+        return None
+    # Feedparser's parsed tuples lose missing and unrecognized timezone information.
+    try:
+        if re.match(r"\d{4}-\d{2}-\d{2}T", raw):
+            published = parse_publication_iso(raw)
+            return published.isoformat() if published is not None else None
+        else:
+            # Match every field so the email parser consumes the validated zone.
+            # Extra tokens and comments are unsupported, even if it accepts them.
+            rfc_match = _PUBLICATION_RFC.fullmatch(raw)
+            if rfc_match is None:
+                return None
+            published = parsedate_to_datetime(rfc_match[0])
+        if published.tzinfo is None or published.utcoffset() is None:
+            return None
+        return published.astimezone(dt.UTC).isoformat()
+    except (ValueError, TypeError, OverflowError):
+        return None
 
 
 def _publisher(entry: feedparser.FeedParserDict, url: str) -> str | None:
@@ -171,7 +217,10 @@ def parse_feed(
             continue
         url = _unwrap_google_url(url)
         summary = getattr(entry, "summary", "") or getattr(entry, "description", "")
-        published_at = _published_iso(entry) or dt.datetime.now(dt.UTC).isoformat()
+        # Without a publication time an entry cannot establish historical eligibility.
+        published_at = _published_iso(entry)
+        if published_at is None:
+            continue
         published = dt.datetime.fromisoformat(published_at)
         if published_after is not None and published <= published_after:
             continue
