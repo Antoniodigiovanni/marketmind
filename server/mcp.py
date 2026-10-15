@@ -591,13 +591,14 @@ async def get_insider_holdings(
 
     Args:
         ticker: Ticker symbol.
-        as_of: Optional date filter; returns holdings with ref_date <= as_of.
+        as_of: Optional inclusive date cutoff; both ref_date and the parent filing
+            publication date must be <= as_of. Omit for an unrestricted read.
         limit: Maximum rows.
 
     Returns:
         List of {id, owner_name, owner_title, security_title, ref_date,
         shares_held_after, direct_or_indirect, form_type} ordered by
-        ref_date desc.
+        ref_date desc. Original and amended filings remain separate snapshots.
     """
     pool = await _pg_pool()
     async with pool.connection() as conn:
@@ -624,14 +625,16 @@ async def get_13f_holdings(
 
     Args:
         cusip: 9-digit issuer CUSIP.
-        as_of: Optional quarter-end filter; returns report_period <= as_of.
+        as_of: Optional inclusive date cutoff; both report_period and the parent
+            filing publication date must be <= as_of. Omit for an unrestricted read.
         min_value: Optional minimum position value in USD.
         limit: Maximum rows.
 
     Returns:
         List of {filer_name, filer_cik, report_period, issuer_name, class_title,
         value_usd, shares, put_call} ordered by report_period desc then
-        value_usd desc.
+        value_usd desc. Original and amended filing rows become visible
+        independently; rows are neither replaced nor aggregated.
     """
     pool = await _pg_pool()
     async with pool.connection() as conn:

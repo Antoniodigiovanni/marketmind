@@ -243,6 +243,10 @@ async def test_ownership_and_13f_tools(monkeypatch, pg_conn) -> None:
     )
     assert (await mcp_mod.get_insider_transactions("AAPL"))[0]["owner_name"] == "TIM COOK"
     assert (await mcp_mod.get_insider_holdings("AAPL"))[0]["shares_held_after"] == 9500
+    assert await mcp_mod.get_insider_holdings("AAPL", as_of="2026-05-01") == []
+    bounded = await mcp_mod.get_insider_holdings("AAPL", as_of="2026-05-02", limit=1)
+    assert bounded[0]["ref_date"] == "2026-04-30"
+    assert bounded[0]["shares_held_after"] == 9500
 
     filing_13f = await create_filing(
         pg_conn,
@@ -271,3 +275,9 @@ async def test_ownership_and_13f_tools(monkeypatch, pg_conn) -> None:
         ),
     )
     assert (await mcp_mod.get_13f_holdings("037833100"))[0]["filer_name"] == "Fund"
+    assert await mcp_mod.get_13f_holdings("037833100", as_of="2026-05-14") == []
+    bounded_13f = await mcp_mod.get_13f_holdings(
+        "037833100", as_of="2026-05-15", min_value=100000, limit=1
+    )
+    assert bounded_13f[0]["report_period"] == "2026-03-31"
+    assert bounded_13f[0]["value_usd"] == 100000

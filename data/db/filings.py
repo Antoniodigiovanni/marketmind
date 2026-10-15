@@ -234,7 +234,7 @@ async def get_insider_holdings(
     as_of: dt.date | None = None,
     limit: int = 100,
 ) -> list[dict[str, object]]:
-    """Return insider holding snapshots for a company."""
+    """Return insider snapshots bounded by event and publication date when as_of is set."""
     query = (
         "SELECT holding_id AS id, insider_name AS owner_name, insider_title AS owner_title, "
         "security_title, as_of AS ref_date, shares AS shares_held_after, "
@@ -242,8 +242,12 @@ async def get_insider_holdings(
     )
     params: list[object] = [company_id]
     if as_of is not None:
-        query += " AND as_of <= %s"
-        params.append(as_of)
+        query += (
+            " AND as_of <= %s AND EXISTS ("
+            "SELECT 1 FROM filings f WHERE f.filing_id = insider_holdings.filing_id "
+            "AND f.filed_at <= %s)"
+        )
+        params.extend([as_of, as_of])
     query += " ORDER BY as_of DESC LIMIT %s"
     params.append(limit)
     async with conn.cursor(row_factory=dict_row) as cur:
@@ -259,7 +263,11 @@ async def get_13f_holdings(
     min_value: float | None = None,
     limit: int = 100,
 ) -> list[dict[str, object]]:
-    """Return point-in-time 13F holdings for a CUSIP."""
+    """Return 13F rows visible by both report period and parent filing date.
+
+    Original and amended filing rows become visible independently; rows are
+    neither replaced nor aggregated. Omit as_of for an unrestricted read.
+    """
     query = (
         "SELECT manager_name AS filer_name, manager_cik AS filer_cik, report_period, "
         "issuer_name, class_title, value_usd, shares, put_call "
@@ -267,8 +275,13 @@ async def get_13f_holdings(
     )
     params: list[object] = [cusip]
     if as_of is not None:
-        query += " AND report_period <= %s"
-        params.append(as_of)
+        query += (
+            " AND report_period <= %s"
+            " AND EXISTS (SELECT 1 FROM filings f"
+            " WHERE f.filing_id = form13f_holdings.filing_id"
+            " AND f.filed_at <= %s)"
+        )
+        params.extend([as_of, as_of])
     if min_value is not None:
         query += " AND value_usd >= %s"
         params.append(min_value)
