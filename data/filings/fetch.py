@@ -93,16 +93,17 @@ async def _process_document(
     text_path = root / "filings" / "text" / cik / f"{sub.accession}.txt"
     text_path.parent.mkdir(parents=True, exist_ok=True)
     text_path.write_text(text, encoding="utf-8")
-    filing_id = await create_filing(
-        conn,
-        company_id=company_id,
-        accession=sub.accession,
-        form_type=sub.form_type,
-        filed_at=dt.date.fromisoformat(sub.filed_at),
-        period=dt.date.fromisoformat(sub.period_of_report) if sub.period_of_report else None,
-        url=_edgar_url(cik, sub.accession, sub.primary_document),
-    )
-    await insert_filing_text(conn, filing_id=filing_id, body=text)
+    async with conn.transaction():
+        filing_id = await create_filing(
+            conn,
+            company_id=company_id,
+            accession=sub.accession,
+            form_type=sub.form_type,
+            filed_at=dt.date.fromisoformat(sub.filed_at),
+            period=dt.date.fromisoformat(sub.period_of_report) if sub.period_of_report else None,
+            url=_edgar_url(cik, sub.accession, sub.primary_document),
+        )
+        await insert_filing_text(conn, filing_id=filing_id, body=text)
     return filing_id
 
 
@@ -122,23 +123,24 @@ async def _process_ownership(
     path = root / "filings" / "ownership" / f"{sub.accession}.xml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(raw, encoding="utf-8")
-    filing_id = await create_filing(
-        conn,
-        company_id=company_id,
-        accession=sub.accession,
-        form_type=sub.form_type,
-        filed_at=dt.date.fromisoformat(sub.filed_at),
-        period=dt.date.fromisoformat(sub.period_of_report) if sub.period_of_report else None,
-        url=_edgar_url(cik, sub.accession, document),
-    )
     transactions, holdings = parse_ownership_xml(raw, ticker=ticker)
-    return await insert_insider_rows(
-        conn,
-        filing_id=filing_id,
-        company_id=company_id,
-        transactions=transactions,
-        holdings=holdings,
-    )
+    async with conn.transaction():
+        filing_id = await create_filing(
+            conn,
+            company_id=company_id,
+            accession=sub.accession,
+            form_type=sub.form_type,
+            filed_at=dt.date.fromisoformat(sub.filed_at),
+            period=dt.date.fromisoformat(sub.period_of_report) if sub.period_of_report else None,
+            url=_edgar_url(cik, sub.accession, document),
+        )
+        return await insert_insider_rows(
+            conn,
+            filing_id=filing_id,
+            company_id=company_id,
+            transactions=transactions,
+            holdings=holdings,
+        )
 
 
 async def _process_13f(
@@ -161,16 +163,17 @@ async def _process_13f(
     path.write_text(raw, encoding="utf-8")
     period = sub.period_of_report or sub.filed_at
     frame = parse_13f_infotable(raw, report_period=period, filer_cik=cik, filer_name=filer_name)
-    filing_id = await create_filing(
-        conn,
-        company_id=company_id,
-        accession=sub.accession,
-        form_type=sub.form_type,
-        filed_at=dt.date.fromisoformat(sub.filed_at),
-        period=dt.date.fromisoformat(period),
-        url=_edgar_url(cik, sub.accession, info_table),
-    )
-    return await insert_13f_holdings(conn, filing_id=filing_id, frame=frame)
+    async with conn.transaction():
+        filing_id = await create_filing(
+            conn,
+            company_id=company_id,
+            accession=sub.accession,
+            form_type=sub.form_type,
+            filed_at=dt.date.fromisoformat(sub.filed_at),
+            period=dt.date.fromisoformat(period),
+            url=_edgar_url(cik, sub.accession, info_table),
+        )
+        return await insert_13f_holdings(conn, filing_id=filing_id, frame=frame)
 
 
 async def _process_metadata_only(
