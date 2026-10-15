@@ -43,8 +43,8 @@ async def create_fact(
             no trace -- no fact row, nothing to roll back.
         model: Identifies which embedder produced the vector (stored on
             fact_embeddings.model), e.g. 'hash-ngram'.
-        supersedes_id: A prior fact this one replaces, if any. That row's
-            valid_until is set to this fact's valid_from.
+        supersedes_id: An existing open fact for the same company, if any.
+            Its valid_until is set to this fact's strictly later valid_from.
 
     Returns:
         The new fact_id.
@@ -52,6 +52,8 @@ async def create_fact(
     Raises:
         ValueError: If confidence is outside [0, 1]. Checked before calling
             embed, so an invalid write never pays for an embedding call.
+            Also if the predecessor is missing, belongs to another company,
+            is already closed/superseded, or starts on or after valid_from.
     """
     if not 0.0 <= confidence <= 1.0:
         raise ValueError(f"confidence must be in [0, 1], got {confidence}")
@@ -59,6 +61,25 @@ async def create_fact(
     vector = await embed(statement)
 
     async with conn.transaction():
+        if supersedes_id is not None:
+            predecessor = await (
+                await conn.execute(
+                    "SELECT company_id, valid_from, valid_until FROM company_facts "
+                    "WHERE fact_id = %s FOR UPDATE",
+                    (supersedes_id,),
+                )
+            ).fetchone()
+            if (
+                predecessor is None
+                or predecessor[0] != company_id
+                or predecessor[2] is not None
+                or valid_from <= predecessor[1]
+            ):
+                raise ValueError(
+                    "supersedes_id must identify an open fact for the same company "
+                    "with an earlier valid_from"
+                )
+
         row = await (
             await conn.execute(
                 "INSERT INTO company_facts "
@@ -84,11 +105,14 @@ async def create_fact(
         )
 
         if supersedes_id is not None:
-            await conn.execute(
+            updated = await conn.execute(
                 "UPDATE company_facts SET valid_until = %s "
-                "WHERE fact_id = %s AND valid_until IS NULL",
-                (valid_from, supersedes_id),
+                "WHERE fact_id = %s AND company_id = %s AND valid_until IS NULL "
+                "AND valid_from < %s",
+                (valid_from, supersedes_id, company_id, valid_from),
             )
+            if updated.rowcount != 1:
+                raise ValueError("predecessor is no longer available for supersession")
 
     return fact_id
 

@@ -47,8 +47,9 @@ async def create_aggregate_fact(
             Called before any database write, so a failing embedder leaves
             no trace.
         model: Identifies which embedder produced the vector.
-        supersedes_id: A prior aggregate fact this one replaces, if any.
-            That row's valid_until is set to this fact's valid_from --
+        supersedes_id: An existing open aggregate fact for the same dimension
+            and dimension_key, if any. Its valid_until is set to this fact's
+            strictly later valid_from --
             aggregate_facts has no supersedes_id column to link through,
             unlike company_facts and company_profiles.
 
@@ -58,6 +59,9 @@ async def create_aggregate_fact(
     Raises:
         ValueError: If dimension is not 'sector'/'geography', or confidence
             is outside [0, 1]. Both checked before calling embed.
+            Also if the predecessor is missing, belongs to another dimension
+            or dimension_key, is already closed/superseded, or starts on or
+            after valid_from.
     """
     if dimension not in VALID_DIMENSIONS:
         raise ValueError(f"dimension must be one of {sorted(VALID_DIMENSIONS)}, got {dimension!r}")
@@ -67,6 +71,26 @@ async def create_aggregate_fact(
     vector = await embed(statement)
 
     async with conn.transaction():
+        if supersedes_id is not None:
+            predecessor = await (
+                await conn.execute(
+                    "SELECT dimension, dimension_key, valid_from, valid_until "
+                    "FROM aggregate_facts WHERE aggregate_id = %s FOR UPDATE",
+                    (supersedes_id,),
+                )
+            ).fetchone()
+            if (
+                predecessor is None
+                or predecessor[0] != dimension
+                or predecessor[1] != dimension_key
+                or predecessor[3] is not None
+                or valid_from <= predecessor[2]
+            ):
+                raise ValueError(
+                    "supersedes_id must identify an open aggregate fact for the same "
+                    "dimension and dimension_key with an earlier valid_from"
+                )
+
         row = await (
             await conn.execute(
                 "INSERT INTO aggregate_facts "
@@ -93,11 +117,14 @@ async def create_aggregate_fact(
             )
 
         if supersedes_id is not None:
-            await conn.execute(
+            updated = await conn.execute(
                 "UPDATE aggregate_facts SET valid_until = %s "
-                "WHERE aggregate_id = %s AND valid_until IS NULL",
-                (valid_from, supersedes_id),
+                "WHERE aggregate_id = %s AND dimension = %s AND dimension_key = %s "
+                "AND valid_until IS NULL AND valid_from < %s",
+                (valid_from, supersedes_id, dimension, dimension_key, valid_from),
             )
+            if updated.rowcount != 1:
+                raise ValueError("predecessor is no longer available for supersession")
 
     return aggregate_id
 

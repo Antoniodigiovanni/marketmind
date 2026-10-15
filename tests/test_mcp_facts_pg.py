@@ -282,3 +282,66 @@ async def test_get_company_profile_resolves_ticker_as_of_not_current_holder(
     new_profile = await mcp_mod.get_company_profile("XYZ", "2023-06-01")
     assert new_profile["name"] == "New Co"
     assert new_profile["description"] == "New Co profile."
+
+
+@pytest.mark.parametrize(
+    "case", ["valid", "wrong_company", "missing", "closed", "backward", "equal"]
+)
+async def test_save_fact_supersession_integrity(monkeypatch, pg_conn, case: str) -> None:
+    """MCP preserves the repository's supersession contract and atomic rejection."""
+    _patch_pool(monkeypatch, pg_conn)
+    company_id = await _company(pg_conn, "AAPL")
+    other_id = await _company(pg_conn, "OTHER")
+    article_id = await _article(pg_conn)
+    old_id = await mcp_mod.save_fact(
+        ticker="OTHER" if case == "wrong_company" else "AAPL",
+        statement="Predecessor",
+        fact_type="guidance",
+        confidence=0.9,
+        valid_from="2020-01-01",
+        source_article_id=str(article_id),
+    )
+    if case == "closed":
+        await pg_conn.execute(
+            "UPDATE company_facts SET valid_until = %s WHERE fact_id = %s",
+            (dt.date(2021, 1, 1), uuid.UUID(old_id)),
+        )
+
+    async def snapshot() -> list[tuple]:
+        return await (
+            await pg_conn.execute(
+                "SELECT f.fact_id, f.company_id, f.valid_from, f.valid_until, f.supersedes_id, "
+                "e.model, e.embedding::text FROM company_facts f "
+                "LEFT JOIN fact_embeddings e USING (fact_id) "
+                "WHERE f.company_id = ANY(%s) ORDER BY f.fact_id",
+                ([company_id, other_id],),
+            )
+        ).fetchall()
+
+    before = await snapshot()
+    kwargs = dict(
+        ticker="AAPL",
+        statement="Replacement",
+        fact_type="guidance",
+        confidence=0.9,
+        valid_from={"backward": "2019-12-31", "equal": "2020-01-01"}.get(case, "2021-01-01"),
+        source_article_id=str(article_id),
+        supersedes_id=str(uuid.uuid4()) if case == "missing" else old_id,
+    )
+    if case != "valid":
+        with pytest.raises(ValueError):
+            await mcp_mod.save_fact(**kwargs)
+        assert await snapshot() == before
+        return
+
+    new_id = await mcp_mod.save_fact(**kwargs)
+    assert uuid.UUID(new_id) != uuid.UUID(old_id)
+    before_boundary = await mcp_mod.get_facts("AAPL", "2020-12-31")
+    at_boundary = await mcp_mod.get_facts("AAPL", "2021-01-01")
+    assert [str(row["fact_id"]) for row in before_boundary] == [old_id]
+    assert [str(row["fact_id"]) for row in at_boundary] == [new_id]
+    rows = {str(row[0]): row for row in await snapshot()}
+    assert rows[old_id][3] == dt.date(2021, 1, 1)
+    assert rows[new_id][1] == company_id
+    assert rows[new_id][3:5] == (None, uuid.UUID(old_id))
+    assert all(row[5] == "hash-ngram" and row[6] is not None for row in rows.values())
