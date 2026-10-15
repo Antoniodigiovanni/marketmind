@@ -298,3 +298,124 @@ async def test_ownership_and_13f_round_trip(pg_conn) -> None:
     assert await insert_13f_holdings(pg_conn, filing_id=filing_13f, frame=frame) == 1
     rows = await get_13f_holdings(pg_conn, cusip="037833100")
     assert rows[0]["filer_name"] == "Fund"
+
+
+async def test_insider_holdings_publication_cutoff(pg_conn) -> None:
+    company_id = await _company(pg_conn)
+    for accession, form, published, event, shares in [
+        ("original", "3", "2026-05-02", "2026-04-30", 100),
+        ("amendment", "3/A", "2026-05-10", "2026-04-30", 110),
+        ("future-event", "3", "2026-05-01", "2026-06-01", 200),
+        ("older", "3", "2026-04-02", "2026-04-01", 50),
+    ]:
+        filing_id = await create_filing(
+            pg_conn,
+            company_id=company_id,
+            accession=accession,
+            form_type=form,
+            filed_at=dt.date.fromisoformat(published),
+            period=dt.date.fromisoformat(event),
+            url=f"https://example.com/{accession}",
+        )
+        await insert_insider_rows(
+            pg_conn,
+            filing_id=filing_id,
+            company_id=company_id,
+            transactions=[],
+            holdings=[
+                InsiderHolding("TEST", "Owner", None, None, "Common", event, shares, "D", form)
+            ],
+        )
+
+    async def at(day: str) -> list[dict[str, object]]:
+        return await get_insider_holdings(
+            pg_conn, company_id=company_id, as_of=dt.date.fromisoformat(day)
+        )
+
+    assert [r["shares_held_after"] for r in await at("2026-05-01")] == [50]
+    assert [r["shares_held_after"] for r in await at("2026-05-02")] == [100, 50]
+    assert [r["shares_held_after"] for r in await at("2026-05-09")] == [100, 50]
+    visible = await at("2026-05-10")
+    assert {r["form_type"] for r in visible[:2]} == {"3", "3/A"}
+    assert visible[-1]["shares_held_after"] == 50
+    assert set(visible[0]) == {
+        "id",
+        "owner_name",
+        "owner_title",
+        "security_title",
+        "ref_date",
+        "shares_held_after",
+        "direct_or_indirect",
+        "form_type",
+    }
+    limited = await get_insider_holdings(
+        pg_conn, company_id=company_id, as_of=dt.date(2026, 5, 2), limit=1
+    )
+    assert [r["shares_held_after"] for r in limited] == [100]
+    unrestricted = await get_insider_holdings(pg_conn, company_id=company_id)
+    assert len(unrestricted) == 4
+    assert unrestricted[0]["shares_held_after"] == 200
+
+
+async def test_13f_holdings_publication_cutoff(pg_conn) -> None:
+    for accession, form, published, period, value in [
+        ("original", "13F-HR", "2026-05-15", "2026-03-31", 100_000),
+        ("amendment", "13F-HR/A", "2026-05-20", "2026-03-31", 110_000),
+        ("future-period", "13F-HR", "2026-05-01", "2026-06-30", 200_000),
+        ("older", "13F-HR", "2026-02-15", "2025-12-31", 150_000),
+    ]:
+        filing_id = await create_filing(
+            pg_conn,
+            company_id=None,
+            accession=accession,
+            form_type=form,
+            filed_at=dt.date.fromisoformat(published),
+            period=dt.date.fromisoformat(period),
+            url=f"https://example.com/{accession}",
+        )
+        await insert_13f_holdings(
+            pg_conn,
+            filing_id=filing_id,
+            frame=pl.DataFrame(
+                {
+                    "filer_cik": ["0001"],
+                    "filer_name": ["Fund"],
+                    "cusip": ["037833100"],
+                    "report_period": [period],
+                    "issuer_name": ["APPLE INC"],
+                    "class_title": ["COM"],
+                    "shares": [10.0],
+                    "value_usd": [float(value)],
+                    "put_call": [None],
+                }
+            ),
+        )
+
+    async def at(day: str, **kwargs: object) -> list[dict[str, object]]:
+        return await get_13f_holdings(
+            pg_conn, cusip="037833100", as_of=dt.date.fromisoformat(day), **kwargs
+        )
+
+    assert [r["value_usd"] for r in await at("2026-05-14")] == [150_000]
+    assert [r["value_usd"] for r in await at("2026-05-15")] == [100_000, 150_000]
+    assert [r["value_usd"] for r in await at("2026-05-19")] == [100_000, 150_000]
+    visible = await at("2026-05-20")
+    assert [r["value_usd"] for r in visible] == [110_000, 100_000, 150_000]
+    assert [r["filer_cik"] for r in visible[:2]] == ["0001", "0001"]
+    assert [r["report_period"] for r in visible[:2]] == [dt.date(2026, 3, 31)] * 2
+    assert set(visible[0]) == {
+        "filer_name",
+        "filer_cik",
+        "report_period",
+        "issuer_name",
+        "class_title",
+        "value_usd",
+        "shares",
+        "put_call",
+    }
+    assert [r["value_usd"] for r in await at("2026-05-15", limit=1)] == [100_000]
+    assert [r["value_usd"] for r in await at("2026-05-20", min_value=110_000)] == [110_000, 150_000]
+    assert [r["value_usd"] for r in await at("2026-05-20", min_value=110_000, limit=1)] == [110_000]
+    unrestricted = await get_13f_holdings(pg_conn, cusip="037833100")
+    assert [r["value_usd"] for r in unrestricted] == [200_000, 110_000, 100_000, 150_000]
+    assert await get_13f_holdings(pg_conn, cusip="missing") == []
