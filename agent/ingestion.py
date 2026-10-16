@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import datetime as dt
+import hashlib
 import json
 import math
 import os
 import sys
 import uuid
 from collections.abc import Callable
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +25,15 @@ from agent.embedding import hash_embed
 from agent.llm import ChatClient, parse_json_response
 from data.db.aggregate_facts import create_aggregate_fact
 from data.db.articles import (
+    aggregate_inputs,
+    complete_aggregate_work,
+    consumed_aggregate_inputs,
+    finish_article_work,
+    get_article_work,
     get_feed_checkpoints,
+    lock_article_work,
     register_article,
+    save_aggregate_inputs,
     set_article_status,
     update_feed_checkpoints,
 )
@@ -385,6 +395,25 @@ class RawNewsArchive:
         return len(new)
 
 
+def _serialized_ingest(function: Callable[..., Any]) -> Callable[..., Any]:
+    """Serialize ingestion across connections; session close also releases the lock."""
+
+    @wraps(function)
+    async def locked(conn: psycopg.AsyncConnection, *args: Any, **kwargs: Any) -> Any:
+        try:
+            await conn.execute("SELECT pg_advisory_lock(731942617028)")
+            return await function(conn, *args, **kwargs)
+        finally:
+            try:
+                await asyncio.shield(conn.execute("SELECT pg_advisory_unlock(731942617028)"))
+            except BaseException:
+                await conn.close()
+                raise
+
+    return locked
+
+
+@_serialized_ingest
 async def run_daily_ingest(
     conn: psycopg.AsyncConnection,
     date: str,
@@ -453,6 +482,7 @@ async def run_daily_ingest(
             failures. The run is recorded with status='aborted' first.
     """
     date_as_date = dt.date.fromisoformat(date)
+    date = date_as_date.isoformat()
     publication_end = dt.datetime.combine(
         date_as_date + dt.timedelta(days=1), dt.time.min, tzinfo=dt.UTC
     )
@@ -480,7 +510,6 @@ async def run_daily_ingest(
         "profiles_built": 0,
         "profiles_failed": 0,
     }
-    todays_facts: list[dict[str, object]] = []
     consecutive_failures = 0
     tickers_total = universe.height
     tickers_done = 0
@@ -609,115 +638,21 @@ async def run_daily_ingest(
                         summary=article.summary,
                         published_at=published,
                         pre_score=score,
+                        run_date=date_as_date,
+                        snapshot={
+                            "ticker": ticker,
+                            "name": name,
+                            "sector": sector_str,
+                            "country": country_str,
+                            "description": profile_description,
+                            "products_services": profile_categories,
+                            "article": article_to_record(article),
+                            "score": score,
+                        },
                     )
+
                     if article_id is None:
                         summary["articles_skipped"] += 1
-                        continue
-                    if score < MIN_PRE_SCORE:
-                        await set_article_status(
-                            conn,
-                            article_id=article_id,
-                            company_id=company_id,
-                            status="filtered",
-                        )
-                        summary["articles_filtered"] += 1
-                        continue
-
-                    current_facts = await get_current_facts(
-                        conn, company_id=company_id, as_of=date_as_date
-                    )
-                    similar_facts = await search_similar_facts(
-                        conn,
-                        company_id=company_id,
-                        query=f"{article.title} {article.summary}",
-                        as_of=date_as_date,
-                        embed=hash_embed,
-                    )
-                    messages = build_extraction_messages(
-                        article=article,
-                        company_name=name,
-                        description=profile_description,
-                        products_services=profile_categories,
-                        sector=sector_str,
-                        country=country_str,
-                        current_facts=current_facts,
-                        similar_facts=similar_facts,
-                        score=score,
-                        date=date,
-                    )
-                    try:
-                        parsed = parse_fact_list_response(llm(messages))
-                    except Exception as exc:  # noqa: BLE001
-                        logger.error(f"extraction failed for article {article_id}: {exc}")
-                        await set_article_status(
-                            conn,
-                            article_id=article_id,
-                            company_id=company_id,
-                            status="error",
-                            error=str(exc),
-                        )
-                        summary["articles_errored"] += 1
-                        consecutive_failures += 1
-                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                            raise IngestAborted(
-                                f"{consecutive_failures} consecutive extraction failures; "
-                                f"aborting run for {date}"
-                            ) from exc
-                        continue
-
-                    consecutive_failures = 0
-
-                    if parsed is None:
-                        await set_article_status(
-                            conn, article_id=article_id, company_id=company_id, status="redundant"
-                        )
-                        summary["articles_redundant"] += 1
-                        continue
-
-                    try:
-                        written, superseded, fact_rows = await apply_facts(
-                            conn,
-                            company_id=company_id,
-                            ticker=ticker,
-                            date=date_as_date,
-                            article_id=article_id,
-                            facts=parsed,
-                            current_facts=current_facts,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.error(f"fact write failed for article {article_id}: {exc}")
-                        await set_article_status(
-                            conn,
-                            article_id=article_id,
-                            company_id=company_id,
-                            status="error",
-                            error=str(exc),
-                        )
-                        summary["articles_errored"] += 1
-                        consecutive_failures += 1
-                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                            raise IngestAborted(
-                                f"{consecutive_failures} consecutive extraction failures; "
-                                f"aborting run for {date}"
-                            ) from exc
-                        continue
-
-                    await set_article_status(
-                        conn, article_id=article_id, company_id=company_id, status="processed"
-                    )
-                    summary["facts_written"] += written
-                    summary["facts_superseded"] += superseded
-                    for fact_row in fact_rows:
-                        todays_facts.append(
-                            {
-                                "ticker": fact_row["ticker"],
-                                "fact_id": fact_row["fact_id"],
-                                "fact_type": fact_row["fact_type"],
-                                "statement": fact_row["statement"],
-                                "sector": sector_str,
-                                "country": country_str,
-                            }
-                        )
 
                 await update_feed_checkpoints(
                     conn,
@@ -730,6 +665,248 @@ async def run_daily_ingest(
             if progress is not None:
                 progress(tickers_done, tickers_total, summary)
 
+        work = [] if profiles_only else await get_article_work(conn, run_date=date_as_date)
+        for task in work:
+            article_id = task["article_id"]
+            company_id = task["company_id"]
+            try:
+                snapshot = task["snapshot"]
+                if not isinstance(snapshot, dict):
+                    raise ValueError("snapshot must be an object")
+                record = snapshot.get("article")
+                if not isinstance(record, dict):
+                    raise ValueError("snapshot article must be an object")
+                for key in ("ticker", "url", "title", "summary", "source", "published_at"):
+                    if not isinstance(record.get(key), str):
+                        raise ValueError(f"snapshot article {key} must be a string")
+                for key in (
+                    "ticker",
+                    "name",
+                    "sector",
+                    "country",
+                    "description",
+                    "products_services",
+                ):
+                    if key not in snapshot:
+                        raise ValueError(f"snapshot {key} is missing")
+                for key in ("ticker", "name", "description"):
+                    if not isinstance(snapshot[key], str):
+                        raise ValueError(f"snapshot {key} must be a string")
+                for key in ("sector", "country"):
+                    if snapshot[key] is not None and not isinstance(snapshot[key], str):
+                        raise ValueError(f"snapshot {key} must be a string or null")
+                products_services = snapshot["products_services"]
+                if isinstance(products_services, list) and all(
+                    isinstance(value, str) for value in products_services
+                ):
+                    products_services = ", ".join(products_services)
+                if not isinstance(products_services, str):
+                    raise ValueError(
+                        "snapshot products_services must be a string or list of strings"
+                    )
+                score = snapshot.get("score")
+                if type(score) not in (int, float) or not math.isfinite(score):
+                    raise ValueError("snapshot score must be a finite number")
+                published = _publication_utc(record["published_at"])
+                if published is None:
+                    raise ValueError("snapshot article published_at is invalid")
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                diagnostic = f"invalid article snapshot: {exc}"
+                logger.error(f"article {article_id}: {diagnostic}")
+                async with conn.transaction():
+                    await set_article_status(
+                        conn,
+                        article_id=article_id,
+                        company_id=company_id,
+                        status="error",
+                        error=diagnostic,
+                    )
+                    await finish_article_work(
+                        conn,
+                        article_id=article_id,
+                        company_id=company_id,
+                        run_date=date_as_date,
+                        status="error",
+                    )
+                summary["articles_errored"] += 1
+                continue
+            if published >= publication_end:
+                continue
+            article = Article(
+                **{
+                    key: record[key]
+                    for key in (
+                        "ticker",
+                        "url",
+                        "title",
+                        "summary",
+                        "source",
+                        "published_at",
+                    )
+                },
+                publisher=record.get("publisher"),
+            )
+            ticker = snapshot["ticker"]
+            name = snapshot["name"]
+            sector_str = snapshot["sector"]
+            country_str = snapshot["country"]
+            profile_description = snapshot["description"]
+            profile_categories = products_services
+            score = snapshot["score"]
+            if score < MIN_PRE_SCORE:
+                async with conn.transaction():
+                    if not await lock_article_work(
+                        conn, article_id=article_id, company_id=company_id, run_date=date_as_date
+                    ):
+                        continue
+                    await set_article_status(
+                        conn,
+                        article_id=article_id,
+                        company_id=company_id,
+                        status="filtered",
+                    )
+                    await finish_article_work(
+                        conn,
+                        article_id=article_id,
+                        company_id=company_id,
+                        run_date=date_as_date,
+                        status="filtered",
+                    )
+                summary["articles_filtered"] += 1
+                consecutive_failures = 0
+                continue
+
+            current_facts = await get_current_facts(conn, company_id=company_id, as_of=date_as_date)
+            similar_facts = await search_similar_facts(
+                conn,
+                company_id=company_id,
+                query=f"{article.title} {article.summary}",
+                as_of=date_as_date,
+                embed=hash_embed,
+            )
+            messages = build_extraction_messages(
+                article=article,
+                company_name=name,
+                description=profile_description,
+                products_services=profile_categories,
+                sector=sector_str,
+                country=country_str,
+                current_facts=current_facts,
+                similar_facts=similar_facts,
+                score=score,
+                date=date,
+            )
+            try:
+                parsed = parse_fact_list_response(llm(messages))
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"extraction failed for article {article_id}: {exc}")
+                await set_article_status(
+                    conn,
+                    article_id=article_id,
+                    company_id=company_id,
+                    status="error",
+                    error=str(exc),
+                )
+                await finish_article_work(
+                    conn,
+                    article_id=article_id,
+                    company_id=company_id,
+                    run_date=date_as_date,
+                    status="error",
+                )
+                summary["articles_errored"] += 1
+                consecutive_failures += 1
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    raise IngestAborted(
+                        f"{consecutive_failures} consecutive extraction failures; "
+                        f"aborting run for {date}"
+                    ) from exc
+                continue
+
+            if parsed is None:
+                async with conn.transaction():
+                    if not await lock_article_work(
+                        conn, article_id=article_id, company_id=company_id, run_date=date_as_date
+                    ):
+                        continue
+                    await set_article_status(
+                        conn,
+                        article_id=article_id,
+                        company_id=company_id,
+                        status="redundant",
+                    )
+                    await finish_article_work(
+                        conn,
+                        article_id=article_id,
+                        company_id=company_id,
+                        run_date=date_as_date,
+                        status="redundant",
+                    )
+                summary["articles_redundant"] += 1
+                consecutive_failures = 0
+                continue
+
+            try:
+                async with conn.transaction():
+                    if not await lock_article_work(
+                        conn, article_id=article_id, company_id=company_id, run_date=date_as_date
+                    ):
+                        continue
+                    await finish_article_work(
+                        conn,
+                        article_id=article_id,
+                        company_id=company_id,
+                        run_date=date_as_date,
+                        status="processed",
+                    )
+                    written, superseded, fact_rows = await apply_facts(
+                        conn,
+                        company_id=company_id,
+                        ticker=ticker,
+                        date=date_as_date,
+                        article_id=article_id,
+                        facts=parsed,
+                        current_facts=current_facts,
+                    )
+                    await save_aggregate_inputs(
+                        conn, run_date=date_as_date, snapshot=snapshot, facts=fact_rows
+                    )
+                    await set_article_status(
+                        conn,
+                        article_id=article_id,
+                        company_id=company_id,
+                        status="processed",
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"fact write failed for article {article_id}: {exc}")
+                await set_article_status(
+                    conn,
+                    article_id=article_id,
+                    company_id=company_id,
+                    status="error",
+                    error=str(exc),
+                )
+                await finish_article_work(
+                    conn,
+                    article_id=article_id,
+                    company_id=company_id,
+                    run_date=date_as_date,
+                    status="error",
+                )
+                summary["articles_errored"] += 1
+                consecutive_failures += 1
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    raise IngestAborted(
+                        f"{consecutive_failures} consecutive extraction failures; "
+                        f"aborting run for {date}"
+                    ) from exc
+                continue
+
+            consecutive_failures = 0
+            summary["facts_written"] += written
+            summary["facts_superseded"] += superseded
+
+        todays_facts = [] if profiles_only else await aggregate_inputs(conn, run_date=date_as_date)
         for dimension, key_field in (("sector", "sector"), ("geography", "country")):
             groups: dict[str, list[dict[str, object]]] = {}
             for fact in todays_facts:
@@ -737,43 +914,70 @@ async def run_daily_ingest(
                 if key:
                     groups.setdefault(str(key), []).append(fact)
             for dimension_key, group_facts in groups.items():
-                messages = build_aggregate_messages(
-                    dimension=dimension,
-                    dimension_key=dimension_key,
-                    facts=[
-                        {
-                            "ticker": str(f["ticker"]),
-                            "fact_type": str(f["fact_type"]),
-                            "statement": str(f["statement"]),
-                        }
-                        for f in group_facts
-                    ],
-                    date=date,
+                consumed_ids = await consumed_aggregate_inputs(
+                    conn, run_date=date_as_date, dimension=dimension, dimension_key=dimension_key
                 )
-                try:
-                    parsed = parse_fact_list_response(llm(messages))
-                except Exception as exc:  # noqa: BLE001
-                    logger.error(
-                        f"aggregate extraction failed for {dimension}={dimension_key}: {exc}"
-                    )
+                group_facts = [f for f in group_facts if f["fact_id"] not in consumed_ids]
+                if not group_facts:
                     continue
-                if parsed is None:
-                    continue
-                evidence = [f["fact_id"] for f in group_facts]
-                for item in parsed:
-                    await create_aggregate_fact(
+                evidence_hash = hashlib.sha256(
+                    json.dumps(sorted(str(f["fact_id"]) for f in group_facts)).encode()
+                ).hexdigest()
+                async with conn.transaction():
+                    # Recheck persisted consumption in the atomic output transaction.
+                    consumed_ids = await consumed_aggregate_inputs(
                         conn,
+                        run_date=date_as_date,
                         dimension=dimension,
                         dimension_key=dimension_key,
-                        statement=str(item["statement"]),
-                        fact_type=str(item.get("fact_type") or "general"),
-                        confidence=float(item["confidence"]),
-                        valid_from=date_as_date,
-                        evidence=evidence,
-                        embed=hash_embed,
-                        model="hash-ngram",
                     )
-                    summary["aggregate_written"] += 1
+                    if any(f["fact_id"] in consumed_ids for f in group_facts):
+                        continue
+                    messages = build_aggregate_messages(
+                        dimension=dimension,
+                        dimension_key=dimension_key,
+                        facts=[
+                            {
+                                "ticker": str(f["ticker"]),
+                                "fact_type": str(f["fact_type"]),
+                                "statement": str(f["statement"]),
+                            }
+                            for f in group_facts
+                        ],
+                        date=date,
+                    )
+                    try:
+                        parsed = parse_fact_list_response(llm(messages))
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error(
+                            f"aggregate extraction failed for {dimension}={dimension_key}: {exc}"
+                        )
+                        continue
+                    if parsed is None:
+                        parsed = []
+                    evidence = [f["fact_id"] for f in group_facts]
+                    for item in parsed:
+                        await create_aggregate_fact(
+                            conn,
+                            dimension=dimension,
+                            dimension_key=dimension_key,
+                            statement=str(item["statement"]),
+                            fact_type=str(item.get("fact_type") or "general"),
+                            confidence=float(item["confidence"]),
+                            valid_from=date_as_date,
+                            evidence=evidence,
+                            embed=hash_embed,
+                            model="hash-ngram",
+                        )
+                    summary["aggregate_written"] += len(parsed)
+                    await complete_aggregate_work(
+                        conn,
+                        run_date=date_as_date,
+                        dimension=dimension,
+                        dimension_key=dimension_key,
+                        evidence_hash=evidence_hash,
+                        evidence=evidence,
+                    )
 
     except IngestAborted as exc:
         await finish_run(conn, run_id=run_id, status="aborted", counters=summary, error=str(exc))
