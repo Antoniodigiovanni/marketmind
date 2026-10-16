@@ -26,6 +26,7 @@ from data.db.filings import (
 from data.db.identifiers import get_current_company_id
 from data.db.pool import close_pool, open_pool
 from data.db.runs import finish_run, start_run
+from data.filings import RAW_ARCHIVE_DIR
 from data.filings.cik import cik_for_ticker, ensure_cik_map
 from data.filings.companyfacts import ingest_companyfacts
 from data.filings.parse.form13f import parse_13f_infotable
@@ -43,7 +44,6 @@ COVERED_FORMS = DOCUMENT_FORMS | OWNERSHIP_FORMS | {"13F-HR", "13F-HR/A", "DEF 1
 # no new observations. The quarterly sweep covers anything this misses.
 FINANCIAL_REPORT_FORMS = {"10-K", "10-Q", "20-F", "6-K"}
 INITIAL_LOOKBACK_DAYS = 7
-RAW_ARCHIVE_DIR = Path(__file__).resolve().parents[1] / "raw"
 ProgressCallback = Callable[[int, int, dict[str, int]], None]
 
 

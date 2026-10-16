@@ -1099,6 +1099,7 @@ def run_filings_refresh(run_date: str = "") -> str:
         A message with the new run id, or a diagnostic explaining why no run
         was started.
     """
+    from data.filings import RAW_ARCHIVE_DIR
     from data.filings.fetch import run_daily_fetch_with_pool
 
     date = run_date or dt.date.today().isoformat()
@@ -1119,7 +1120,7 @@ def run_filings_refresh(run_date: str = "") -> str:
             run_daily_fetch_with_pool(
                 client,
                 run_date=date,
-                root=ROOT_DIR,
+                root=RAW_ARCHIVE_DIR,
                 universe=universe,
                 progress=progress,
             )

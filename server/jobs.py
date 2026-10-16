@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from loguru import logger
+
+from agent.refresh import _try_lock
 
 # (tickers_done, tickers_total, running summary counts)
 ProgressCallback = Callable[[int, int, dict[str, int]], None]
@@ -64,7 +67,7 @@ def current_run() -> RunRecord | None:
     return _CURRENT
 
 
-def _execute_run(record: RunRecord, work: JobWork) -> None:
+def _execute_run(record: RunRecord, work: JobWork, lock_fd: int) -> None:
     """Run `work` synchronously, recording the outcome on `record`."""
 
     def progress(done: int, total: int, counts: dict[str, int]) -> None:
@@ -75,16 +78,17 @@ def _execute_run(record: RunRecord, work: JobWork) -> None:
     try:
         record.counts = work(progress)
         record.state = "succeeded"
-    except Exception as exc:  # noqa: BLE001 - the outcome is polled, never raised
+    except BaseException as exc:  # noqa: BLE001 - the outcome is polled, never raised
         record.state = "failed"
         record.error = str(exc)
         logger.exception(f"{record.job_type} run {record.run_id} failed")
     finally:
         record.finished_at = dt.datetime.now(dt.UTC)
+        os.close(lock_fd)
 
 
 def start_run(job_type: str, work: JobWork) -> str:
-    """Claim the single run slot and execute `work` on a background thread.
+    """Reserve the shared refresh lock and run `work` on a background thread.
 
     Args:
         job_type: 'news' or 'filings'; recorded on the run.
@@ -94,7 +98,7 @@ def start_run(job_type: str, work: JobWork) -> str:
         The new run id.
 
     Raises:
-        RunInProgress: If another run is still running.
+        RunInProgress: If another thread job, scheduled job, or backup owns the slot.
     """
     global _CURRENT
     with _LOCK:
@@ -103,17 +107,29 @@ def start_run(job_type: str, work: JobWork) -> str:
                 f"Run {_CURRENT.run_id} ({_CURRENT.job_type}) already in flight "
                 f"since {_CURRENT.started_at.isoformat()}"
             )
-        record = RunRecord(
-            run_id=uuid.uuid4().hex,
-            job_type=job_type,
-            started_at=dt.datetime.now(dt.UTC),
-        )
-        record.thread = threading.Thread(
-            target=_execute_run,
-            args=(record, work),
-            name=f"marketmind-{job_type}-{record.run_id[:8]}",
-            daemon=True,
-        )
-        _CURRENT = record
-    record.thread.start()
+        lock_fd = _try_lock()
+        if lock_fd is None:
+            raise RunInProgress("Another data job holds the refresh lock")
+        record = None
+        try:
+            record = RunRecord(
+                run_id=uuid.uuid4().hex,
+                job_type=job_type,
+                started_at=dt.datetime.now(dt.UTC),
+            )
+            record.thread = threading.Thread(
+                target=_execute_run,
+                args=(record, work, lock_fd),
+                name=f"marketmind-{job_type}-{record.run_id[:8]}",
+                daemon=True,
+            )
+            _CURRENT = record
+            record.thread.start()
+        except BaseException as exc:
+            if record is not None:
+                record.state = "failed"
+                record.error = str(exc)
+                record.finished_at = dt.datetime.now(dt.UTC)
+            os.close(lock_fd)
+            raise
     return record.run_id

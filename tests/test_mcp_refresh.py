@@ -14,10 +14,7 @@ import server.mcp as mcp_mod
 DATE = "2026-08-04"
 
 
-@pytest.fixture(autouse=True)
-def _clear_slot(monkeypatch) -> None:
-    """Give every test an empty in-process run slot."""
-    monkeypatch.setattr(jobs, "_CURRENT", None)
+pytestmark = pytest.mark.usefixtures("isolated_jobs")
 
 
 def test_run_daily_refresh_starts_the_detached_job(monkeypatch) -> None:

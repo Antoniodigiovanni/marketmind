@@ -15,7 +15,7 @@ from data.db.facts import get_current_facts
 from data.db.identifiers import get_or_create_identifier
 from data.sources.rss import Article
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("isolated_jobs")]
 
 DATE = "2026-08-04"
 
@@ -30,12 +30,6 @@ UNIVERSE = pl.DataFrame(
         "universe": ["sp500", "sp500"],
     }
 )
-
-
-@pytest.fixture(autouse=True)
-def _clear_slot(monkeypatch) -> None:
-    """Give every test an empty run slot."""
-    monkeypatch.setattr(jobs, "_CURRENT", None)
 
 
 @pytest.fixture(autouse=True)
@@ -360,7 +354,7 @@ async def test_run_filings_refresh_drives_the_real_fetch(
     wired, postgres_pool, monkeypatch, tmp_path
 ) -> None:
     monkeypatch.setattr(mcp_mod, "_build_edgar_client", _EmptyEdgarClient)
-    monkeypatch.setattr(mcp_mod, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr("data.filings.RAW_ARCHIVE_DIR", tmp_path)
 
     result = mcp_mod.run_filings_refresh(DATE)
     record = _join_run()
@@ -379,7 +373,7 @@ async def test_run_filings_refresh_defaults_to_today(
     wired, postgres_pool, monkeypatch, tmp_path
 ) -> None:
     monkeypatch.setattr(mcp_mod, "_build_edgar_client", _EmptyEdgarClient)
-    monkeypatch.setattr(mcp_mod, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr("data.filings.RAW_ARCHIVE_DIR", tmp_path)
 
     result = mcp_mod.run_filings_refresh()
     _join_run()
