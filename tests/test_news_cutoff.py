@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import polars as pl
 import pytest
@@ -79,6 +79,7 @@ async def test_cutoff_precedes_all_article_side_effects(
         "search_similar_facts",
         "set_article_status",
         "update_feed_checkpoints",
+        "finish_article_work",
     ):
         monkeypatch.setattr(ingestion, name, AsyncMock())
     monkeypatch.setattr(ingestion, "_ensure_company", AsyncMock(return_value=(company_id, "")))
@@ -116,9 +117,23 @@ async def test_cutoff_precedes_all_article_side_effects(
             )
         return [article]
 
+    work = []
+
+    async def register(conn, **kwargs):
+        work.append(
+            {"article_id": "article", "company_id": company_id, "snapshot": kwargs["snapshot"]}
+        )
+        return "article"
+
+    monkeypatch.setattr(ingestion, "register_article", AsyncMock(side_effect=register))
+    monkeypatch.setattr(ingestion, "get_article_work", AsyncMock(side_effect=lambda *a, **k: work))
+    monkeypatch.setattr(ingestion, "lock_article_work", AsyncMock(return_value=True))
+    monkeypatch.setattr(ingestion, "aggregate_inputs", AsyncMock(return_value=[]))
+    conn = MagicMock()
+    conn.execute = AsyncMock()
     monkeypatch.setattr(ingestion, "fetch_company_news", fetch)
     await ingestion.run_daily_ingest(
-        None,
+        conn,
         "2026-08-04",
         universe=pl.DataFrame({"ticker": ["A"], "name": ["Company"]}),
         news_fetcher=None if default_fetch else fetch,

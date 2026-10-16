@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import uuid
 
 import psycopg
@@ -22,6 +23,8 @@ async def register_article(
     published_at: dt.datetime,
     pre_score: float,
     summary: str | None = None,
+    run_date: dt.date | None = None,
+    snapshot: dict[str, object] | None = None,
 ) -> uuid.UUID | None:
     """Register an article for a company.
 
@@ -42,6 +45,9 @@ async def register_article(
         title: Article title, if known.
         published_at: Publication timestamp.
         pre_score: source_credibility * recency decay, computed by the caller.
+        summary: Article summary text.
+        run_date: Optional date-scoped replay identity; absent preserves legacy dedup.
+        snapshot: Immutable extraction payload when run_date is supplied.
 
     Returns:
         The article_id to process, or None if this (article, company) pair
@@ -49,14 +55,20 @@ async def register_article(
         or was already known for other companies.
     """
     async with conn.transaction():
+        await conn.execute("SELECT pg_advisory_xact_lock(731942617029)")
         existing = await (
             await conn.execute(
-                "SELECT article_id FROM articles WHERE url_hash = %s OR content_hash = %s",
+                "SELECT article_id, published_at FROM articles "
+                "WHERE url_hash = %s OR content_hash = %s",
                 (url_hash, content_hash),
             )
         ).fetchone()
         if existing is not None:
             article_id = existing[0]
+            if run_date is not None and existing[1] >= dt.datetime.combine(
+                run_date + dt.timedelta(days=1), dt.time.min, tzinfo=dt.UTC
+            ):
+                return None
         else:
             row = await (
                 await conn.execute(
@@ -78,6 +90,23 @@ async def register_article(
             )
         ).fetchone()
 
+        if run_date is not None:
+            state = await (
+                await conn.execute(
+                    "SELECT status FROM article_companies WHERE article_id = %s AND company_id = %s",
+                    (article_id, company_id),
+                )
+            ).fetchone()
+            if state[0] not in ("pending", "error"):
+                return None
+            work = await (
+                await conn.execute(
+                    "INSERT INTO article_work (article_id, company_id, run_date, snapshot) "
+                    "VALUES (%s, %s, %s, %s::jsonb) ON CONFLICT DO NOTHING RETURNING article_id",
+                    (article_id, company_id, run_date, json.dumps(snapshot or {})),
+                )
+            ).fetchone()
+            return article_id if work else None
     return article_id if inserted is not None else None
 
 
@@ -212,3 +241,121 @@ async def search_news(
         )
         rows = await cur.fetchall()
     return sorted(rows, key=lambda row: row["published_at"], reverse=True)
+
+
+async def get_article_work(
+    conn: psycopg.AsyncConnection, *, run_date: dt.date
+) -> list[dict[str, object]]:
+    """Return durable unfinished article snapshots for an ingest date."""
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            "SELECT w.article_id, w.company_id, w.snapshot FROM article_work w "
+            "JOIN articles a ON a.article_id = w.article_id "
+            "WHERE w.run_date = %s AND w.status IN ('pending', 'error') "
+            "AND a.published_at < %s ORDER BY w.created_at, w.article_id",
+            (
+                run_date,
+                dt.datetime.combine(run_date + dt.timedelta(days=1), dt.time.min, tzinfo=dt.UTC),
+            ),
+        )
+        return await cur.fetchall()
+
+
+async def finish_article_work(
+    conn: psycopg.AsyncConnection,
+    *,
+    article_id: uuid.UUID,
+    company_id: uuid.UUID,
+    run_date: dt.date,
+    status: str,
+) -> None:
+    """Complete date-scoped work inside the caller's fact transaction."""
+    await conn.execute(
+        "UPDATE article_work SET status = %s WHERE article_id = %s "
+        "AND company_id = %s AND run_date = %s",
+        (status, article_id, company_id, run_date),
+    )
+
+
+async def aggregate_inputs(
+    conn: psycopg.AsyncConnection, *, run_date: dt.date
+) -> list[dict[str, object]]:
+    """Load committed fact evidence with its immutable ingest identity snapshot."""
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            "SELECT f.fact_id, f.statement, f.fact_type, w.snapshot->>'ticker' AS ticker, "
+            "w.snapshot->>'sector' AS sector, w.snapshot->>'country' AS country "
+            "FROM article_fact_inputs w JOIN company_facts f USING (fact_id) "
+            "WHERE w.run_date = %s ORDER BY f.fact_id",
+            (run_date,),
+        )
+        return await cur.fetchall()
+
+
+async def save_aggregate_inputs(
+    conn: psycopg.AsyncConnection,
+    *,
+    run_date: dt.date,
+    snapshot: dict[str, object],
+    facts: list[dict[str, object]],
+) -> None:
+    """Persist unique fact inputs inside the article completion transaction."""
+    async with conn.cursor() as cur:
+        await cur.executemany(
+            "INSERT INTO article_fact_inputs (fact_id, run_date, snapshot) "
+            "VALUES (%s, %s, %s::jsonb) ON CONFLICT DO NOTHING",
+            [(fact["fact_id"], run_date, json.dumps(snapshot)) for fact in facts],
+        )
+
+
+async def lock_article_work(
+    conn: psycopg.AsyncConnection,
+    *,
+    article_id: uuid.UUID,
+    company_id: uuid.UUID,
+    run_date: dt.date,
+) -> bool:
+    """Lock and recheck a date-scoped pair inside its completion transaction."""
+    row = await (
+        await conn.execute(
+            "SELECT status FROM article_work WHERE article_id = %s "
+            "AND company_id = %s AND run_date = %s FOR UPDATE",
+            (article_id, company_id, run_date),
+        )
+    ).fetchone()
+    return row is not None and row[0] in ("pending", "error")
+
+
+async def consumed_aggregate_inputs(
+    conn: psycopg.AsyncConnection, *, run_date: dt.date, dimension: str, dimension_key: str
+) -> set[uuid.UUID]:
+    """Return fact identities already consumed by a completed aggregate group."""
+    rows = await (
+        await conn.execute(
+            "SELECT fact_id FROM article_aggregate_inputs WHERE run_date = %s "
+            "AND dimension = %s AND dimension_key = %s",
+            (run_date, dimension, dimension_key),
+        )
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
+async def complete_aggregate_work(
+    conn: psycopg.AsyncConnection,
+    *,
+    run_date: dt.date,
+    dimension: str,
+    dimension_key: str,
+    evidence_hash: str,
+    evidence: list[uuid.UUID],
+) -> None:
+    """Commit completion and unique consumed inputs with the caller's aggregate output."""
+    await conn.execute(
+        "INSERT INTO article_aggregate_work VALUES (%s, %s, %s, %s, %s)",
+        (run_date, dimension, dimension_key, evidence_hash, evidence),
+    )
+    async with conn.cursor() as cur:
+        await cur.executemany(
+            "INSERT INTO article_aggregate_inputs VALUES (%s, %s, %s, %s, %s)",
+            [(run_date, dimension, dimension_key, fact_id, evidence_hash) for fact_id in evidence],
+        )

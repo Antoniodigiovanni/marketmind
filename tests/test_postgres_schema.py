@@ -17,7 +17,7 @@ async def test_schema_applies_and_creates_the_expected_objects(pg_conn) -> None:
             "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"
         )
     ).fetchone()
-    assert tables[0] == 32
+    assert tables[0] == 36
 
 
 async def test_schema_application_records_baseline_and_is_idempotent(pg_conn) -> None:
@@ -33,6 +33,7 @@ async def test_schema_application_records_baseline_and_is_idempotent(pg_conn) ->
         (2, "complete_postgres_cutover"),
         (3, "rss_ingest_efficiency"),
         (4, "sec_company_financials"),
+        (5, "article_replay"),
     ]
 
 

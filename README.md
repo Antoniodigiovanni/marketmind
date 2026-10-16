@@ -347,6 +347,21 @@ entries without a parseable publication date are dropped rather than assigned a
 fetch timestamp. Checkpoints beyond that boundary are ignored for fetching,
 without rewriting existing checkpoint history.
 
+Article work retains its original ingest date and extraction context in PostgreSQL.
+Rerunning that date replays pending/error pairs even with an empty feed or a changed
+universe. Completed pairs keep global deduplication across dates. Legacy pairs with
+no trustworthy ingest date are not automatically replayed; a newly fetched eligible
+article may establish work for a still-pending legacy pair. Existing archives are
+not used to infer missing dates. Publication validation also applies to replay.
+
+Fact writes, supersession, embeddings, aggregate input links, and article completion
+commit together. Aggregate groups replay from persisted fact inputs; each batch's
+outputs, evidence links, and completion commit together, including REDUNDANT or
+empty output. Unique consumed-input links prevent a completed batch from running
+again. An ingestion-wide PostgreSQL session advisory lock serializes concurrent
+runs, with row rechecks before pair completion and cleanup on exceptions. This
+serializes profile-only runs too; the lock is released when the session closes.
+
 Current RSS feeds and their bounded query windows do not reconstruct missing
 historical coverage. This cutoff prevents future publications from creating facts
 on an earlier run date; it does not establish complete historical knowledge.
