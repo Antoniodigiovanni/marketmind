@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import os
 import threading
 
 import pytest
 
+import agent.refresh as refresh
 import server.jobs as jobs
 
+pytestmark = pytest.mark.usefixtures("isolated_jobs")
 
-@pytest.fixture(autouse=True)
-def _clear_slot(monkeypatch) -> None:
-    """Give every test an empty run slot."""
-    monkeypatch.setattr(jobs, "_CURRENT", None)
+
+def test_job_lock_environment_is_isolated(tmp_path) -> None:
+    """Job tests must never use a host lock directory or inherited descriptor."""
+    assert refresh.refresh_dir() == tmp_path / "refresh"
+    assert refresh.INHERITED_LOCK_FD_ENV not in os.environ
 
 
 def test_start_run_executes_work_and_records_counts() -> None:

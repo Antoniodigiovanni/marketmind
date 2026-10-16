@@ -14,12 +14,12 @@ from loguru import logger
 from data.db.filings import create_filing, filing_exists, has_checkpoint, mark_checkpoint
 from data.db.identifiers import get_current_company_id
 from data.db.pool import close_pool, open_pool
+from data.filings import RAW_ARCHIVE_DIR
 from data.filings.cik import cik_for_ticker, ensure_cik_map
 from data.filings.companyfacts import ingest_companyfacts
 from data.filings.fetch import (
     DOCUMENT_FORMS,
     OWNERSHIP_FORMS,
-    RAW_ARCHIVE_DIR,
     _edgar_url,
     _process_13f,
     _process_document,

@@ -15,10 +15,9 @@ from loguru import logger
 from data.db.esef import create_esef_filing, esef_filing_exists
 from data.db.identifiers import get_current_company_id
 from data.db.pool import close_pool, open_pool
+from data.filings import RAW_ARCHIVE_DIR
 from data.sources.xbrlorg import XbrlorgClient
 from data.universe.loader import UNIVERSE_DIR
-
-RAW_ARCHIVE_DIR = Path(__file__).resolve().parents[1] / "raw"
 
 
 def _sha256_bytes(data: bytes) -> str:

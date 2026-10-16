@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -10,6 +12,24 @@ from psycopg.conninfo import conninfo_to_dict
 
 from data.db.init_postgres import apply_schema
 from data.db.pool import close_pool, database_available, dsn_from_env, open_pool
+
+
+@pytest.fixture
+def isolated_jobs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Isolate opted-in job tests and finish their worker before restoring patches."""
+    import agent.refresh as refresh
+    import server.jobs as jobs
+
+    monkeypatch.setenv(refresh.REFRESH_DIR_ENV, str(tmp_path / "refresh"))
+    refresh.refresh_dir().mkdir(parents=True)
+    monkeypatch.delenv(refresh.INHERITED_LOCK_FD_ENV, raising=False)
+    monkeypatch.setattr(jobs, "_CURRENT", None)
+    try:
+        yield
+    finally:
+        record = jobs.current_run()
+        if record is not None and record.thread is not None and record.thread.ident is not None:
+            record.thread.join()
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
