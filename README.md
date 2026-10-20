@@ -18,9 +18,11 @@ public HTTP API.
 
 ## Status
 
-- **Phase 1 — market memory (current).** Price/macro storage, universe
-  maintenance, the MCP server, fact store, and market views are in place.
-  Several daily jobs are still being built (see [ROADMAP.md](ROADMAP.md)).
+**Experimental — development in progress; not ready to deploy.** This is an
+evolving market-memory service, not a supported production-ready deployment.
+The [roadmap](ROADMAP.md) lists unfinished work, including a 30-day unattended
+production run and documented recovery drills. Those readiness checks have not
+been completed.
 
 ## Architecture
 
